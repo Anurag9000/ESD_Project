@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.py[cod]
+
+Dataset_Final/
+Dataset_Final_original_backup.zip
+
+runs/
+
+.DS_Store
