@@ -9,6 +9,7 @@ import json
 import math
 import random
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,7 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
         split_name: str,
         seed: int,
         gaussian_sigmas: float,
+        apply_augmentation: bool = True,
     ) -> None:
         self.base_dataset = datasets.ImageFolder(root)
         self.image_size = image_size
@@ -56,6 +58,7 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
         self.split_name = split_name
         self.seed = seed
         self.gaussian_sigmas = gaussian_sigmas
+        self.apply_augmentation = apply_augmentation
         self.classes = self.base_dataset.classes
         self.class_to_idx = self.base_dataset.class_to_idx
         self.samples = self.base_dataset.samples
@@ -91,8 +94,11 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
     def load_augmented(self, source_index: int, variant_index: int, view_offset: int = 0) -> tuple[torch.Tensor, int]:
         path, target = self.samples[source_index]
         image = self.base_dataset.loader(path).convert("RGB")
-        rng = random.Random(self._seed_for_variant(source_index, variant_index, view_offset))
-        tensor = augmented_tensor_from_image(image, self.image_size, rng, self.gaussian_sigmas)
+        if self.apply_augmentation:
+            rng = random.Random(self._seed_for_variant(source_index, variant_index, view_offset))
+            tensor = augmented_tensor_from_image(image, self.image_size, rng, self.gaussian_sigmas)
+        else:
+            tensor = evaluation_tensor_from_image(image, self.image_size)
         return tensor, target
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, int]:
@@ -423,6 +429,13 @@ def augmented_tensor_from_image(image: Image.Image, image_size: int, rng: random
     tensor = apply_specular_glare(tensor, rng, gaussian_sigmas, glare_prob=GLARE_PROBABILITY)
     tensor = apply_cutout(tensor, rng, gaussian_sigmas)
     tensor = tensor.clamp(0.0, 1.0)
+    return TF.normalize(tensor, IMAGENET_MEAN, IMAGENET_STD)
+
+
+def evaluation_tensor_from_image(image: Image.Image, image_size: int) -> torch.Tensor:
+    image = TF.resize(image, image_size, interpolation=InterpolationMode.BILINEAR)
+    image = TF.center_crop(image, [image_size, image_size])
+    tensor = TF.to_tensor(image).clamp(0.0, 1.0)
     return TF.normalize(tensor, IMAGENET_MEAN, IMAGENET_STD)
 
 
@@ -790,13 +803,13 @@ def build_datasets(
 ]:
     root = Path(args.dataset_root)
     train_dataset = DeterministicAugmentedImageFolder(
-        root / "train", args.image_size, args.augment_repeats, "train", args.seed, args.augment_gaussian_sigmas
+        root / "train", args.image_size, args.augment_repeats, "train", args.seed, args.augment_gaussian_sigmas, apply_augmentation=True
     )
     val_dataset = DeterministicAugmentedImageFolder(
-        root / "val", args.image_size, args.augment_repeats, "val", args.seed, args.augment_gaussian_sigmas
+        root / "val", args.image_size, 1, "val", args.seed, args.augment_gaussian_sigmas, apply_augmentation=False
     )
     test_dataset = DeterministicAugmentedImageFolder(
-        root / "test", args.image_size, args.augment_repeats, "test", args.seed, args.augment_gaussian_sigmas
+        root / "test", args.image_size, args.augment_repeats, "test", args.seed, args.augment_gaussian_sigmas, apply_augmentation=True
     )
     if train_dataset.classes != val_dataset.classes or train_dataset.classes != test_dataset.classes:
         raise ValueError("Class folders differ across train/val/test")
@@ -1201,12 +1214,18 @@ def evaluate_supcon(
     criterion: SupConLoss,
     device: torch.device,
     max_batches: int,
+    log_path: Path,
+    log_every_eval_steps: int,
+    stage: str,
+    split: str,
+    eval_context: dict[str, object] | None = None,
 ) -> float:
     model.eval()
     total_loss = 0.0
     total_seen = 0
+    eval_context = dict(eval_context or {})
     with torch.no_grad():
-        for view_one, view_two, labels in limited_batches(loader, max_batches):
+        for eval_step, (view_one, view_two, labels) in enumerate(limited_batches(loader, max_batches), start=1):
             view_one = view_one.to(device, non_blocking=True)
             view_two = view_two.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
@@ -1217,6 +1236,20 @@ def evaluate_supcon(
             loss = criterion(torch.stack([proj_one, proj_two], dim=1), labels)
             total_loss += loss.item() * labels.size(0)
             total_seen += labels.size(0)
+            if eval_step % log_every_eval_steps == 0:
+                log_json_event(
+                    log_path,
+                    {
+                        "event": "eval_step",
+                        "stage": stage,
+                        "split": split,
+                        "eval_step": eval_step,
+                        "batch_size": labels.size(0),
+                        "samples_seen": total_seen,
+                        "running_loss": total_loss / max(1, total_seen),
+                        **eval_context,
+                    },
+                )
     return total_loss / max(1, total_seen)
 
 
@@ -1475,13 +1508,19 @@ def evaluate_arcface(
     criterion: nn.Module,
     device: torch.device,
     max_batches: int,
+    log_path: Path,
+    log_every_eval_steps: int,
+    stage: str,
+    split: str,
+    eval_context: dict[str, object] | None = None,
 ) -> tuple[float, float]:
     model.eval()
     total_loss = 0.0
     total_correct = 0
     total_seen = 0
+    eval_context = dict(eval_context or {})
     with torch.no_grad():
-        for images, labels in limited_batches(loader, max_batches):
+        for eval_step, (images, labels) in enumerate(limited_batches(loader, max_batches), start=1):
             images = images.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
             embeddings = model.encode(images)
@@ -1491,6 +1530,21 @@ def evaluate_arcface(
             total_loss += loss.item() * labels.size(0)
             total_correct += (logits.argmax(dim=1) == labels).sum().item()
             total_seen += labels.size(0)
+            if eval_step % log_every_eval_steps == 0:
+                log_json_event(
+                    log_path,
+                    {
+                        "event": "eval_step",
+                        "stage": stage,
+                        "split": split,
+                        "eval_step": eval_step,
+                        "batch_size": labels.size(0),
+                        "samples_seen": total_seen,
+                        "running_loss": total_loss / max(1, total_seen),
+                        "running_acc": total_correct / max(1, total_seen),
+                        **eval_context,
+                    },
+                )
     return total_loss / max(1, total_seen), total_correct / max(1, total_seen)
 
 
@@ -1499,17 +1553,34 @@ def collect_logits_and_labels(
     loader: DataLoader,
     device: torch.device,
     max_batches: int,
+    log_path: Path,
+    log_every_eval_steps: int,
+    split: str,
 ) -> tuple[np.ndarray, np.ndarray]:
     model.eval()
     logits_list: list[torch.Tensor] = []
     labels_list: list[torch.Tensor] = []
     with torch.no_grad():
-        for images, labels in limited_batches(loader, max_batches):
+        total_seen = 0
+        for eval_step, (images, labels) in enumerate(limited_batches(loader, max_batches), start=1):
             images = images.to(device, non_blocking=True)
             embeddings = model.encode(images)
             logits = model.classify(embeddings, labels=None)
             logits_list.append(logits.cpu())
             labels_list.append(labels.cpu())
+            total_seen += labels.size(0)
+            if eval_step % log_every_eval_steps == 0:
+                log_json_event(
+                    log_path,
+                    {
+                        "event": "eval_step",
+                        "stage": "final_evaluation",
+                        "split": split,
+                        "eval_step": eval_step,
+                        "batch_size": labels.size(0),
+                        "samples_seen": total_seen,
+                    },
+                )
     logits = torch.cat(logits_list, dim=0).numpy()
     labels = torch.cat(labels_list, dim=0).numpy()
     return logits, labels
@@ -1684,6 +1755,8 @@ def append_jsonl(path: Path, payload: object) -> None:
 
 
 def log_json_event(path: Path, payload: object) -> None:
+    if isinstance(payload, dict) and "timestamp" not in payload:
+        payload = {"timestamp": datetime.now().astimezone().isoformat(timespec="seconds"), **payload}
     print(payload)
     append_jsonl(path, payload)
 
@@ -1755,6 +1828,7 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--max-train-batches", type=int, default=0)
     parser.add_argument("--max-eval-batches", type=int, default=0)
     parser.add_argument("--log-every-steps", type=int, default=100)
+    parser.add_argument("--log-eval-every-steps", type=int, default=1000)
     parser.add_argument("--eval-every-train-steps", type=int, default=1024)
     parser.add_argument("--early-stopping-patience", type=int, default=20)
     parser.add_argument("--early-stopping-min-delta", type=float, default=1e-4)
@@ -1784,6 +1858,8 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         raise ValueError("--mixup-prob and --cutmix-prob must be >= 0 and sum to <= 1")
     if args.log_every_steps < 1:
         raise ValueError("--log-every-steps must be >= 1")
+    if args.log_eval_every_steps < 1:
+        raise ValueError("--log-eval-every-steps must be >= 1")
     if args.eval_every_train_steps < 1:
         raise ValueError("--eval-every-train-steps must be >= 1")
     if args.early_stopping_patience < 1:
@@ -1844,9 +1920,9 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             "source_train_count": train_dataset.source_count(),
             "source_val_count": val_dataset.source_count(),
             "source_test_count": test_dataset.source_count(),
-            "augmentation_bank_train_count": train_dataset.source_count() * args.augment_repeats,
-            "augmentation_bank_val_count": val_dataset.source_count() * args.augment_repeats,
-            "augmentation_bank_test_count": test_dataset.source_count() * args.augment_repeats,
+            "augmentation_bank_train_count": len(train_dataset),
+            "augmentation_bank_val_count": len(val_dataset),
+            "augmentation_bank_test_count": len(test_dataset),
             "train_samples_per_epoch": len(train_dataset),
             "val_samples_per_eval": len(val_dataset),
             "test_samples_per_eval": len(test_dataset),
@@ -1860,6 +1936,8 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             "warmup_steps": args.warmup_steps,
         },
     )
+    val_eval_batches = min(len(supcon_val_loader), args.max_eval_batches) if args.max_eval_batches > 0 else len(supcon_val_loader)
+    test_eval_batches = min(len(test_loader), args.max_eval_batches) if args.max_eval_batches > 0 else len(test_loader)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = MetricLearningEfficientNetB0(
@@ -1980,12 +2058,47 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                 progress.update(steps_done)
                 progress.set_postfix(loss=f"{epoch_loss_sum / max(1, epoch_samples_seen):.4f}")
 
+                log_json_event(
+                    log_path,
+                    {
+                        "event": "validation_started",
+                        "stage": "supcon",
+                        "epoch": epoch,
+                        "validation_index": validation_index,
+                        "epoch_step": epoch_steps_done,
+                        "global_train_step": train_progress["global_train_step"],
+                        "eval_batches": val_eval_batches,
+                    },
+                )
                 val_loss = evaluate_supcon(
                     model=model,
                     loader=supcon_val_loader,
                     criterion=supcon_loss,
                     device=device,
                     max_batches=args.max_eval_batches,
+                    log_path=log_path,
+                    log_every_eval_steps=args.log_eval_every_steps,
+                    stage="supcon",
+                    split="val",
+                    eval_context={
+                        "epoch": epoch,
+                        "validation_index": validation_index,
+                        "epoch_step": epoch_steps_done,
+                        "global_train_step": train_progress["global_train_step"],
+                    },
+                )
+                log_json_event(
+                    log_path,
+                    {
+                        "event": "validation_finished",
+                        "stage": "supcon",
+                        "epoch": epoch,
+                        "validation_index": validation_index,
+                        "epoch_step": epoch_steps_done,
+                        "global_train_step": train_progress["global_train_step"],
+                        "eval_batches": val_eval_batches,
+                        "val_loss": val_loss,
+                    },
                 )
                 if val_loss < supcon_best_loss - args.early_stopping_min_delta:
                     supcon_best_loss = val_loss
@@ -2195,12 +2308,54 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                     acc=f"{epoch_correct_sum / max(1, epoch_samples_seen):.4f}",
                 )
 
+                log_json_event(
+                    log_path,
+                    {
+                        "event": "validation_started",
+                        "stage": "arcface",
+                        "phase_index": phase_index,
+                        "phase_name": phase.name,
+                        "epoch_in_phase": epoch,
+                        "validation_index": validation_index,
+                        "epoch_step": epoch_steps_done,
+                        "global_train_step": train_progress["global_train_step"],
+                        "eval_batches": val_eval_batches,
+                    },
+                )
                 val_loss, val_acc = evaluate_arcface(
                     model=model,
                     loader=val_loader,
                     criterion=arcface_criterion,
                     device=device,
                     max_batches=args.max_eval_batches,
+                    log_path=log_path,
+                    log_every_eval_steps=args.log_eval_every_steps,
+                    stage="arcface",
+                    split="val",
+                    eval_context={
+                        "phase_index": phase_index,
+                        "phase_name": phase.name,
+                        "epoch_in_phase": epoch,
+                        "validation_index": validation_index,
+                        "epoch_step": epoch_steps_done,
+                        "global_train_step": train_progress["global_train_step"],
+                    },
+                )
+                log_json_event(
+                    log_path,
+                    {
+                        "event": "validation_finished",
+                        "stage": "arcface",
+                        "phase_index": phase_index,
+                        "phase_name": phase.name,
+                        "epoch_in_phase": epoch,
+                        "validation_index": validation_index,
+                        "epoch_step": epoch_steps_done,
+                        "global_train_step": train_progress["global_train_step"],
+                        "eval_batches": val_eval_batches,
+                        "val_loss": val_loss,
+                        "val_acc": val_acc,
+                    },
                 )
                 if improved_metric(phase_best_loss, phase_best_acc, val_loss, val_acc, args.early_stopping_min_delta):
                     phase_best_loss = val_loss
@@ -2334,8 +2489,28 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
 
     model.load_state_dict(best_arcface_state)
 
-    val_logits, val_targets = collect_logits_and_labels(model, val_loader, device, args.max_eval_batches)
-    test_logits, test_targets = collect_logits_and_labels(model, test_loader, device, args.max_eval_batches)
+    log_json_event(log_path, {"event": "final_evaluation_started", "split": "val", "eval_batches": val_eval_batches})
+    val_logits, val_targets = collect_logits_and_labels(
+        model,
+        val_loader,
+        device,
+        args.max_eval_batches,
+        log_path,
+        args.log_eval_every_steps,
+        "val",
+    )
+    log_json_event(log_path, {"event": "final_evaluation_finished", "split": "val", "eval_batches": val_eval_batches})
+    log_json_event(log_path, {"event": "final_evaluation_started", "split": "test", "eval_batches": test_eval_batches})
+    test_logits, test_targets = collect_logits_and_labels(
+        model,
+        test_loader,
+        device,
+        args.max_eval_batches,
+        log_path,
+        args.log_eval_every_steps,
+        "test",
+    )
+    log_json_event(log_path, {"event": "final_evaluation_finished", "split": "test", "eval_batches": test_eval_batches})
 
     val_metrics = compute_classification_metrics(val_logits, val_targets, train_dataset.classes)
     test_metrics = compute_classification_metrics(test_logits, test_targets, train_dataset.classes)
@@ -2365,9 +2540,9 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         "train_samples_per_epoch": len(train_dataset),
         "val_samples_per_eval": len(val_dataset),
         "test_samples_per_eval": len(test_dataset),
-        "augmentation_bank_train_count": train_dataset.source_count() * args.augment_repeats,
-        "augmentation_bank_val_count": val_dataset.source_count() * args.augment_repeats,
-        "augmentation_bank_test_count": test_dataset.source_count() * args.augment_repeats,
+        "augmentation_bank_train_count": len(train_dataset),
+        "augmentation_bank_val_count": len(val_dataset),
+        "augmentation_bank_test_count": len(test_dataset),
         "augment_repeats": args.augment_repeats,
         "augment_gaussian_sigmas": args.augment_gaussian_sigmas,
         "train_class_counts": class_counts(train_dataset),
