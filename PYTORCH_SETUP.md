@@ -62,7 +62,13 @@ The augmentation stack includes only image-classification-safe transforms:
 - JPEG compression
 - channel shift and grayscale mixing
 - illumination gradient overlays
+- shadow overlays
+- specular glare overlays
 - cutout / coarse occlusion
+
+ArcFace training also uses conservative batch mixing:
+- `MixUp`
+- `CutMix`
 
 ## Outputs
 

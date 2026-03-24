@@ -1,1 +1,4 @@
 Dataset_Final.zip filter=lfs diff=lfs merge=lfs -text
+runs/** filter=lfs diff=lfs merge=lfs -text
+Results/** filter=lfs diff=lfs merge=lfs -text
+logs/** filter=lfs diff=lfs merge=lfs -text

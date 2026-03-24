@@ -5,8 +5,8 @@ __pycache__/
 Dataset_Final/
 Dataset_Final_original_backup.zip
 
-runs/
-Results/
-logs/
+runs/smoke_*/
+Results/smoke_*/
+logs/smoke_*
 
 .DS_Store

@@ -29,6 +29,8 @@ from tqdm import tqdm
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 SPLIT_OFFSETS = {"train": 0, "val": 10_000_000, "test": 20_000_000}
+SHADOW_PROBABILITY = 0.20
+GLARE_PROBABILITY = 0.25
 
 
 @dataclass
@@ -46,12 +48,14 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
         augment_repeats: int,
         split_name: str,
         seed: int,
+        gaussian_sigmas: float,
     ) -> None:
         self.base_dataset = datasets.ImageFolder(root)
         self.image_size = image_size
         self.augment_repeats = augment_repeats
         self.split_name = split_name
         self.seed = seed
+        self.gaussian_sigmas = gaussian_sigmas
         self.classes = self.base_dataset.classes
         self.class_to_idx = self.base_dataset.class_to_idx
         self.samples = self.base_dataset.samples
@@ -80,7 +84,7 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
         path, target = self.samples[source_index]
         image = self.base_dataset.loader(path).convert("RGB")
         rng = random.Random(self._seed_for_variant(source_index, variant_index, view_offset))
-        tensor = augmented_tensor_from_image(image, self.image_size, rng)
+        tensor = augmented_tensor_from_image(image, self.image_size, rng, self.gaussian_sigmas)
         return tensor, target
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, int]:
@@ -109,18 +113,68 @@ class DeterministicSupConDataset(Dataset[tuple[torch.Tensor, torch.Tensor, int]]
         return view_one, view_two, target
 
 
-def uniform(rng: random.Random, low: float, high: float) -> float:
-    return low + (high - low) * rng.random()
+def sample_gaussian_clipped(rng: random.Random, mean: float, std: float, low: float, high: float) -> float:
+    return min(max(rng.gauss(mean, max(std, 1e-6)), low), high)
 
 
-def random_resized_crop(image: Image.Image, image_size: int, rng: random.Random) -> Image.Image:
+def sample_safe_range(
+    rng: random.Random,
+    safe_low: float,
+    safe_high: float,
+    hard_low: float,
+    hard_high: float,
+    gaussian_sigmas: float,
+    *,
+    mean: float | None = None,
+) -> float:
+    if mean is None:
+        mean = (safe_low + safe_high) / 2.0
+    std = (safe_high - safe_low) / max(1e-6, 2.0 * gaussian_sigmas)
+    return sample_gaussian_clipped(rng, mean, std, hard_low, hard_high)
+
+
+def sample_symmetric(
+    rng: random.Random,
+    safe_abs: float,
+    hard_abs: float,
+    gaussian_sigmas: float,
+    *,
+    mean: float = 0.0,
+) -> float:
+    return sample_safe_range(rng, -safe_abs, safe_abs, -hard_abs, hard_abs, gaussian_sigmas, mean=mean)
+
+
+def sample_log_safe_ratio(
+    rng: random.Random,
+    safe_low: float,
+    safe_high: float,
+    hard_low: float,
+    hard_high: float,
+    gaussian_sigmas: float,
+) -> float:
+    safe_low_log = math.log(safe_low)
+    safe_high_log = math.log(safe_high)
+    hard_low_log = math.log(hard_low)
+    hard_high_log = math.log(hard_high)
+    value_log = sample_safe_range(
+        rng,
+        safe_low_log,
+        safe_high_log,
+        hard_low_log,
+        hard_high_log,
+        gaussian_sigmas,
+        mean=0.0,
+    )
+    return math.exp(value_log)
+
+
+def random_resized_crop(image: Image.Image, image_size: int, rng: random.Random, gaussian_sigmas: float) -> Image.Image:
     width, height = image.size
     area = width * height
-    log_ratio = (math.log(0.7), math.log(1.35))
 
     for _ in range(10):
-        target_area = area * uniform(rng, 0.55, 1.0)
-        aspect_ratio = math.exp(uniform(rng, *log_ratio))
+        target_area = area * sample_safe_range(rng, 0.70, 1.0, 0.55, 1.0, gaussian_sigmas, mean=0.85)
+        aspect_ratio = sample_log_safe_ratio(rng, 0.8, 1.25, 0.7, 1.35, gaussian_sigmas)
         crop_width = int(round(math.sqrt(target_area * aspect_ratio)))
         crop_height = int(round(math.sqrt(target_area / aspect_ratio)))
         if 0 < crop_width <= width and 0 < crop_height <= height:
@@ -150,8 +204,8 @@ def random_resized_crop(image: Image.Image, image_size: int, rng: random.Random)
     )
 
 
-def random_perspective(image: Image.Image, rng: random.Random) -> Image.Image:
-    distortion = uniform(rng, 0.0, 0.22)
+def random_perspective(image: Image.Image, rng: random.Random, gaussian_sigmas: float) -> Image.Image:
+    distortion = sample_safe_range(rng, 0.05, 0.15, 0.0, 0.2, gaussian_sigmas, mean=0.10)
     if distortion < 1e-4:
         return image
 
@@ -166,10 +220,10 @@ def random_perspective(image: Image.Image, rng: random.Random) -> Image.Image:
 
     startpoints = [[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]]
     endpoints = [
-        point(uniform(rng, 0.0, dx), uniform(rng, 0.0, dy)),
-        point(uniform(rng, width - 1 - dx, width - 1), uniform(rng, 0.0, dy)),
-        point(uniform(rng, width - 1 - dx, width - 1), uniform(rng, height - 1 - dy, height - 1)),
-        point(uniform(rng, 0.0, dx), uniform(rng, height - 1 - dy, height - 1)),
+        point(sample_gaussian_clipped(rng, dx / 2.0, dx / max(1e-6, 2.0 * gaussian_sigmas), 0.0, dx), sample_gaussian_clipped(rng, dy / 2.0, dy / max(1e-6, 2.0 * gaussian_sigmas), 0.0, dy)),
+        point(sample_gaussian_clipped(rng, width - 1 - dx / 2.0, dx / max(1e-6, 2.0 * gaussian_sigmas), width - 1 - dx, width - 1), sample_gaussian_clipped(rng, dy / 2.0, dy / max(1e-6, 2.0 * gaussian_sigmas), 0.0, dy)),
+        point(sample_gaussian_clipped(rng, width - 1 - dx / 2.0, dx / max(1e-6, 2.0 * gaussian_sigmas), width - 1 - dx, width - 1), sample_gaussian_clipped(rng, height - 1 - dy / 2.0, dy / max(1e-6, 2.0 * gaussian_sigmas), height - 1 - dy, height - 1)),
+        point(sample_gaussian_clipped(rng, dx / 2.0, dx / max(1e-6, 2.0 * gaussian_sigmas), 0.0, dx), sample_gaussian_clipped(rng, height - 1 - dy / 2.0, dy / max(1e-6, 2.0 * gaussian_sigmas), height - 1 - dy, height - 1)),
     ]
     return TF.perspective(
         image,
@@ -180,8 +234,8 @@ def random_perspective(image: Image.Image, rng: random.Random) -> Image.Image:
     )
 
 
-def jpeg_compress(image: Image.Image, rng: random.Random) -> Image.Image:
-    quality = int(round(uniform(rng, 35.0, 100.0)))
+def jpeg_compress(image: Image.Image, rng: random.Random, gaussian_sigmas: float) -> Image.Image:
+    quality = int(round(sample_safe_range(rng, 50.0, 100.0, 35.0, 100.0, gaussian_sigmas, mean=75.0)))
     buffer = io.BytesIO()
     image.save(buffer, format="JPEG", quality=quality, optimize=False)
     buffer.seek(0)
@@ -189,8 +243,8 @@ def jpeg_compress(image: Image.Image, rng: random.Random) -> Image.Image:
     return compressed.convert("RGB")
 
 
-def apply_gaussian_noise(tensor: torch.Tensor, rng: random.Random) -> torch.Tensor:
-    noise_std = uniform(rng, 0.0, 0.06)
+def apply_gaussian_noise(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: float) -> torch.Tensor:
+    noise_std = sample_safe_range(rng, 0.0, 0.02, 0.0, 0.06, gaussian_sigmas, mean=0.01)
     if noise_std < 1e-5:
         return tensor
     generator = torch.Generator()
@@ -199,25 +253,29 @@ def apply_gaussian_noise(tensor: torch.Tensor, rng: random.Random) -> torch.Tens
     return tensor + (noise * noise_std)
 
 
-def apply_channel_shift(tensor: torch.Tensor, rng: random.Random) -> torch.Tensor:
+def apply_channel_shift(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: float) -> torch.Tensor:
     shifts = torch.tensor(
-        [uniform(rng, -0.05, 0.05), uniform(rng, -0.05, 0.05), uniform(rng, -0.05, 0.05)],
+        [
+            sample_symmetric(rng, 0.02, 0.05, gaussian_sigmas),
+            sample_symmetric(rng, 0.02, 0.05, gaussian_sigmas),
+            sample_symmetric(rng, 0.02, 0.05, gaussian_sigmas),
+        ],
         dtype=tensor.dtype,
     ).view(3, 1, 1)
     return tensor + shifts
 
 
-def apply_grayscale_mix(tensor: torch.Tensor, rng: random.Random) -> torch.Tensor:
-    mix = uniform(rng, 0.0, 0.15)
+def apply_grayscale_mix(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: float) -> torch.Tensor:
+    mix = sample_safe_range(rng, 0.0, 0.08, 0.0, 0.15, gaussian_sigmas, mean=0.04)
     gray = tensor.mean(dim=0, keepdim=True).repeat(3, 1, 1)
     return tensor.mul(1.0 - mix).add(gray.mul(mix))
 
 
-def apply_illumination_gradient(tensor: torch.Tensor, rng: random.Random) -> torch.Tensor:
+def apply_illumination_gradient(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: float) -> torch.Tensor:
     _, height, width = tensor.shape
     horizontal = rng.random() < 0.5
-    start = uniform(rng, 0.7, 1.05)
-    end = uniform(rng, 0.7, 1.05)
+    start = sample_safe_range(rng, 0.8, 1.05, 0.7, 1.1, gaussian_sigmas, mean=0.95)
+    end = sample_safe_range(rng, 0.8, 1.05, 0.7, 1.1, gaussian_sigmas, mean=0.95)
     if horizontal:
         ramp = torch.linspace(start, end, steps=width, dtype=tensor.dtype).view(1, 1, width)
         mask = ramp.expand(1, height, width)
@@ -227,54 +285,118 @@ def apply_illumination_gradient(tensor: torch.Tensor, rng: random.Random) -> tor
     return tensor * mask
 
 
-def apply_cutout(tensor: torch.Tensor, rng: random.Random) -> torch.Tensor:
+def apply_shadow_overlay(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: float, shadow_prob: float) -> torch.Tensor:
+    if rng.random() >= shadow_prob:
+        return tensor
+    _, height, width = tensor.shape
+    horizontal = rng.random() < 0.5
+    darkness = sample_safe_range(rng, 0.82, 0.95, 0.7, 1.0, gaussian_sigmas, mean=0.90)
+    midpoint = sample_safe_range(rng, 0.35, 0.65, 0.15, 0.85, gaussian_sigmas, mean=0.5)
+    softness = sample_safe_range(rng, 0.08, 0.18, 0.03, 0.30, gaussian_sigmas, mean=0.12)
+    if horizontal:
+        coords = torch.linspace(0.0, 1.0, steps=width, dtype=tensor.dtype).view(1, 1, width)
+    else:
+        coords = torch.linspace(0.0, 1.0, steps=height, dtype=tensor.dtype).view(1, height, 1)
+    transition = torch.sigmoid((coords - midpoint) / max(softness, 1e-4))
+    shadow_mask = darkness + (1.0 - darkness) * transition
+    shadow_mask = shadow_mask.expand(1, height, width)
+    return tensor * shadow_mask
+
+
+def apply_specular_glare(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: float, glare_prob: float) -> torch.Tensor:
+    if rng.random() >= glare_prob:
+        return tensor
+    _, height, width = tensor.shape
+    ys = torch.linspace(-1.0, 1.0, steps=height, dtype=tensor.dtype)
+    xs = torch.linspace(-1.0, 1.0, steps=width, dtype=tensor.dtype)
+    yy, xx = torch.meshgrid(ys, xs, indexing="ij")
+    glare = torch.zeros((height, width), dtype=tensor.dtype)
+    blob_count = rng.randint(1, 3)
+    for _ in range(blob_count):
+        cx = sample_safe_range(rng, -0.4, 0.4, -0.8, 0.8, gaussian_sigmas, mean=0.0)
+        cy = sample_safe_range(rng, -0.4, 0.4, -0.8, 0.8, gaussian_sigmas, mean=0.0)
+        sigma_x = sample_safe_range(rng, 0.08, 0.18, 0.03, 0.30, gaussian_sigmas, mean=0.12)
+        sigma_y = sample_safe_range(rng, 0.05, 0.14, 0.02, 0.22, gaussian_sigmas, mean=0.09)
+        intensity = sample_safe_range(rng, 0.10, 0.22, 0.0, 0.35, gaussian_sigmas, mean=0.16)
+        blob = torch.exp(-(((xx - cx) ** 2) / (2 * sigma_x * sigma_x) + ((yy - cy) ** 2) / (2 * sigma_y * sigma_y)))
+        glare = torch.maximum(glare, blob * intensity)
+    color_scale = torch.tensor(
+        [
+            sample_safe_range(rng, 0.95, 1.05, 0.9, 1.1, gaussian_sigmas, mean=1.0),
+            sample_safe_range(rng, 0.97, 1.08, 0.9, 1.12, gaussian_sigmas, mean=1.02),
+            sample_safe_range(rng, 1.00, 1.12, 0.92, 1.18, gaussian_sigmas, mean=1.06),
+        ],
+        dtype=tensor.dtype,
+    ).view(3, 1, 1)
+    glare = glare.unsqueeze(0)
+    return tensor + (1.0 - tensor) * glare * color_scale
+
+
+def apply_cutout(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: float) -> torch.Tensor:
     _, height, width = tensor.shape
     cutout_count = rng.randint(1, 3)
+    total_fraction = sample_safe_range(rng, 0.08, 0.15, 0.02, 0.25, gaussian_sigmas, mean=0.11)
+    remaining_area = total_fraction * height * width
     for _ in range(cutout_count):
-        cutout_h = max(1, int(round(uniform(rng, 0.04, 0.18) * height)))
-        cutout_w = max(1, int(round(uniform(rng, 0.04, 0.18) * width)))
+        if remaining_area <= 1.0:
+            break
+        share = remaining_area if cutout_count == 1 else remaining_area * rng.uniform(0.25, 0.75)
+        aspect = sample_log_safe_ratio(rng, 0.8, 1.25, 0.7, 1.35, gaussian_sigmas)
+        cutout_h = max(1, int(round(math.sqrt(share / max(aspect, 1e-6)))))
+        cutout_w = max(1, int(round(cutout_h * aspect)))
+        cutout_h = min(cutout_h, height)
+        cutout_w = min(cutout_w, width)
         top = rng.randint(0, max(0, height - cutout_h))
         left = rng.randint(0, max(0, width - cutout_w))
         fill = torch.tensor(
-            [uniform(rng, 0.0, 1.0), uniform(rng, 0.0, 1.0), uniform(rng, 0.0, 1.0)],
+            [
+                sample_gaussian_clipped(rng, 0.5, 0.25, 0.0, 1.0),
+                sample_gaussian_clipped(rng, 0.5, 0.25, 0.0, 1.0),
+                sample_gaussian_clipped(rng, 0.5, 0.25, 0.0, 1.0),
+            ],
             dtype=tensor.dtype,
         ).view(3, 1, 1)
         tensor[:, top : top + cutout_h, left : left + cutout_w] = fill
+        remaining_area -= cutout_h * cutout_w
+        cutout_count -= 1
     return tensor
 
 
-def augmented_tensor_from_image(image: Image.Image, image_size: int, rng: random.Random) -> torch.Tensor:
-    image = random_resized_crop(image, image_size, rng)
+def augmented_tensor_from_image(image: Image.Image, image_size: int, rng: random.Random, gaussian_sigmas: float) -> torch.Tensor:
+    image = random_resized_crop(image, image_size, rng, gaussian_sigmas)
 
     if rng.random() < 0.5:
         image = TF.hflip(image)
-    if rng.random() < 0.2:
+    if rng.random() < 0.05:
         image = TF.vflip(image)
 
     translate = (
-        int(round(uniform(rng, -0.14, 0.14) * image_size)),
-        int(round(uniform(rng, -0.14, 0.14) * image_size)),
+        int(round(sample_symmetric(rng, 0.10, 0.15, gaussian_sigmas) * image_size)),
+        int(round(sample_symmetric(rng, 0.10, 0.15, gaussian_sigmas) * image_size)),
     )
     image = TF.affine(
         image,
-        angle=uniform(rng, -35.0, 35.0),
+        angle=sample_symmetric(rng, 15.0, 25.0, gaussian_sigmas),
         translate=translate,
-        scale=uniform(rng, 0.82, 1.18),
-        shear=[uniform(rng, -14.0, 14.0), uniform(rng, -10.0, 10.0)],
+        scale=sample_safe_range(rng, 0.85, 1.15, 0.75, 1.25, gaussian_sigmas, mean=1.0),
+        shear=[
+            sample_symmetric(rng, 8.0, 12.0, gaussian_sigmas),
+            sample_symmetric(rng, 8.0, 12.0, gaussian_sigmas),
+        ],
         interpolation=InterpolationMode.BILINEAR,
         fill=0,
     )
-    image = random_perspective(image, rng)
-    image = TF.adjust_brightness(image, uniform(rng, 0.65, 1.35))
-    image = TF.adjust_contrast(image, uniform(rng, 0.7, 1.4))
-    image = TF.adjust_saturation(image, uniform(rng, 0.7, 1.4))
-    image = TF.adjust_hue(image, uniform(rng, -0.08, 0.08))
-    image = TF.adjust_gamma(image, uniform(rng, 0.75, 1.35), gain=1.0)
-    image = TF.adjust_sharpness(image, uniform(rng, 0.5, 1.8))
-    image = jpeg_compress(image, rng)
+    image = random_perspective(image, rng, gaussian_sigmas)
+    image = TF.adjust_brightness(image, sample_safe_range(rng, 0.8, 1.2, 0.65, 1.35, gaussian_sigmas, mean=1.0))
+    image = TF.adjust_contrast(image, sample_safe_range(rng, 0.8, 1.25, 0.7, 1.4, gaussian_sigmas, mean=1.0))
+    image = TF.adjust_saturation(image, sample_safe_range(rng, 0.8, 1.25, 0.7, 1.35, gaussian_sigmas, mean=1.0))
+    image = TF.adjust_hue(image, sample_symmetric(rng, 0.04, 0.08, gaussian_sigmas))
+    image = TF.adjust_gamma(image, sample_safe_range(rng, 0.85, 1.2, 0.75, 1.3, gaussian_sigmas, mean=1.0), gain=1.0)
+    image = TF.adjust_sharpness(image, sample_safe_range(rng, 0.7, 1.4, 0.5, 1.8, gaussian_sigmas, mean=1.0))
+    image = jpeg_compress(image, rng, gaussian_sigmas)
 
     tensor = TF.to_tensor(image)
-    blur_sigma = uniform(rng, 0.0, 1.8)
+    blur_sigma = sample_safe_range(rng, 0.0, 1.0, 0.0, 1.8, gaussian_sigmas, mean=0.5)
     if blur_sigma > 0.05:
         kernel_size = 5 if blur_sigma < 1.0 else 7
         tensor = TF.gaussian_blur(
@@ -282,11 +404,13 @@ def augmented_tensor_from_image(image: Image.Image, image_size: int, rng: random
             kernel_size=[kernel_size, kernel_size],
             sigma=[blur_sigma, blur_sigma],
         )
-    tensor = apply_gaussian_noise(tensor, rng)
-    tensor = apply_channel_shift(tensor, rng)
-    tensor = apply_grayscale_mix(tensor, rng)
-    tensor = apply_illumination_gradient(tensor, rng)
-    tensor = apply_cutout(tensor, rng)
+    tensor = apply_gaussian_noise(tensor, rng, gaussian_sigmas)
+    tensor = apply_channel_shift(tensor, rng, gaussian_sigmas)
+    tensor = apply_grayscale_mix(tensor, rng, gaussian_sigmas)
+    tensor = apply_illumination_gradient(tensor, rng, gaussian_sigmas)
+    tensor = apply_shadow_overlay(tensor, rng, gaussian_sigmas, shadow_prob=SHADOW_PROBABILITY)
+    tensor = apply_specular_glare(tensor, rng, gaussian_sigmas, glare_prob=GLARE_PROBABILITY)
+    tensor = apply_cutout(tensor, rng, gaussian_sigmas)
     tensor = tensor.clamp(0.0, 1.0)
     return TF.normalize(tensor, IMAGENET_MEAN, IMAGENET_STD)
 
@@ -605,9 +729,15 @@ def build_datasets(
     DeterministicSupConDataset,
 ]:
     root = Path(args.dataset_root)
-    train_dataset = DeterministicAugmentedImageFolder(root / "train", args.image_size, args.augment_repeats, "train", args.seed)
-    val_dataset = DeterministicAugmentedImageFolder(root / "val", args.image_size, args.augment_repeats, "val", args.seed)
-    test_dataset = DeterministicAugmentedImageFolder(root / "test", args.image_size, args.augment_repeats, "test", args.seed)
+    train_dataset = DeterministicAugmentedImageFolder(
+        root / "train", args.image_size, args.augment_repeats, "train", args.seed, args.augment_gaussian_sigmas
+    )
+    val_dataset = DeterministicAugmentedImageFolder(
+        root / "val", args.image_size, args.augment_repeats, "val", args.seed, args.augment_gaussian_sigmas
+    )
+    test_dataset = DeterministicAugmentedImageFolder(
+        root / "test", args.image_size, args.augment_repeats, "test", args.seed, args.augment_gaussian_sigmas
+    )
     if train_dataset.classes != val_dataset.classes or train_dataset.classes != test_dataset.classes:
         raise ValueError("Class folders differ across train/val/test")
     return (
@@ -925,6 +1055,85 @@ def evaluate_supcon(
     return total_loss / max(1, total_seen)
 
 
+def sample_mix_probability(rng: random.Random, safe_low: float, safe_high: float, hard_low: float, hard_high: float, gaussian_sigmas: float) -> float:
+    return sample_safe_range(rng, safe_low, safe_high, hard_low, hard_high, gaussian_sigmas, mean=(safe_low + safe_high) / 2.0)
+
+
+def sample_mixup_lambda(rng: random.Random, gaussian_sigmas: float) -> float:
+    minor_fraction = sample_safe_range(rng, 0.10, 0.25, 0.0, 0.40, gaussian_sigmas, mean=0.16)
+    return 1.0 - minor_fraction
+
+
+def sample_cutmix_box(
+    batch_height: int,
+    batch_width: int,
+    rng: random.Random,
+    gaussian_sigmas: float,
+) -> tuple[int, int, int, int]:
+    area_fraction = sample_safe_range(rng, 0.10, 0.25, 0.0, 0.40, gaussian_sigmas, mean=0.16)
+    aspect = sample_log_safe_ratio(rng, 0.8, 1.25, 0.6, 1.6, gaussian_sigmas)
+    box_area = area_fraction * batch_height * batch_width
+    cut_h = max(1, int(round(math.sqrt(box_area / max(aspect, 1e-6)))))
+    cut_w = max(1, int(round(cut_h * aspect)))
+    cut_h = min(cut_h, batch_height)
+    cut_w = min(cut_w, batch_width)
+    cy = rng.randint(0, batch_height - 1)
+    cx = rng.randint(0, batch_width - 1)
+    y1 = max(0, cy - cut_h // 2)
+    y2 = min(batch_height, y1 + cut_h)
+    x1 = max(0, cx - cut_w // 2)
+    x2 = min(batch_width, x1 + cut_w)
+    return x1, y1, x2, y2
+
+
+def apply_batch_mix(
+    images: torch.Tensor,
+    labels: torch.Tensor,
+    args: argparse.Namespace,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, str]:
+    if images.size(0) < 2:
+        return images, labels, labels, 1.0, "none"
+
+    rng = random
+    mixup_prob = args.mixup_prob
+    cutmix_prob = args.cutmix_prob
+    total_prob = mixup_prob + cutmix_prob
+    if total_prob <= 0.0 or rng.random() >= total_prob:
+        return images, labels, labels, 1.0, "none"
+
+    permutation = torch.randperm(images.size(0), device=images.device)
+    shuffled = images[permutation]
+    labels_b = labels[permutation]
+    chooser = rng.random() * total_prob
+
+    if chooser < cutmix_prob:
+        x1, y1, x2, y2 = sample_cutmix_box(images.size(2), images.size(3), rng, args.augment_gaussian_sigmas)
+        mixed = images.clone()
+        mixed[:, :, y1:y2, x1:x2] = shuffled[:, :, y1:y2, x1:x2]
+        box_area = max(0, x2 - x1) * max(0, y2 - y1)
+        lam = 1.0 - (box_area / float(images.size(2) * images.size(3)))
+        return mixed, labels, labels_b, lam, "cutmix"
+
+    lam = sample_mixup_lambda(rng, args.augment_gaussian_sigmas)
+    mixed = images * lam + shuffled * (1.0 - lam)
+    return mixed, labels, labels_b, lam, "mixup"
+
+
+def mixed_arcface_loss(
+    model: MetricLearningEfficientNetB0,
+    embeddings: torch.Tensor,
+    labels_a: torch.Tensor,
+    labels_b: torch.Tensor,
+    lam: float,
+    criterion: nn.Module,
+) -> torch.Tensor:
+    logits_a = model.classify(embeddings, labels_a)
+    if lam >= 0.999999:
+        return criterion(logits_a, labels_a)
+    logits_b = model.classify(embeddings, labels_b)
+    return lam * criterion(logits_a, labels_a) + (1.0 - lam) * criterion(logits_b, labels_b)
+
+
 def train_arcface_epoch(
     model: MetricLearningEfficientNetB0,
     loader: DataLoader,
@@ -940,6 +1149,7 @@ def train_arcface_epoch(
     log_path: Path,
     log_every_steps: int,
     train_progress: dict[str, int],
+    args: argparse.Namespace,
 ) -> tuple[float, float]:
     model.train()
     freeze_frozen_batchnorms(backbone_modules)
@@ -952,30 +1162,32 @@ def train_arcface_epoch(
     for step_in_epoch, (images, labels) in progress:
         images = images.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
+        mixed_images, labels_a, labels_b, lam, mix_type = apply_batch_mix(images, labels, args)
 
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
-            embeddings = model.encode(images)
-            logits = model.classify(embeddings, labels)
-            loss = criterion(logits, labels)
+            embeddings = model.encode(mixed_images)
+            loss = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion)
         loss.backward()
         optimizer.first_step(zero_grad=True)
 
         with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
-            embeddings = model.encode(images)
-            logits = model.classify(embeddings, labels)
-            second_loss = criterion(logits, labels)
+            embeddings = model.encode(mixed_images)
+            second_loss = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion)
         second_loss.backward()
         optimizer.second_step(zero_grad=True)
         scheduler.step()
 
         with torch.no_grad():
-            eval_logits = model.classify(model.encode(images), labels=None)
+            eval_logits = model.classify(model.encode(mixed_images), labels=None)
             predictions = eval_logits.argmax(dim=1)
 
         batch_size = labels.size(0)
         total_loss += second_loss.item() * batch_size
-        total_correct += (predictions == labels).sum().item()
+        total_correct += (
+            lam * (predictions == labels_a).sum().item()
+            + (1.0 - lam) * (predictions == labels_b).sum().item()
+        )
         total_seen += batch_size
         train_progress["global_train_step"] += 1
         train_progress["global_source_samples_seen"] += batch_size
@@ -995,6 +1207,8 @@ def train_arcface_epoch(
                 "global_source_samples_seen": train_progress["global_source_samples_seen"],
                 "running_loss": total_loss / max(1, total_seen),
                 "running_acc": total_correct / max(1, total_seen),
+                "mix_type": mix_type,
+                "mix_lambda": lam,
                 "learning_rates": [group["lr"] for group in optimizer.base_optimizer.param_groups],
             }
             log_json_event(log_path, event)
@@ -1238,6 +1452,9 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--augment-repeats", type=int, default=20)
+    parser.add_argument("--augment-gaussian-sigmas", type=float, default=2.0)
+    parser.add_argument("--mixup-prob", type=float, default=0.20)
+    parser.add_argument("--cutmix-prob", type=float, default=0.20)
     parser.add_argument("--embedding-dim", type=int, default=512)
     parser.add_argument("--projection-dim", type=int, default=256)
     parser.add_argument("--supcon-epochs", type=int, default=200)
@@ -1286,6 +1503,10 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         raise ValueError("--unfreeze-chunk-size must be >= 1")
     if args.augment_repeats < 1:
         raise ValueError("--augment-repeats must be >= 1")
+    if args.augment_gaussian_sigmas <= 0:
+        raise ValueError("--augment-gaussian-sigmas must be > 0")
+    if args.mixup_prob < 0 or args.cutmix_prob < 0 or args.mixup_prob + args.cutmix_prob > 1.0:
+        raise ValueError("--mixup-prob and --cutmix-prob must be >= 0 and sum to <= 1")
     if args.log_every_steps < 1:
         raise ValueError("--log-every-steps must be >= 1")
     if args.early_stopping_patience < 1:
@@ -1451,6 +1672,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                 log_path=log_path,
                 log_every_steps=args.log_every_steps,
                 train_progress=train_progress,
+                args=args,
             )
             val_loss, val_acc = evaluate_arcface(
                 model=model,
@@ -1555,6 +1777,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         "effective_val_count": len(val_dataset),
         "effective_test_count": len(test_dataset),
         "augment_repeats": args.augment_repeats,
+        "augment_gaussian_sigmas": args.augment_gaussian_sigmas,
         "train_class_counts": class_counts(train_dataset),
         "val_class_counts": class_counts(val_dataset),
         "test_class_counts": class_counts(test_dataset),
@@ -1581,6 +1804,15 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             "sam_rho": args.sam_rho,
             "weight_decay": args.weight_decay,
             "adam_betas": [args.adam_beta1, args.adam_beta2],
+        },
+        "batch_mixing": {
+            "mixup_prob": args.mixup_prob,
+            "cutmix_prob": args.cutmix_prob,
+        },
+        "image_augmentation": {
+            "gaussian_sigmas": args.augment_gaussian_sigmas,
+            "shadow_probability": SHADOW_PROBABILITY,
+            "glare_probability": GLARE_PROBABILITY,
         },
         "early_stopping": {
             "patience": args.early_stopping_patience,
