@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$REPO_ROOT"
+
+source .venv/bin/activate
+
+python scripts/train_efficientnet_v2l_progressive.py \
+  --dataset-root Dataset_Final \
+  --weighted-sampling \
+  "$@"

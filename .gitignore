@@ -6,5 +6,7 @@ Dataset_Final/
 Dataset_Final_original_backup.zip
 
 runs/
+Results/
+logs/
 
 .DS_Store

@@ -11,13 +11,84 @@ chmod +x scripts/setup_venv_cuda.sh
 
 The installer uses [requirements-cu128.txt](/home/anurag-basistha/Projects/ESD/requirements-cu128.txt), which points `pip` at the official CUDA 12.8 PyTorch wheel index.
 
-## Progressive Fine-Tuning
+## Training Variants
 
-Both training scripts use the largest pretrained EfficientNet available in the installed `torchvision`: `efficientnet_v2_l`.
+There are two matched training scripts:
+- [scripts/train_efficientnet_v2l_progressive.py](/home/anurag-basistha/Projects/ESD/scripts/train_efficientnet_v2l_progressive.py): plain pretrained `efficientnet_v2_l`
+- [scripts/train_efficientnet_v2l_gabor_progressive.py](/home/anurag-basistha/Projects/ESD/scripts/train_efficientnet_v2l_gabor_progressive.py): the same EfficientNet backbone, but with a fixed multi-orientation Gabor front-end and a learnable adapter before the backbone
 
-The fine-tuning schedule is progressive:
-- phase 1: train only the classification head
-- later phases: unfreeze the backbone from the end in chunks, default `20` parameter-bearing modules at a time
+Both scripts share the same pipeline implementation in [scripts/metric_learning_pipeline.py](/home/anurag-basistha/Projects/ESD/scripts/metric_learning_pipeline.py). The plain model is the control arm; only the Gabor variant gets the extra texture front-end.
+
+## Training Pipeline
+
+The full pipeline is:
+1. Initialize a pretrained `efficientnet_v2_l` backbone.
+2. Run supervised contrastive pretraining on the embedding head.
+3. Early-stop the SupCon phase on validation SupCon loss with patience `20`.
+4. Restore the best SupCon checkpoint.
+5. Replace classification training with ArcFace metric learning.
+6. Train the ArcFace head first with the backbone frozen.
+7. Progressively unfreeze the backbone from the end in chunks, default `20` parameter-bearing modules at a time.
+8. For every ArcFace phase, early-stop on validation loss with patience `20`.
+9. Restore the best phase checkpoint before moving to the next phase.
+10. Evaluate the best overall model on validation and test.
+
+## Optimization
+
+The trainers use:
+- `AdamW` as the base optimizer
+- `SAM` (Sharpness-Aware Minimization) for flatter minima
+- warmup + cosine decay scheduling
+- AMP autocast on CUDA
+
+This does not guarantee the global minimum, but it is a strong practical setup for robust fine-tuning.
+
+## Augmentation Strategy
+
+All three splits use deterministic, split-safe online augmentation:
+- `train`, `val`, and `test` remain source-disjoint because they still read from separate folders
+- each source image is expanded into `20` deterministic augmented variants by default with `--augment-repeats 20`
+- the same original file never crosses split boundaries
+- each variant is keyed by split, source index, and repeat index, which keeps the probability of duplicate augmentations low
+
+The augmentation stack includes only image-classification-safe transforms:
+- random resized crop
+- horizontal and vertical flip
+- affine transforms
+- perspective distortion
+- brightness, contrast, saturation, hue
+- gamma and sharpness perturbation
+- blur and additive noise
+- JPEG compression
+- channel shift and grayscale mixing
+- illumination gradient overlays
+- cutout / coarse occlusion
+
+## Outputs
+
+Each run writes result artifacts to its output directory under `Results/...`:
+- `best.pt`
+- `last.pt`
+- `metrics.json`
+- `validation_metrics.json`
+- `test_metrics.json`
+
+Each run also writes a structured JSONL training log under `logs/...` with phase-by-phase events and early-stopping messages.
+
+Saved metrics include the standard classification set used in model comparison:
+- loss
+- top-1 accuracy
+- top-3 accuracy
+- balanced accuracy
+- macro and weighted precision
+- macro and weighted recall
+- macro and weighted F1
+- per-class precision, recall, specificity, and F1
+- confusion matrix
+- one-vs-rest ROC-AUC
+- one-vs-rest PR-AUC
+- Cohen's kappa
+- multiclass Matthews correlation coefficient
 
 ## Standard Fine-Tuner
 
@@ -27,9 +98,12 @@ python scripts/train_efficientnet_v2l_progressive.py \
   --dataset-root Dataset_Final \
   --batch-size 4 \
   --num-workers 8 \
-  --head-epochs 2 \
-  --stage-epochs 1 \
+  --augment-repeats 20 \
+  --supcon-epochs 200 \
+  --head-epochs 200 \
+  --stage-epochs 200 \
   --unfreeze-chunk-size 20 \
+  --early-stopping-patience 20 \
   --weighted-sampling
 ```
 
@@ -41,18 +115,21 @@ python scripts/train_efficientnet_v2l_gabor_progressive.py \
   --dataset-root Dataset_Final \
   --batch-size 4 \
   --num-workers 8 \
-  --head-epochs 2 \
-  --stage-epochs 1 \
+  --augment-repeats 20 \
+  --supcon-epochs 200 \
+  --head-epochs 200 \
+  --stage-epochs 200 \
   --unfreeze-chunk-size 20 \
+  --early-stopping-patience 20 \
   --weighted-sampling
 ```
 
 ## Notes
 
 - Both scripts default to pretrained ImageNet weights with `EfficientNet_V2_L_Weights.DEFAULT`.
-- The Gabor variant adds a fixed multi-orientation Gabor bank plus a learnable adapter before the pretrained backbone.
-- The scripts use `cuda` automatically when `torch.cuda.is_available()` is true.
-- On an RTX 3050 6GB, lower `--image-size` or `--batch-size` if you hit out-of-memory.
+- ArcFace was chosen over AdaFace because AdaFace is mainly useful for quality-varying face embeddings, while ArcFace is the cleaner metric-learning choice for generic multiclass material/object classification.
+- The current dataset no longer has a separate `plastic` class; it was merged into `other`.
+- The Gabor variant may help if texture cues matter, but it can also become a front-end bottleneck. That is why it is kept as a separate ablation instead of being forced into both models.
 - The dataset structure expected by the scripts is:
   - `Dataset_Final/train/<class>`
   - `Dataset_Final/val/<class>`
