@@ -18,7 +18,7 @@ import torch.nn.functional as F
 from PIL import Image
 from torch import nn
 from torch.optim import AdamW, Optimizer
-from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
+from torch.utils.data import DataLoader, Dataset, Sampler
 from torchvision import datasets
 from torchvision.models import EfficientNet_B0_Weights, efficientnet_b0
 from torchvision.transforms import InterpolationMode
@@ -60,6 +60,7 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
         self.class_to_idx = self.base_dataset.class_to_idx
         self.samples = self.base_dataset.samples
         self.targets = self.base_dataset.targets
+        self.current_epoch = 0
 
     def __len__(self) -> int:
         return len(self.samples) * self.augment_repeats
@@ -71,12 +72,19 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
         source_index = index % len(self.samples)
         return self.targets[source_index]
 
+    def set_epoch(self, epoch: int) -> None:
+        self.current_epoch = max(0, int(epoch))
+
+    def variant_for_source(self, source_index: int) -> int:
+        return (source_index * 17) % self.augment_repeats
+
     def _seed_for_variant(self, source_index: int, variant_index: int, view_offset: int = 0) -> int:
         return (
             self.seed * 1_000_003
             + SPLIT_OFFSETS[self.split_name]
             + source_index * 9_973
             + variant_index * 99_991
+            + self.current_epoch * 104_729
             + view_offset * 1_299_721
         )
 
@@ -101,6 +109,9 @@ class DeterministicSupConDataset(Dataset[tuple[torch.Tensor, torch.Tensor, int]]
 
     def __len__(self) -> int:
         return len(self.base_dataset)
+
+    def set_epoch(self, epoch: int) -> None:
+        self.base_dataset.set_epoch(epoch)
 
     def target_for_index(self, index: int) -> int:
         return self.base_dataset.target_for_index(index)
@@ -693,12 +704,61 @@ def effective_class_counts(dataset: DeterministicAugmentedImageFolder) -> dict[s
     return {name: count * dataset.augment_repeats for name, count in base_counts.items()}
 
 
-def make_weighted_sampler(dataset: Dataset, classes: list[str], target_fn) -> WeightedRandomSampler:
+class DeterministicEpochSampler(Sampler[int]):
+    def __init__(
+        self,
+        num_samples: int,
+        seed: int,
+        *,
+        shuffle: bool,
+        weights: torch.Tensor | None = None,
+        replacement: bool = True,
+    ) -> None:
+        self.num_samples = num_samples
+        self.seed = seed
+        self.shuffle = shuffle
+        self.weights = weights
+        self.replacement = replacement
+        self.epoch = 0
+        self.start_index = 0
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = max(0, int(epoch))
+
+    def set_start_index(self, start_index: int) -> None:
+        self.start_index = min(max(0, int(start_index)), self.num_samples)
+
+    def __iter__(self):
+        generator = torch.Generator()
+        generator.manual_seed(self.seed + self.epoch)
+        if self.weights is not None:
+            indices = torch.multinomial(self.weights, self.num_samples, self.replacement, generator=generator).tolist()
+        elif self.shuffle:
+            indices = torch.randperm(self.num_samples, generator=generator).tolist()
+        else:
+            indices = list(range(self.num_samples))
+        return iter(indices[self.start_index :])
+
+    def __len__(self) -> int:
+        return max(0, self.num_samples - self.start_index)
+
+
+def make_weighted_sampler(dataset: Dataset, classes: list[str], target_fn, seed: int) -> DeterministicEpochSampler:
     counts = {name: 0 for name in classes}
     for index in range(len(dataset)):
         counts[classes[target_fn(index)]] += 1
     weights = [1.0 / counts[classes[target_fn(index)]] for index in range(len(dataset))]
-    return WeightedRandomSampler(torch.as_tensor(weights, dtype=torch.double), len(weights), replacement=True)
+    return DeterministicEpochSampler(
+        len(weights),
+        seed,
+        shuffle=False,
+        weights=torch.as_tensor(weights, dtype=torch.double),
+        replacement=True,
+    )
+
+
+def make_epoch_sampler(dataset: Dataset, seed: int, shuffle: bool) -> DeterministicEpochSampler:
+    return DeterministicEpochSampler(len(dataset), seed, shuffle=shuffle)
 
 
 def make_loader(
@@ -706,7 +766,7 @@ def make_loader(
     batch_size: int,
     num_workers: int,
     shuffle: bool,
-    sampler: WeightedRandomSampler | None = None,
+    sampler: Sampler[int] | None = None,
 ) -> DataLoader:
     return DataLoader(
         dataset,
@@ -906,13 +966,11 @@ def build_arcface_optimizer(model: MetricLearningEfficientNetB0, args: argparse.
 
 
 class WarmupCosineScheduler:
-    def __init__(self, optimizer: Optimizer, max_epochs: int, steps_per_epoch: int, warmup_epochs: int) -> None:
+    def __init__(self, optimizer: Optimizer, max_epochs: int, steps_per_epoch: int, warmup_epochs: int, warmup_steps: int = 0) -> None:
         self.optimizer = optimizer
         self.total_steps = max(1, max_epochs * max(1, steps_per_epoch))
-        self.warmup_steps = min(
-            self.total_steps - 1,
-            max(0, warmup_epochs * max(1, steps_per_epoch)),
-        ) if self.total_steps > 1 else 0
+        requested_warmup_steps = max(0, int(warmup_steps)) if warmup_steps > 0 else max(0, warmup_epochs * max(1, steps_per_epoch))
+        self.warmup_steps = min(self.total_steps - 1, requested_warmup_steps) if self.total_steps > 1 else 0
         self.base_lrs = [group["lr"] for group in optimizer.param_groups]
         self.step_index = 0
 
@@ -931,12 +989,40 @@ class WarmupCosineScheduler:
             group["lr"] = base_lr * factor
         self.step_index += 1
 
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "total_steps": self.total_steps,
+            "warmup_steps": self.warmup_steps,
+            "base_lrs": self.base_lrs,
+            "step_index": self.step_index,
+        }
 
-def build_scheduler(optimizer: Optimizer, max_epochs: int, steps_per_epoch: int, warmup_epochs: int) -> WarmupCosineScheduler:
-    total_steps = max(1, max_epochs * max(1, steps_per_epoch))
-    warmup_steps = min(total_steps - 1, max(0, warmup_epochs * max(1, steps_per_epoch))) if total_steps > 1 else 0
-    del total_steps, warmup_steps
-    return WarmupCosineScheduler(optimizer, max_epochs=max_epochs, steps_per_epoch=steps_per_epoch, warmup_epochs=warmup_epochs)
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
+        self.total_steps = int(state_dict["total_steps"])
+        self.warmup_steps = int(state_dict["warmup_steps"])
+        self.base_lrs = [float(value) for value in state_dict["base_lrs"]]
+        self.step_index = int(state_dict["step_index"])
+
+
+def build_scheduler(
+    optimizer: Optimizer,
+    max_epochs: int,
+    steps_per_epoch: int,
+    warmup_epochs: int,
+    warmup_steps: int = 0,
+) -> WarmupCosineScheduler:
+    return WarmupCosineScheduler(
+        optimizer,
+        max_epochs=max_epochs,
+        steps_per_epoch=steps_per_epoch,
+        warmup_epochs=warmup_epochs,
+        warmup_steps=warmup_steps,
+    )
+
+
+def steps_per_epoch_for_dataset(dataset: Dataset, batch_size: int, max_batches: int) -> int:
+    steps = math.ceil(len(dataset) / max(1, batch_size))
+    return min(steps, max_batches) if max_batches > 0 else steps
 
 
 def limited_batches(loader: DataLoader, max_batches: int):
@@ -1028,6 +1114,85 @@ def train_supcon_epoch(
             log_json_event(log_path, event)
 
     return total_loss / max(1, total_seen)
+
+
+def train_supcon_steps(
+    model: MetricLearningEfficientNetB0,
+    batch_iterator,
+    step_limit: int,
+    criterion: SupConLoss,
+    optimizer: SAM,
+    scheduler: WarmupCosineScheduler,
+    device: torch.device,
+    backbone_modules: list[tuple[str, nn.Module]],
+    epoch: int,
+    epoch_step_offset: int,
+    log_path: Path,
+    log_every_steps: int,
+    train_progress: dict[str, int],
+) -> tuple[float, int, int]:
+    model.train()
+    freeze_frozen_batchnorms(backbone_modules)
+    total_loss = 0.0
+    total_seen = 0
+    steps_done = 0
+
+    for local_step in range(step_limit):
+        try:
+            view_one, view_two, labels = next(batch_iterator)
+        except StopIteration:
+            break
+
+        step_in_epoch = epoch_step_offset + local_step + 1
+        view_one = view_one.to(device, non_blocking=True)
+        view_two = view_two.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
+
+        optimizer.zero_grad(set_to_none=True)
+        with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
+            emb_one = model.encode(view_one)
+            emb_two = model.encode(view_two)
+            proj_one = model.supcon_projection(emb_one)
+            proj_two = model.supcon_projection(emb_two)
+            stacked = torch.stack([proj_one, proj_two], dim=1)
+            loss = criterion(stacked, labels)
+        loss.backward()
+        optimizer.first_step(zero_grad=True)
+
+        with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
+            emb_one = model.encode(view_one)
+            emb_two = model.encode(view_two)
+            proj_one = model.supcon_projection(emb_one)
+            proj_two = model.supcon_projection(emb_two)
+            stacked = torch.stack([proj_one, proj_two], dim=1)
+            second_loss = criterion(stacked, labels)
+        second_loss.backward()
+        optimizer.second_step(zero_grad=True)
+        scheduler.step()
+
+        batch_size = labels.size(0)
+        total_loss += second_loss.item() * batch_size
+        total_seen += batch_size
+        steps_done += 1
+        train_progress["global_train_step"] += 1
+        train_progress["global_source_samples_seen"] += batch_size
+
+        if train_progress["global_train_step"] % log_every_steps == 0:
+            event = {
+                "event": "train_step",
+                "stage": "supcon",
+                "epoch": epoch,
+                "epoch_step": step_in_epoch,
+                "global_train_step": train_progress["global_train_step"],
+                "batch_size": batch_size,
+                "epoch_source_samples_seen": total_seen,
+                "global_source_samples_seen": train_progress["global_source_samples_seen"],
+                "running_loss": total_loss / max(1, total_seen),
+                "learning_rates": [group["lr"] for group in optimizer.base_optimizer.param_groups],
+            }
+            log_json_event(log_path, event)
+
+    return total_loss / max(1, total_seen), steps_done, total_seen
 
 
 def evaluate_supcon(
@@ -1214,6 +1379,94 @@ def train_arcface_epoch(
             log_json_event(log_path, event)
 
     return total_loss / max(1, total_seen), total_correct / max(1, total_seen)
+
+
+def train_arcface_steps(
+    model: MetricLearningEfficientNetB0,
+    batch_iterator,
+    step_limit: int,
+    criterion: nn.Module,
+    optimizer: SAM,
+    scheduler: WarmupCosineScheduler,
+    device: torch.device,
+    backbone_modules: list[tuple[str, nn.Module]],
+    epoch: int,
+    epoch_step_offset: int,
+    phase_index: int,
+    phase_name: str,
+    log_path: Path,
+    log_every_steps: int,
+    train_progress: dict[str, int],
+    args: argparse.Namespace,
+) -> tuple[float, float, int, int]:
+    model.train()
+    freeze_frozen_batchnorms(backbone_modules)
+    total_loss = 0.0
+    total_correct = 0.0
+    total_seen = 0
+    steps_done = 0
+
+    for local_step in range(step_limit):
+        try:
+            images, labels = next(batch_iterator)
+        except StopIteration:
+            break
+
+        step_in_epoch = epoch_step_offset + local_step + 1
+        images = images.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
+        mixed_images, labels_a, labels_b, lam, mix_type = apply_batch_mix(images, labels, args)
+
+        optimizer.zero_grad(set_to_none=True)
+        with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
+            embeddings = model.encode(mixed_images)
+            loss = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion)
+        loss.backward()
+        optimizer.first_step(zero_grad=True)
+
+        with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
+            embeddings = model.encode(mixed_images)
+            second_loss = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion)
+        second_loss.backward()
+        optimizer.second_step(zero_grad=True)
+        scheduler.step()
+
+        with torch.no_grad():
+            eval_logits = model.classify(model.encode(mixed_images), labels=None)
+            predictions = eval_logits.argmax(dim=1)
+
+        batch_size = labels.size(0)
+        total_loss += second_loss.item() * batch_size
+        total_correct += (
+            lam * (predictions == labels_a).sum().item()
+            + (1.0 - lam) * (predictions == labels_b).sum().item()
+        )
+        total_seen += batch_size
+        steps_done += 1
+        train_progress["global_train_step"] += 1
+        train_progress["global_source_samples_seen"] += batch_size
+
+        if train_progress["global_train_step"] % log_every_steps == 0:
+            event = {
+                "event": "train_step",
+                "stage": "arcface",
+                "phase_index": phase_index,
+                "phase_name": phase_name,
+                "epoch": epoch,
+                "epoch_step": step_in_epoch,
+                "global_train_step": train_progress["global_train_step"],
+                "batch_size": batch_size,
+                "epoch_source_samples_seen": total_seen,
+                "global_source_samples_seen": train_progress["global_source_samples_seen"],
+                "running_loss": total_loss / max(1, total_seen),
+                "running_acc": total_correct / max(1, total_seen),
+                "mix_type": mix_type,
+                "mix_lambda": lam,
+                "learning_rates": [group["lr"] for group in optimizer.base_optimizer.param_groups],
+            }
+            log_json_event(log_path, event)
+
+    return total_loss / max(1, total_seen), total_correct / max(1, total_seen), steps_done, total_seen
 
 
 def evaluate_arcface(
@@ -1439,19 +1692,23 @@ def cpu_state_dict(model: nn.Module) -> dict[str, torch.Tensor]:
     return {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
 
 
+def save_training_checkpoint(path: Path, payload: dict[str, Any]) -> None:
+    torch.save(payload, path)
+
+
 def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     description = (
-        "Metric-learning EfficientNet B0 training with deterministic 20x split-safe augmentation, "
+        "Metric-learning EfficientNet B0 training with deterministic 16x split-safe augmentation, "
         "SupCon warmup, SAM optimization, ArcFace classification, progressive unfreezing, and paper-style metrics"
     )
     if use_gabor:
         description += " using a Gabor front-end."
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--dataset-root", default="Dataset_Final")
-    parser.add_argument("--image-size", type=int, default=320)
-    parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--image-size", type=int, default=224)
+    parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument("--augment-repeats", type=int, default=20)
+    parser.add_argument("--augment-repeats", type=int, default=16)
     parser.add_argument("--augment-gaussian-sigmas", type=float, default=2.0)
     parser.add_argument("--mixup-prob", type=float, default=0.20)
     parser.add_argument("--cutmix-prob", type=float, default=0.20)
@@ -1459,6 +1716,7 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--projection-dim", type=int, default=256)
     parser.add_argument("--supcon-epochs", type=int, default=200)
     parser.add_argument("--supcon-unfreeze-backbone-modules", type=int, default=0)
+    parser.add_argument("--skip-supcon", action="store_true")
     parser.add_argument("--head-epochs", type=int, default=200)
     parser.add_argument("--stage-epochs", type=int, default=200)
     parser.add_argument("--unfreeze-chunk-size", type=int, default=20)
@@ -1482,9 +1740,11 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--max-train-batches", type=int, default=0)
     parser.add_argument("--max-eval-batches", type=int, default=0)
     parser.add_argument("--log-every-steps", type=int, default=100)
+    parser.add_argument("--eval-every-train-steps", type=int, default=64)
     parser.add_argument("--early-stopping-patience", type=int, default=20)
     parser.add_argument("--early-stopping-min-delta", type=float, default=1e-4)
-    parser.add_argument("--warmup-epochs", type=int, default=5)
+    parser.add_argument("--warmup-epochs", type=int, default=0)
+    parser.add_argument("--warmup-steps", type=int, default=1024)
     parser.add_argument("--sam-rho", type=float, default=0.05)
     parser.add_argument("--grad-accum-steps", type=int, default=1)
     if use_gabor:
@@ -1509,6 +1769,8 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         raise ValueError("--mixup-prob and --cutmix-prob must be >= 0 and sum to <= 1")
     if args.log_every_steps < 1:
         raise ValueError("--log-every-steps must be >= 1")
+    if args.eval_every_train_steps < 1:
+        raise ValueError("--eval-every-train-steps must be >= 1")
     if args.early_stopping_patience < 1:
         raise ValueError("--early-stopping-patience must be >= 1")
 
@@ -1519,13 +1781,16 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = output_dir / "last.pt"
     log_path = Path(args.log_file)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_path.write_text("", encoding="utf-8")
+    resume_checkpoint = torch.load(checkpoint_path, map_location="cpu") if checkpoint_path.exists() else None
+    if resume_checkpoint is None:
+        log_path.write_text("", encoding="utf-8")
     log_json_event(
         log_path,
         {
-            "event": "run_started",
+            "event": "run_resumed" if resume_checkpoint is not None else "run_started",
             "model_name": model_name,
             "output_dir": str(output_dir),
             "log_file": str(log_path),
@@ -1539,14 +1804,45 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         print(note)
         append_jsonl(log_path, {"event": "note", "message": note})
 
-    train_sampler = make_weighted_sampler(train_dataset, train_dataset.classes, train_dataset.target_for_index) if args.weighted_sampling else None
-    supcon_sampler = make_weighted_sampler(supcon_train_dataset, train_dataset.classes, supcon_train_dataset.target_for_index) if args.weighted_sampling else None
+    train_sampler = (
+        make_weighted_sampler(train_dataset, train_dataset.classes, train_dataset.target_for_index, args.seed + 101)
+        if args.weighted_sampling
+        else make_epoch_sampler(train_dataset, args.seed + 101, shuffle=True)
+    )
+    supcon_sampler = (
+        make_weighted_sampler(supcon_train_dataset, train_dataset.classes, supcon_train_dataset.target_for_index, args.seed + 202)
+        if args.weighted_sampling
+        else make_epoch_sampler(supcon_train_dataset, args.seed + 202, shuffle=True)
+    )
 
-    train_loader = make_loader(train_dataset, args.batch_size, args.num_workers, shuffle=not args.weighted_sampling, sampler=train_sampler)
+    train_loader = make_loader(train_dataset, args.batch_size, args.num_workers, shuffle=False, sampler=train_sampler)
     val_loader = make_loader(val_dataset, args.batch_size, args.num_workers, shuffle=False)
     test_loader = make_loader(test_dataset, args.batch_size, args.num_workers, shuffle=False)
-    supcon_train_loader = make_loader(supcon_train_dataset, args.batch_size, args.num_workers, shuffle=not args.weighted_sampling, sampler=supcon_sampler)
+    supcon_train_loader = make_loader(supcon_train_dataset, args.batch_size, args.num_workers, shuffle=False, sampler=supcon_sampler)
     supcon_val_loader = make_loader(supcon_val_dataset, args.batch_size, args.num_workers, shuffle=False)
+    log_json_event(
+        log_path,
+        {
+            "event": "dataset_schedule",
+            "source_train_count": train_dataset.source_count(),
+            "source_val_count": val_dataset.source_count(),
+            "source_test_count": test_dataset.source_count(),
+            "augmentation_bank_train_count": train_dataset.source_count() * args.augment_repeats,
+            "augmentation_bank_val_count": val_dataset.source_count() * args.augment_repeats,
+            "augmentation_bank_test_count": test_dataset.source_count() * args.augment_repeats,
+            "train_samples_per_epoch": len(train_dataset),
+            "val_samples_per_eval": len(val_dataset),
+            "test_samples_per_eval": len(test_dataset),
+            "train_steps_per_epoch": len(train_loader),
+            "supcon_steps_per_epoch": len(supcon_train_loader),
+            "val_steps_per_eval": len(val_loader),
+            "test_steps_per_eval": len(test_loader),
+            "eval_every_train_steps": args.eval_every_train_steps,
+            "early_stopping_patience": args.early_stopping_patience,
+            "warmup_epochs": args.warmup_epochs,
+            "warmup_steps": args.warmup_steps,
+        },
+    )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = MetricLearningEfficientNetB0(
@@ -1557,13 +1853,33 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         use_gabor=use_gabor,
         args=args,
     ).to(device)
+    if resume_checkpoint is not None:
+        model.load_state_dict(resume_checkpoint["model_state_dict"])
     backbone_modules = backbone_leaf_modules(model)
-    train_progress = {"global_train_step": 0, "global_source_samples_seen": 0}
+    train_progress = (
+        dict(resume_checkpoint.get("train_progress", {}))
+        if resume_checkpoint is not None
+        else {"global_train_step": 0, "global_source_samples_seen": 0}
+    )
+    train_progress.setdefault("global_train_step", 0)
+    train_progress.setdefault("global_source_samples_seen", 0)
 
-    history: list[dict[str, Any]] = []
+    history: list[dict[str, Any]] = list(resume_checkpoint.get("history", [])) if resume_checkpoint is not None else []
     total_params, _ = parameter_counts(model)
-    best_val_loss = float("inf")
-    best_val_acc = -1.0
+    best_val_loss = float(resume_checkpoint.get("best_val_loss", float("inf"))) if resume_checkpoint is not None else float("inf")
+    best_val_acc = float(resume_checkpoint.get("best_val_acc", -1.0)) if resume_checkpoint is not None else -1.0
+    augmentation_epoch_cursor = int(resume_checkpoint.get("augmentation_epoch_cursor", 0)) if resume_checkpoint is not None else 0
+    best_arcface_state = (
+        resume_checkpoint.get("best_arcface_state", cpu_state_dict(model))
+        if resume_checkpoint is not None
+        else cpu_state_dict(model)
+    )
+    supcon_best_state = (
+        resume_checkpoint.get("supcon_best_state", cpu_state_dict(model))
+        if resume_checkpoint is not None
+        else cpu_state_dict(model)
+    )
+    resume_state = dict(resume_checkpoint.get("resume", {})) if resume_checkpoint is not None else {}
 
     supcon_loss = SupConLoss(args.supcon_temperature)
     thawed_supcon = set_trainability_for_supcon(model, backbone_modules, args.supcon_unfreeze_backbone_modules)
@@ -1571,177 +1887,415 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
     supcon_scheduler = build_scheduler(
         supcon_optimizer.base_optimizer,
         max_epochs=args.supcon_epochs,
-        steps_per_epoch=min(len(supcon_train_loader), args.max_train_batches) if args.max_train_batches > 0 else len(supcon_train_loader),
+        steps_per_epoch=steps_per_epoch_for_dataset(supcon_train_dataset, args.batch_size, args.max_train_batches),
         warmup_epochs=args.warmup_epochs,
+        warmup_steps=args.warmup_steps,
     )
     _, supcon_trainable_params = parameter_counts(model)
-    supcon_best_loss = float("inf")
-    supcon_best_epoch = 0
-    supcon_best_state = cpu_state_dict(model)
-    supcon_wait = 0
+    supcon_best_loss = float(resume_checkpoint.get("supcon_best_loss", float("inf"))) if resume_checkpoint is not None else float("inf")
+    supcon_best_epoch = int(resume_checkpoint.get("supcon_best_epoch", 0)) if resume_checkpoint is not None else 0
+    supcon_wait = int(resume_checkpoint.get("supcon_wait", 0)) if resume_checkpoint is not None else 0
+    stop_supcon = False
+    start_supcon_epoch = 1
+    start_supcon_epoch_step = 0
+    start_supcon_validation_index = 0
+    supcon_completed = bool(args.skip_supcon)
 
-    for epoch in range(1, args.supcon_epochs + 1):
-        train_loss = train_supcon_epoch(
-            model=model,
-            loader=supcon_train_loader,
-            criterion=supcon_loss,
-            optimizer=supcon_optimizer,
-            scheduler=supcon_scheduler,
-            device=device,
-            backbone_modules=backbone_modules,
-            max_batches=args.max_train_batches,
-            epoch=epoch,
-            log_path=log_path,
-            log_every_steps=args.log_every_steps,
-            train_progress=train_progress,
-        )
-        val_loss = evaluate_supcon(
-            model=model,
-            loader=supcon_val_loader,
-            criterion=supcon_loss,
-            device=device,
-            max_batches=args.max_eval_batches,
-        )
-        if val_loss < supcon_best_loss - args.early_stopping_min_delta:
-            supcon_best_loss = val_loss
-            supcon_best_epoch = epoch
-            supcon_best_state = cpu_state_dict(model)
-            supcon_wait = 0
-        else:
-            supcon_wait += 1
+    if resume_state.get("stage") == "supcon":
+        supcon_optimizer.load_state_dict(resume_state["optimizer_state_dict"])
+        supcon_scheduler.load_state_dict(resume_state["scheduler_state_dict"])
+        start_supcon_epoch = int(resume_state.get("epoch", 1))
+        start_supcon_epoch_step = int(resume_state.get("epoch_step_completed", 0))
+        start_supcon_validation_index = int(resume_state.get("validation_index", 0))
+        supcon_completed = False
+    elif resume_state.get("stage") == "arcface":
+        supcon_completed = True
+    elif args.skip_supcon:
+        supcon_completed = True
+        log_json_event(log_path, {"event": "supcon_skipped"})
 
-        row = {
-            "stage": "supcon",
-            "epoch": epoch,
-            "train_loss": train_loss,
-            "val_loss": val_loss,
-            "best_val_loss": supcon_best_loss,
-            "epochs_without_improvement": supcon_wait,
-            "trainable_params": supcon_trainable_params,
-            "total_params": total_params,
-            "unfrozen_backbone_modules": args.supcon_unfreeze_backbone_modules,
-            "newly_unfrozen_tail_modules": thawed_supcon[-args.unfreeze_chunk_size :],
-        }
-        history.append(row)
-        log_json_event(log_path, row)
-        if supcon_wait >= args.early_stopping_patience:
-            event = {
-                "stage": "supcon",
-                "stopped_early": True,
-                "best_epoch": supcon_best_epoch,
-                "best_val_loss": supcon_best_loss,
-            }
-            log_json_event(log_path, event)
-            break
+    if not supcon_completed:
+        supcon_steps_full_epoch = steps_per_epoch_for_dataset(supcon_train_dataset, args.batch_size, args.max_train_batches)
+        for epoch in range(start_supcon_epoch, args.supcon_epochs + 1):
+            train_dataset.set_epoch(augmentation_epoch_cursor)
+            val_dataset.set_epoch(0)
+            test_dataset.set_epoch(0)
+            supcon_train_dataset.set_epoch(augmentation_epoch_cursor)
+            supcon_val_dataset.set_epoch(0)
+            start_index = start_supcon_epoch_step * args.batch_size if epoch == start_supcon_epoch else 0
+            supcon_sampler.set_epoch(augmentation_epoch_cursor)
+            supcon_sampler.set_start_index(start_index)
+            supcon_steps_per_epoch = max(0, supcon_steps_full_epoch - (start_supcon_epoch_step if epoch == start_supcon_epoch else 0))
+            supcon_iterator = iter(limited_batches(supcon_train_loader, args.max_train_batches))
+            epoch_steps_done = start_supcon_epoch_step if epoch == start_supcon_epoch else 0
+            epoch_samples_seen = 0
+            epoch_loss_sum = 0.0
+            validation_index = start_supcon_validation_index if epoch == start_supcon_epoch else 0
+            progress = tqdm(total=supcon_steps_per_epoch, leave=False)
 
-    model.load_state_dict(supcon_best_state)
+            while epoch_steps_done < supcon_steps_full_epoch:
+                step_window = min(args.eval_every_train_steps, supcon_steps_full_epoch - epoch_steps_done)
+                window_train_loss, steps_done, window_samples = train_supcon_steps(
+                    model=model,
+                    batch_iterator=supcon_iterator,
+                    step_limit=step_window,
+                    criterion=supcon_loss,
+                    optimizer=supcon_optimizer,
+                    scheduler=supcon_scheduler,
+                    device=device,
+                    backbone_modules=backbone_modules,
+                    epoch=epoch,
+                    epoch_step_offset=epoch_steps_done,
+                    log_path=log_path,
+                    log_every_steps=args.log_every_steps,
+                    train_progress=train_progress,
+                )
+                if steps_done == 0:
+                    break
+
+                epoch_steps_done += steps_done
+                epoch_samples_seen += window_samples
+                epoch_loss_sum += window_train_loss * window_samples
+                validation_index += 1
+                progress.update(steps_done)
+                progress.set_postfix(loss=f"{epoch_loss_sum / max(1, epoch_samples_seen):.4f}")
+
+                val_loss = evaluate_supcon(
+                    model=model,
+                    loader=supcon_val_loader,
+                    criterion=supcon_loss,
+                    device=device,
+                    max_batches=args.max_eval_batches,
+                )
+                if val_loss < supcon_best_loss - args.early_stopping_min_delta:
+                    supcon_best_loss = val_loss
+                    supcon_best_epoch = epoch
+                    supcon_best_state = cpu_state_dict(model)
+                    supcon_wait = 0
+                else:
+                    supcon_wait += 1
+
+                row = {
+                    "stage": "supcon",
+                    "epoch": epoch,
+                    "validation_index": validation_index,
+                    "epoch_step": epoch_steps_done,
+                    "global_train_step": train_progress["global_train_step"],
+                    "window_train_loss": window_train_loss,
+                    "epoch_running_train_loss": epoch_loss_sum / max(1, epoch_samples_seen),
+                    "val_loss": val_loss,
+                    "best_val_loss": supcon_best_loss,
+                    "checks_without_improvement": supcon_wait,
+                    "patience_unit": "validation_window",
+                    "validation_window_steps": args.eval_every_train_steps,
+                    "trainable_params": supcon_trainable_params,
+                    "total_params": total_params,
+                    "unfrozen_backbone_modules": args.supcon_unfreeze_backbone_modules,
+                    "newly_unfrozen_tail_modules": thawed_supcon[-args.unfreeze_chunk_size :],
+                }
+                history.append(row)
+                log_json_event(log_path, row)
+                save_training_checkpoint(
+                    checkpoint_path,
+                    {
+                        "model_state_dict": cpu_state_dict(model),
+                        "class_names": train_dataset.classes,
+                        "class_to_idx": train_dataset.class_to_idx,
+                        "args": vars(args),
+                        "history": history,
+                        "train_progress": train_progress,
+                        "best_val_loss": best_val_loss,
+                        "best_val_acc": best_val_acc,
+                        "best_arcface_state": best_arcface_state,
+                        "supcon_best_state": supcon_best_state,
+                        "supcon_best_loss": supcon_best_loss,
+                        "supcon_best_epoch": supcon_best_epoch,
+                        "supcon_wait": supcon_wait,
+                        "augmentation_epoch_cursor": augmentation_epoch_cursor,
+                        "resume": {
+                            "stage": "supcon",
+                            "epoch": epoch,
+                            "epoch_step_completed": epoch_steps_done,
+                            "validation_index": validation_index,
+                            "optimizer_state_dict": supcon_optimizer.state_dict(),
+                            "scheduler_state_dict": supcon_scheduler.state_dict(),
+                        },
+                    },
+                )
+                if supcon_wait >= args.early_stopping_patience:
+                    event = {
+                        "stage": "supcon",
+                        "stopped_early": True,
+                        "best_epoch": supcon_best_epoch,
+                        "best_val_loss": supcon_best_loss,
+                        "stopped_at_epoch_step": epoch_steps_done,
+                        "global_train_step": train_progress["global_train_step"],
+                    }
+                    log_json_event(log_path, event)
+                    stop_supcon = True
+                    break
+            progress.close()
+            supcon_sampler.set_start_index(0)
+            start_supcon_epoch_step = 0
+            start_supcon_validation_index = 0
+            if stop_supcon:
+                break
+            augmentation_epoch_cursor += 1
+        model.load_state_dict(supcon_best_state)
+    else:
+        start_supcon_epoch_step = 0
+        start_supcon_validation_index = 0
 
     arcface_criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
     phases = build_phase_plan(len(backbone_modules), args)
-    best_arcface_state = cpu_state_dict(model)
+    save_training_checkpoint(
+        checkpoint_path,
+        {
+            "model_state_dict": cpu_state_dict(model),
+            "class_names": train_dataset.classes,
+            "class_to_idx": train_dataset.class_to_idx,
+            "args": vars(args),
+            "history": history,
+            "best_val_loss": best_val_loss,
+            "best_val_acc": best_val_acc,
+            "best_arcface_state": best_arcface_state,
+            "supcon_best_state": supcon_best_state,
+            "supcon_best_loss": supcon_best_loss,
+            "supcon_best_epoch": supcon_best_epoch,
+            "supcon_wait": supcon_wait,
+            "augmentation_epoch_cursor": augmentation_epoch_cursor,
+            "train_progress": train_progress,
+            "resume": {
+                "stage": "arcface",
+                "phase_index": 1,
+                "epoch": 1,
+                "epoch_step_completed": 0,
+                "validation_index": 0,
+            },
+        },
+    )
+    resume_phase_index = int(resume_state.get("phase_index", 1)) if resume_state.get("stage") == "arcface" else 1
+    start_phase_epoch = int(resume_state.get("epoch", 1)) if resume_state.get("stage") == "arcface" else 1
+    start_phase_epoch_step = int(resume_state.get("epoch_step_completed", 0)) if resume_state.get("stage") == "arcface" else 0
+    start_phase_validation_index = int(resume_state.get("validation_index", 0)) if resume_state.get("stage") == "arcface" else 0
 
     for phase_index, phase in enumerate(phases, start=1):
+        if phase_index < resume_phase_index:
+            continue
         thawed = set_trainability_for_arcface(model, backbone_modules, phase.unfrozen_backbone_modules)
         optimizer = build_arcface_optimizer(model, args)
         scheduler = build_scheduler(
             optimizer.base_optimizer,
             max_epochs=phase.max_epochs,
-            steps_per_epoch=min(len(train_loader), args.max_train_batches) if args.max_train_batches > 0 else len(train_loader),
+            steps_per_epoch=steps_per_epoch_for_dataset(train_dataset, args.batch_size, args.max_train_batches),
             warmup_epochs=args.warmup_epochs,
+            warmup_steps=args.warmup_steps,
         )
         _, trainable_params = parameter_counts(model)
-        phase_best_loss = float("inf")
-        phase_best_acc = -1.0
-        phase_best_epoch = 0
-        phase_best_state = cpu_state_dict(model)
-        phase_wait = 0
+        same_resume_phase = resume_state.get("stage") == "arcface" and phase_index == resume_phase_index
+        if same_resume_phase:
+            optimizer.load_state_dict(resume_state["optimizer_state_dict"])
+            scheduler.load_state_dict(resume_state["scheduler_state_dict"])
+            phase_best_loss = float(resume_state.get("phase_best_loss", float("inf")))
+            phase_best_acc = float(resume_state.get("phase_best_acc", -1.0))
+            phase_best_epoch = int(resume_state.get("phase_best_epoch", 0))
+            phase_best_state = resume_checkpoint.get("phase_best_state", cpu_state_dict(model))
+            phase_wait = int(resume_state.get("phase_wait", 0))
+        else:
+            phase_best_loss = float("inf")
+            phase_best_acc = -1.0
+            phase_best_epoch = 0
+            phase_best_state = cpu_state_dict(model)
+            phase_wait = 0
 
-        for epoch in range(1, phase.max_epochs + 1):
-            train_loss, train_acc = train_arcface_epoch(
-                model=model,
-                loader=train_loader,
-                criterion=arcface_criterion,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                device=device,
-                backbone_modules=backbone_modules,
-                max_batches=args.max_train_batches,
-                epoch=epoch,
-                phase_index=phase_index,
-                phase_name=phase.name,
-                log_path=log_path,
-                log_every_steps=args.log_every_steps,
-                train_progress=train_progress,
-                args=args,
-            )
-            val_loss, val_acc = evaluate_arcface(
-                model=model,
-                loader=val_loader,
-                criterion=arcface_criterion,
-                device=device,
-                max_batches=args.max_eval_batches,
-            )
-            if improved_metric(phase_best_loss, phase_best_acc, val_loss, val_acc, args.early_stopping_min_delta):
-                phase_best_loss = val_loss
-                phase_best_acc = val_acc
-                phase_best_epoch = epoch
-                phase_best_state = cpu_state_dict(model)
-                phase_wait = 0
-            else:
-                phase_wait += 1
+        for epoch in range(start_phase_epoch if same_resume_phase else 1, phase.max_epochs + 1):
+            train_dataset.set_epoch(augmentation_epoch_cursor)
+            val_dataset.set_epoch(0)
+            test_dataset.set_epoch(0)
+            start_index = start_phase_epoch_step * args.batch_size if same_resume_phase and epoch == start_phase_epoch else 0
+            train_sampler.set_epoch(augmentation_epoch_cursor)
+            train_sampler.set_start_index(start_index)
+            phase_steps_full_epoch = steps_per_epoch_for_dataset(train_dataset, args.batch_size, args.max_train_batches)
+            phase_steps_per_epoch = max(0, phase_steps_full_epoch - (start_phase_epoch_step if same_resume_phase and epoch == start_phase_epoch else 0))
+            phase_iterator = iter(limited_batches(train_loader, args.max_train_batches))
+            epoch_steps_done = start_phase_epoch_step if same_resume_phase and epoch == start_phase_epoch else 0
+            epoch_samples_seen = 0
+            epoch_loss_sum = 0.0
+            epoch_correct_sum = 0.0
+            validation_index = start_phase_validation_index if same_resume_phase and epoch == start_phase_epoch else 0
+            phase_stopped = False
+            progress = tqdm(total=phase_steps_per_epoch, leave=False)
 
-            if improved_metric(best_val_loss, best_val_acc, val_loss, val_acc, args.early_stopping_min_delta):
-                best_val_loss = val_loss
-                best_val_acc = val_acc
-                best_arcface_state = cpu_state_dict(model)
+            while epoch_steps_done < phase_steps_full_epoch:
+                step_window = min(args.eval_every_train_steps, phase_steps_full_epoch - epoch_steps_done)
+                window_train_loss, window_train_acc, steps_done, window_samples = train_arcface_steps(
+                    model=model,
+                    batch_iterator=phase_iterator,
+                    step_limit=step_window,
+                    criterion=arcface_criterion,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    device=device,
+                    backbone_modules=backbone_modules,
+                    epoch=epoch,
+                    epoch_step_offset=epoch_steps_done,
+                    phase_index=phase_index,
+                    phase_name=phase.name,
+                    log_path=log_path,
+                    log_every_steps=args.log_every_steps,
+                    train_progress=train_progress,
+                    args=args,
+                )
+                if steps_done == 0:
+                    break
 
-            row = {
-                "stage": "arcface",
-                "phase_index": phase_index,
-                "phase_name": phase.name,
-                "epoch_in_phase": epoch,
-                "phase_max_epochs": phase.max_epochs,
-                "unfrozen_backbone_modules": phase.unfrozen_backbone_modules,
-                "newly_unfrozen_tail_modules": thawed[-args.unfreeze_chunk_size :],
-                "trainable_params": trainable_params,
-                "total_params": total_params,
-                "train_loss": train_loss,
-                "train_acc": train_acc,
-                "val_loss": val_loss,
-                "val_acc": val_acc,
-                "phase_best_val_loss": phase_best_loss,
-                "phase_best_val_acc": phase_best_acc,
-                "epochs_without_improvement": phase_wait,
-            }
-            history.append(row)
-            log_json_event(log_path, row)
+                epoch_steps_done += steps_done
+                epoch_samples_seen += window_samples
+                epoch_loss_sum += window_train_loss * window_samples
+                epoch_correct_sum += window_train_acc * window_samples
+                validation_index += 1
+                progress.update(steps_done)
+                progress.set_postfix(
+                    loss=f"{epoch_loss_sum / max(1, epoch_samples_seen):.4f}",
+                    acc=f"{epoch_correct_sum / max(1, epoch_samples_seen):.4f}",
+                )
 
-            checkpoint = {
-                "model_state_dict": model.state_dict(),
+                val_loss, val_acc = evaluate_arcface(
+                    model=model,
+                    loader=val_loader,
+                    criterion=arcface_criterion,
+                    device=device,
+                    max_batches=args.max_eval_batches,
+                )
+                if improved_metric(phase_best_loss, phase_best_acc, val_loss, val_acc, args.early_stopping_min_delta):
+                    phase_best_loss = val_loss
+                    phase_best_acc = val_acc
+                    phase_best_epoch = epoch
+                    phase_best_state = cpu_state_dict(model)
+                    phase_wait = 0
+                else:
+                    phase_wait += 1
+
+                if improved_metric(best_val_loss, best_val_acc, val_loss, val_acc, args.early_stopping_min_delta):
+                    best_val_loss = val_loss
+                    best_val_acc = val_acc
+                    best_arcface_state = cpu_state_dict(model)
+
+                row = {
+                    "stage": "arcface",
+                    "phase_index": phase_index,
+                    "phase_name": phase.name,
+                    "epoch_in_phase": epoch,
+                    "validation_index": validation_index,
+                    "epoch_step": epoch_steps_done,
+                    "global_train_step": train_progress["global_train_step"],
+                    "phase_max_epochs": phase.max_epochs,
+                    "unfrozen_backbone_modules": phase.unfrozen_backbone_modules,
+                    "newly_unfrozen_tail_modules": thawed[-args.unfreeze_chunk_size :],
+                    "trainable_params": trainable_params,
+                    "total_params": total_params,
+                    "window_train_loss": window_train_loss,
+                    "window_train_acc": window_train_acc,
+                    "epoch_running_train_loss": epoch_loss_sum / max(1, epoch_samples_seen),
+                    "epoch_running_train_acc": epoch_correct_sum / max(1, epoch_samples_seen),
+                    "val_loss": val_loss,
+                    "val_acc": val_acc,
+                    "phase_best_val_loss": phase_best_loss,
+                    "phase_best_val_acc": phase_best_acc,
+                    "checks_without_improvement": phase_wait,
+                    "patience_unit": "validation_window",
+                    "validation_window_steps": args.eval_every_train_steps,
+                }
+                history.append(row)
+                log_json_event(log_path, row)
+                save_training_checkpoint(
+                    checkpoint_path,
+                    {
+                        "model_state_dict": cpu_state_dict(model),
+                        "class_names": train_dataset.classes,
+                        "class_to_idx": train_dataset.class_to_idx,
+                        "args": vars(args),
+                        "history": history,
+                        "best_val_loss": best_val_loss,
+                        "best_val_acc": best_val_acc,
+                        "best_arcface_state": best_arcface_state,
+                        "supcon_best_state": supcon_best_state,
+                        "supcon_best_loss": supcon_best_loss,
+                        "supcon_best_epoch": supcon_best_epoch,
+                        "supcon_wait": supcon_wait,
+                        "augmentation_epoch_cursor": augmentation_epoch_cursor,
+                        "train_progress": train_progress,
+                        "phase_best_state": phase_best_state,
+                        "resume": {
+                            "stage": "arcface",
+                            "phase_index": phase_index,
+                            "phase_name": phase.name,
+                            "epoch": epoch,
+                            "epoch_step_completed": epoch_steps_done,
+                            "validation_index": validation_index,
+                            "phase_best_loss": phase_best_loss,
+                            "phase_best_acc": phase_best_acc,
+                            "phase_best_epoch": phase_best_epoch,
+                            "phase_wait": phase_wait,
+                            "optimizer_state_dict": optimizer.state_dict(),
+                            "scheduler_state_dict": scheduler.state_dict(),
+                        },
+                    },
+                )
+
+                if phase_wait >= args.early_stopping_patience:
+                    event = {
+                        "stage": "arcface",
+                        "phase_index": phase_index,
+                        "phase_name": phase.name,
+                        "stopped_early": True,
+                        "best_epoch_in_phase": phase_best_epoch,
+                        "phase_best_val_loss": phase_best_loss,
+                        "phase_best_val_acc": phase_best_acc,
+                        "stopped_at_epoch_step": epoch_steps_done,
+                        "global_train_step": train_progress["global_train_step"],
+                    }
+                    log_json_event(log_path, event)
+                    phase_stopped = True
+                    break
+            progress.close()
+            train_sampler.set_start_index(0)
+            start_phase_epoch_step = 0
+            start_phase_validation_index = 0
+            if phase_stopped:
+                break
+            augmentation_epoch_cursor += 1
+
+        model.load_state_dict(phase_best_state)
+        save_training_checkpoint(
+            checkpoint_path,
+            {
+                "model_state_dict": cpu_state_dict(model),
                 "class_names": train_dataset.classes,
                 "class_to_idx": train_dataset.class_to_idx,
                 "args": vars(args),
                 "history": history,
-                "current_phase": asdict(phase),
                 "best_val_loss": best_val_loss,
                 "best_val_acc": best_val_acc,
-            }
-            torch.save(checkpoint, output_dir / "last.pt")
-
-            if phase_wait >= args.early_stopping_patience:
-                event = {
+                "best_arcface_state": best_arcface_state,
+                "supcon_best_state": supcon_best_state,
+                "supcon_best_loss": supcon_best_loss,
+                "supcon_best_epoch": supcon_best_epoch,
+                "supcon_wait": supcon_wait,
+                "augmentation_epoch_cursor": augmentation_epoch_cursor,
+                "train_progress": train_progress,
+                "phase_best_state": phase_best_state,
+                "resume": {
                     "stage": "arcface",
-                    "phase_index": phase_index,
-                    "phase_name": phase.name,
-                    "stopped_early": True,
-                    "best_epoch_in_phase": phase_best_epoch,
-                    "phase_best_val_loss": phase_best_loss,
-                    "phase_best_val_acc": phase_best_acc,
-                }
-                log_json_event(log_path, event)
-                break
-
-        model.load_state_dict(phase_best_state)
+                    "phase_index": phase_index + 1,
+                    "epoch": 1,
+                    "epoch_step_completed": 0,
+                    "validation_index": 0,
+                },
+            },
+        )
+        start_phase_epoch = 1
+        resume_phase_index = phase_index + 1
 
     model.load_state_dict(best_arcface_state)
 
@@ -1773,9 +2327,12 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         "source_train_count": train_dataset.source_count(),
         "source_val_count": val_dataset.source_count(),
         "source_test_count": test_dataset.source_count(),
-        "effective_train_count": len(train_dataset),
-        "effective_val_count": len(val_dataset),
-        "effective_test_count": len(test_dataset),
+        "train_samples_per_epoch": len(train_dataset),
+        "val_samples_per_eval": len(val_dataset),
+        "test_samples_per_eval": len(test_dataset),
+        "augmentation_bank_train_count": train_dataset.source_count() * args.augment_repeats,
+        "augmentation_bank_val_count": val_dataset.source_count() * args.augment_repeats,
+        "augmentation_bank_test_count": test_dataset.source_count() * args.augment_repeats,
         "augment_repeats": args.augment_repeats,
         "augment_gaussian_sigmas": args.augment_gaussian_sigmas,
         "train_class_counts": class_counts(train_dataset),
@@ -1804,6 +2361,8 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             "sam_rho": args.sam_rho,
             "weight_decay": args.weight_decay,
             "adam_betas": [args.adam_beta1, args.adam_beta2],
+            "warmup_epochs": args.warmup_epochs,
+            "warmup_steps": args.warmup_steps,
         },
         "batch_mixing": {
             "mixup_prob": args.mixup_prob,
@@ -1818,6 +2377,8 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             "patience": args.early_stopping_patience,
             "min_delta": args.early_stopping_min_delta,
             "monitor": "val_loss",
+            "check_unit": "validation_window",
+            "eval_every_train_steps": args.eval_every_train_steps,
         },
         "embedding_dim": args.embedding_dim,
         "projection_dim": args.projection_dim,

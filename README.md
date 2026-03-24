@@ -191,7 +191,7 @@ Current training flow:
    - embedding head
    - projection head
    - ArcFace head
-4. Run supervised contrastive pretraining (`SupCon`)
+4. Optionally run supervised contrastive pretraining (`SupCon`)
 5. Early-stop SupCon on validation loss with patience `20`
 6. Restore best SupCon weights
 7. Switch to ArcFace classification
@@ -213,15 +213,17 @@ Current optimization stack:
 
 Current defaults:
 
-- `image-size = 320`
-- `batch-size = 4`
+- `image-size = 224`
+- `batch-size = 8`
 - `num-workers = 4`
-- `augment-repeats = 20`
+- `augment-repeats = 16`
 - `supcon-epochs = 200`
 - `head-epochs = 200`
 - `stage-epochs = 200`
 - `unfreeze-chunk-size = 20`
 - `early-stopping-patience = 20`
+- `eval-every-train-steps = 64`
+- `warmup-steps = 1024`
 - `log-every-steps = 100`
 - `mixup-prob = 0.20`
 - `cutmix-prob = 0.20`
@@ -229,7 +231,9 @@ Current defaults:
 Practical note:
 
 - `200` is a hard cap, not a claim that learning is impossible beyond 200
-- early stopping can stop earlier if validation does not improve for 20 consecutive epochs
+- early stopping can stop earlier if validation does not improve for 20 consecutive validation windows
+- `--skip-supcon` skips the contrastive stage and starts directly with ArcFace fine-tuning
+- if a matching `Results/.../last.pt` exists, the trainer auto-resumes from that checkpoint
 
 ## Augmentation Strategy
 
@@ -239,7 +243,7 @@ What is guaranteed:
 
 - `train`, `val`, and `test` stay source-disjoint
 - no original image crosses split boundaries
-- each source image is expanded into exactly `20` generated variants by default
+- each source image is expanded into exactly `16` generated variants by default
 - each variant uses its own deterministic random seed based on:
   - split
   - source image index
@@ -250,7 +254,7 @@ What is guaranteed:
 
 This means:
 
-- 20 generated variants are produced per source image
+- 16 generated variants are produced per source image
 - those variants are independent from one another in parameter sampling
 - the same source image cannot leak across splits
 
