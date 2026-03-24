@@ -6,7 +6,7 @@ cd "$REPO_ROOT"
 
 source .venv/bin/activate
 
-python scripts/train_efficientnet_v2l_progressive.py \
+python scripts/train_efficientnet_b0_progressive.py \
   --dataset-root Dataset_Final \
   --weighted-sampling \
   "$@"

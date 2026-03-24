@@ -20,7 +20,7 @@ from torch import nn
 from torch.optim import AdamW, Optimizer
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from torchvision import datasets
-from torchvision.models import EfficientNet_V2_L_Weights, efficientnet_v2_l
+from torchvision.models import EfficientNet_B0_Weights, efficientnet_b0
 from torchvision.transforms import InterpolationMode
 from torchvision.transforms import functional as TF
 from tqdm import tqdm
@@ -355,7 +355,7 @@ class GaborAdapter(nn.Module):
         return self.adapter(fused)
 
 
-class MetricLearningEfficientNetV2L(nn.Module):
+class MetricLearningEfficientNetB0(nn.Module):
     def __init__(
         self,
         num_classes: int,
@@ -366,7 +366,7 @@ class MetricLearningEfficientNetV2L(nn.Module):
         args: argparse.Namespace,
     ) -> None:
         super().__init__()
-        weights = EfficientNet_V2_L_Weights.DEFAULT if weights_mode == "default" else None
+        weights = EfficientNet_B0_Weights.DEFAULT if weights_mode == "default" else None
         self.front_end: nn.Module
         if use_gabor:
             self.front_end = GaborAdapter(
@@ -379,7 +379,7 @@ class MetricLearningEfficientNetV2L(nn.Module):
         else:
             self.front_end = IdentityFrontEnd()
 
-        backbone = efficientnet_v2_l(weights=weights)
+        backbone = efficientnet_b0(weights=weights)
         self.backbone = backbone
         self.in_features = backbone.classifier[1].in_features
         self.dropout_p = backbone.classifier[0].p if isinstance(backbone.classifier[0], nn.Dropout) else 0.0
@@ -634,7 +634,7 @@ def build_phase_plan(total_modules: int, args: argparse.Namespace) -> list[Phase
     return phases
 
 
-def backbone_leaf_modules(model: MetricLearningEfficientNetV2L) -> list[tuple[str, nn.Module]]:
+def backbone_leaf_modules(model: MetricLearningEfficientNetB0) -> list[tuple[str, nn.Module]]:
     modules: list[tuple[str, nn.Module]] = []
     for name, module in model.backbone.features.named_modules():
         if not name:
@@ -645,7 +645,7 @@ def backbone_leaf_modules(model: MetricLearningEfficientNetV2L) -> list[tuple[st
 
 
 def set_trainability_for_supcon(
-    model: MetricLearningEfficientNetV2L,
+    model: MetricLearningEfficientNetB0,
     backbone_modules: list[tuple[str, nn.Module]],
     unfrozen_backbone_modules: int,
 ) -> list[str]:
@@ -673,7 +673,7 @@ def set_trainability_for_supcon(
 
 
 def set_trainability_for_arcface(
-    model: MetricLearningEfficientNetV2L,
+    model: MetricLearningEfficientNetB0,
     backbone_modules: list[tuple[str, nn.Module]],
     unfrozen_backbone_modules: int,
 ) -> list[str]:
@@ -733,7 +733,7 @@ def build_sam_optimizer(
     )
 
 
-def build_supcon_optimizer(model: MetricLearningEfficientNetV2L, args: argparse.Namespace) -> SAM:
+def build_supcon_optimizer(model: MetricLearningEfficientNetB0, args: argparse.Namespace) -> SAM:
     head_params = []
     if not isinstance(model.front_end, IdentityFrontEnd):
         head_params.extend(parameter for parameter in model.front_end.parameters() if parameter.requires_grad)
@@ -754,7 +754,7 @@ def build_supcon_optimizer(model: MetricLearningEfficientNetV2L, args: argparse.
     return build_sam_optimizer(param_groups, args.sam_rho, args.weight_decay, (args.adam_beta1, args.adam_beta2))
 
 
-def build_arcface_optimizer(model: MetricLearningEfficientNetV2L, args: argparse.Namespace) -> SAM:
+def build_arcface_optimizer(model: MetricLearningEfficientNetB0, args: argparse.Namespace) -> SAM:
     head_params = []
     if not isinstance(model.front_end, IdentityFrontEnd):
         head_params.extend(parameter for parameter in model.front_end.parameters() if parameter.requires_grad)
@@ -828,7 +828,7 @@ def improved_metric(best_loss: float, best_acc: float, val_loss: float, val_acc:
 
 
 def train_supcon_epoch(
-    model: MetricLearningEfficientNetV2L,
+    model: MetricLearningEfficientNetB0,
     loader: DataLoader,
     criterion: SupConLoss,
     optimizer: SAM,
@@ -836,6 +836,10 @@ def train_supcon_epoch(
     device: torch.device,
     backbone_modules: list[tuple[str, nn.Module]],
     max_batches: int,
+    epoch: int,
+    log_path: Path,
+    log_every_steps: int,
+    train_progress: dict[str, int],
 ) -> float:
     model.train()
     freeze_frozen_batchnorms(backbone_modules)
@@ -844,7 +848,7 @@ def train_supcon_epoch(
     total_batches = min(len(loader), max_batches) if max_batches > 0 else len(loader)
     progress = tqdm(enumerate(limited_batches(loader, max_batches), start=1), total=total_batches, leave=False)
 
-    for _, (view_one, view_two, labels) in progress:
+    for step_in_epoch, (view_one, view_two, labels) in progress:
         view_one = view_one.to(device, non_blocking=True)
         view_two = view_two.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
@@ -874,13 +878,30 @@ def train_supcon_epoch(
         batch_size = labels.size(0)
         total_loss += second_loss.item() * batch_size
         total_seen += batch_size
+        train_progress["global_train_step"] += 1
+        train_progress["global_source_samples_seen"] += batch_size
         progress.set_postfix(loss=f"{total_loss / max(1, total_seen):.4f}")
+
+        if train_progress["global_train_step"] % log_every_steps == 0:
+            event = {
+                "event": "train_step",
+                "stage": "supcon",
+                "epoch": epoch,
+                "epoch_step": step_in_epoch,
+                "global_train_step": train_progress["global_train_step"],
+                "batch_size": batch_size,
+                "epoch_source_samples_seen": total_seen,
+                "global_source_samples_seen": train_progress["global_source_samples_seen"],
+                "running_loss": total_loss / max(1, total_seen),
+                "learning_rates": [group["lr"] for group in optimizer.base_optimizer.param_groups],
+            }
+            log_json_event(log_path, event)
 
     return total_loss / max(1, total_seen)
 
 
 def evaluate_supcon(
-    model: MetricLearningEfficientNetV2L,
+    model: MetricLearningEfficientNetB0,
     loader: DataLoader,
     criterion: SupConLoss,
     device: torch.device,
@@ -905,7 +926,7 @@ def evaluate_supcon(
 
 
 def train_arcface_epoch(
-    model: MetricLearningEfficientNetV2L,
+    model: MetricLearningEfficientNetB0,
     loader: DataLoader,
     criterion: nn.Module,
     optimizer: SAM,
@@ -913,6 +934,12 @@ def train_arcface_epoch(
     device: torch.device,
     backbone_modules: list[tuple[str, nn.Module]],
     max_batches: int,
+    epoch: int,
+    phase_index: int,
+    phase_name: str,
+    log_path: Path,
+    log_every_steps: int,
+    train_progress: dict[str, int],
 ) -> tuple[float, float]:
     model.train()
     freeze_frozen_batchnorms(backbone_modules)
@@ -922,7 +949,7 @@ def train_arcface_epoch(
     total_batches = min(len(loader), max_batches) if max_batches > 0 else len(loader)
     progress = tqdm(enumerate(limited_batches(loader, max_batches), start=1), total=total_batches, leave=False)
 
-    for _, (images, labels) in progress:
+    for step_in_epoch, (images, labels) in progress:
         images = images.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
 
@@ -950,13 +977,33 @@ def train_arcface_epoch(
         total_loss += second_loss.item() * batch_size
         total_correct += (predictions == labels).sum().item()
         total_seen += batch_size
+        train_progress["global_train_step"] += 1
+        train_progress["global_source_samples_seen"] += batch_size
         progress.set_postfix(loss=f"{total_loss / max(1, total_seen):.4f}", acc=f"{total_correct / max(1, total_seen):.4f}")
+
+        if train_progress["global_train_step"] % log_every_steps == 0:
+            event = {
+                "event": "train_step",
+                "stage": "arcface",
+                "phase_index": phase_index,
+                "phase_name": phase_name,
+                "epoch": epoch,
+                "epoch_step": step_in_epoch,
+                "global_train_step": train_progress["global_train_step"],
+                "batch_size": batch_size,
+                "epoch_source_samples_seen": total_seen,
+                "global_source_samples_seen": train_progress["global_source_samples_seen"],
+                "running_loss": total_loss / max(1, total_seen),
+                "running_acc": total_correct / max(1, total_seen),
+                "learning_rates": [group["lr"] for group in optimizer.base_optimizer.param_groups],
+            }
+            log_json_event(log_path, event)
 
     return total_loss / max(1, total_seen), total_correct / max(1, total_seen)
 
 
 def evaluate_arcface(
-    model: MetricLearningEfficientNetV2L,
+    model: MetricLearningEfficientNetB0,
     loader: DataLoader,
     criterion: nn.Module,
     device: torch.device,
@@ -981,7 +1028,7 @@ def evaluate_arcface(
 
 
 def collect_logits_and_labels(
-    model: MetricLearningEfficientNetV2L,
+    model: MetricLearningEfficientNetB0,
     loader: DataLoader,
     device: torch.device,
     max_batches: int,
@@ -1169,13 +1216,18 @@ def append_jsonl(path: Path, payload: object) -> None:
         handle.write("\n")
 
 
+def log_json_event(path: Path, payload: object) -> None:
+    print(payload)
+    append_jsonl(path, payload)
+
+
 def cpu_state_dict(model: nn.Module) -> dict[str, torch.Tensor]:
     return {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
 
 
 def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     description = (
-        "Metric-learning EfficientNet V2-L training with deterministic 20x split-safe augmentation, "
+        "Metric-learning EfficientNet B0 training with deterministic 20x split-safe augmentation, "
         "SupCon warmup, SAM optimization, ArcFace classification, progressive unfreezing, and paper-style metrics"
     )
     if use_gabor:
@@ -1212,6 +1264,7 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-train-batches", type=int, default=0)
     parser.add_argument("--max-eval-batches", type=int, default=0)
+    parser.add_argument("--log-every-steps", type=int, default=100)
     parser.add_argument("--early-stopping-patience", type=int, default=20)
     parser.add_argument("--early-stopping-min-delta", type=float, default=1e-4)
     parser.add_argument("--warmup-epochs", type=int, default=5)
@@ -1233,23 +1286,26 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         raise ValueError("--unfreeze-chunk-size must be >= 1")
     if args.augment_repeats < 1:
         raise ValueError("--augment-repeats must be >= 1")
+    if args.log_every_steps < 1:
+        raise ValueError("--log-every-steps must be >= 1")
     if args.early_stopping_patience < 1:
         raise ValueError("--early-stopping-patience must be >= 1")
 
     seed_everything(args.seed)
     torch.backends.cudnn.benchmark = True
     torch.set_float32_matmul_precision("high")
+    model_name = "efficientnet_b0_metric_learning_gabor" if use_gabor else "efficientnet_b0_metric_learning"
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     log_path = Path(args.log_file)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.write_text("", encoding="utf-8")
-    append_jsonl(
+    log_json_event(
         log_path,
         {
             "event": "run_started",
-            "model_name": "efficientnet_v2_l_metric_learning_gabor" if use_gabor else "efficientnet_v2_l_metric_learning",
+            "model_name": model_name,
             "output_dir": str(output_dir),
             "log_file": str(log_path),
             "args": vars(args),
@@ -1272,7 +1328,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
     supcon_val_loader = make_loader(supcon_val_dataset, args.batch_size, args.num_workers, shuffle=False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = MetricLearningEfficientNetV2L(
+    model = MetricLearningEfficientNetB0(
         num_classes=len(train_dataset.classes),
         weights_mode=args.weights,
         embedding_dim=args.embedding_dim,
@@ -1281,6 +1337,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         args=args,
     ).to(device)
     backbone_modules = backbone_leaf_modules(model)
+    train_progress = {"global_train_step": 0, "global_source_samples_seen": 0}
 
     history: list[dict[str, Any]] = []
     total_params, _ = parameter_counts(model)
@@ -1312,6 +1369,10 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             device=device,
             backbone_modules=backbone_modules,
             max_batches=args.max_train_batches,
+            epoch=epoch,
+            log_path=log_path,
+            log_every_steps=args.log_every_steps,
+            train_progress=train_progress,
         )
         val_loss = evaluate_supcon(
             model=model,
@@ -1341,8 +1402,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             "newly_unfrozen_tail_modules": thawed_supcon[-args.unfreeze_chunk_size :],
         }
         history.append(row)
-        print(row)
-        append_jsonl(log_path, row)
+        log_json_event(log_path, row)
         if supcon_wait >= args.early_stopping_patience:
             event = {
                 "stage": "supcon",
@@ -1350,8 +1410,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                 "best_epoch": supcon_best_epoch,
                 "best_val_loss": supcon_best_loss,
             }
-            print(event)
-            append_jsonl(log_path, event)
+            log_json_event(log_path, event)
             break
 
     model.load_state_dict(supcon_best_state)
@@ -1386,6 +1445,12 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                 device=device,
                 backbone_modules=backbone_modules,
                 max_batches=args.max_train_batches,
+                epoch=epoch,
+                phase_index=phase_index,
+                phase_name=phase.name,
+                log_path=log_path,
+                log_every_steps=args.log_every_steps,
+                train_progress=train_progress,
             )
             val_loss, val_acc = evaluate_arcface(
                 model=model,
@@ -1427,8 +1492,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                 "epochs_without_improvement": phase_wait,
             }
             history.append(row)
-            print(row)
-            append_jsonl(log_path, row)
+            log_json_event(log_path, row)
 
             checkpoint = {
                 "model_state_dict": model.state_dict(),
@@ -1452,8 +1516,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                     "phase_best_val_loss": phase_best_loss,
                     "phase_best_val_acc": phase_best_acc,
                 }
-                print(event)
-                append_jsonl(log_path, event)
+                log_json_event(log_path, event)
                 break
 
         model.load_state_dict(phase_best_state)
@@ -1478,7 +1541,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
     torch.save(final_checkpoint, output_dir / "best.pt")
 
     metrics = {
-        "model_name": "efficientnet_v2_l_metric_learning_gabor" if use_gabor else "efficientnet_v2_l_metric_learning",
+        "model_name": model_name,
         "device": str(device),
         "output_dir": str(output_dir),
         "log_file": str(log_path),
@@ -1543,6 +1606,6 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
     save_json(output_dir / "validation_metrics.json", val_metrics)
     save_json(output_dir / "test_metrics.json", test_metrics)
     final_event = {"event": "run_finished", "validation_accuracy": val_metrics["accuracy"], "test_accuracy": test_metrics["accuracy"]}
-    append_jsonl(log_path, final_event)
+    log_json_event(log_path, final_event)
     print({"validation_accuracy": val_metrics["accuracy"], "test_accuracy": test_metrics["accuracy"]})
     return 0

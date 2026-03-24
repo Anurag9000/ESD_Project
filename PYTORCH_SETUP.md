@@ -14,15 +14,15 @@ The installer uses [requirements-cu128.txt](/home/anurag-basistha/Projects/ESD/r
 ## Training Variants
 
 There are two matched training scripts:
-- [scripts/train_efficientnet_v2l_progressive.py](/home/anurag-basistha/Projects/ESD/scripts/train_efficientnet_v2l_progressive.py): plain pretrained `efficientnet_v2_l`
-- [scripts/train_efficientnet_v2l_gabor_progressive.py](/home/anurag-basistha/Projects/ESD/scripts/train_efficientnet_v2l_gabor_progressive.py): the same EfficientNet backbone, but with a fixed multi-orientation Gabor front-end and a learnable adapter before the backbone
+- [train_efficientnet_b0_progressive.py](/home/anurag-basistha/Projects/ESD/scripts/train_efficientnet_b0_progressive.py): plain pretrained `efficientnet_b0`
+- [train_efficientnet_b0_gabor_progressive.py](/home/anurag-basistha/Projects/ESD/scripts/train_efficientnet_b0_gabor_progressive.py): the same EfficientNet backbone, but with a fixed multi-orientation Gabor front-end and a learnable adapter before the backbone
 
-Both scripts share the same pipeline implementation in [scripts/metric_learning_pipeline.py](/home/anurag-basistha/Projects/ESD/scripts/metric_learning_pipeline.py). The plain model is the control arm; only the Gabor variant gets the extra texture front-end.
+Both scripts share the same pipeline implementation in [metric_learning_pipeline.py](/home/anurag-basistha/Projects/ESD/scripts/metric_learning_pipeline.py). The plain model is the control arm; only the Gabor variant gets the extra texture front-end.
 
 ## Training Pipeline
 
 The full pipeline is:
-1. Initialize a pretrained `efficientnet_v2_l` backbone.
+1. Initialize a pretrained `efficientnet_b0` backbone.
 2. Run supervised contrastive pretraining on the embedding head.
 3. Early-stop the SupCon phase on validation SupCon loss with patience `20`.
 4. Restore the best SupCon checkpoint.
@@ -73,7 +73,12 @@ Each run writes result artifacts to its output directory under `Results/...`:
 - `validation_metrics.json`
 - `test_metrics.json`
 
-Each run also writes a structured JSONL training log under `logs/...` with phase-by-phase events and early-stopping messages.
+Each run also writes a structured JSONL training log under `logs/...` with:
+- run start metadata
+- every 100th optimizer step by default via `--log-every-steps 100`
+- phase-by-phase epoch summaries
+- early-stopping events
+- final validation/test summary
 
 Saved metrics include the standard classification set used in model comparison:
 - loss
@@ -94,15 +99,16 @@ Saved metrics include the standard classification set used in model comparison:
 
 ```bash
 source .venv/bin/activate
-python scripts/train_efficientnet_v2l_progressive.py \
+python scripts/train_efficientnet_b0_progressive.py \
   --dataset-root Dataset_Final \
   --batch-size 4 \
-  --num-workers 8 \
+  --num-workers 4 \
   --augment-repeats 20 \
   --supcon-epochs 200 \
   --head-epochs 200 \
   --stage-epochs 200 \
   --unfreeze-chunk-size 20 \
+  --log-every-steps 100 \
   --early-stopping-patience 20 \
   --weighted-sampling
 ```
@@ -111,22 +117,23 @@ python scripts/train_efficientnet_v2l_progressive.py \
 
 ```bash
 source .venv/bin/activate
-python scripts/train_efficientnet_v2l_gabor_progressive.py \
+python scripts/train_efficientnet_b0_gabor_progressive.py \
   --dataset-root Dataset_Final \
   --batch-size 4 \
-  --num-workers 8 \
+  --num-workers 4 \
   --augment-repeats 20 \
   --supcon-epochs 200 \
   --head-epochs 200 \
   --stage-epochs 200 \
   --unfreeze-chunk-size 20 \
+  --log-every-steps 100 \
   --early-stopping-patience 20 \
   --weighted-sampling
 ```
 
 ## Notes
 
-- Both scripts default to pretrained ImageNet weights with `EfficientNet_V2_L_Weights.DEFAULT`.
+- Both scripts default to pretrained ImageNet weights with `EfficientNet_B0_Weights.DEFAULT`.
 - ArcFace was chosen over AdaFace because AdaFace is mainly useful for quality-varying face embeddings, while ArcFace is the cleaner metric-learning choice for generic multiclass material/object classification.
 - The current dataset no longer has a separate `plastic` class; it was merged into `other`.
 - The Gabor variant may help if texture cues matter, but it can also become a front-end bottleneck. That is why it is kept as a separate ablation instead of being forced into both models.
