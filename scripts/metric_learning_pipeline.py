@@ -1696,6 +1696,21 @@ def save_training_checkpoint(path: Path, payload: dict[str, Any]) -> None:
     torch.save(payload, path)
 
 
+def load_resume_checkpoint(path: Path) -> tuple[dict[str, Any] | None, str | None]:
+    if not path.exists():
+        return None, None
+    try:
+        return torch.load(path, map_location="cpu"), None
+    except Exception as exc:
+        corrupt_path = path.with_name(f"{path.name}.corrupt")
+        suffix_index = 1
+        while corrupt_path.exists():
+            corrupt_path = path.with_name(f"{path.name}.corrupt.{suffix_index}")
+            suffix_index += 1
+        path.rename(corrupt_path)
+        return None, f"{type(exc).__name__}: {exc}. Corrupted checkpoint moved to {corrupt_path.name}"
+
+
 def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     description = (
         "Metric-learning EfficientNet B0 training with deterministic 16x split-safe augmentation, "
@@ -1740,7 +1755,7 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--max-train-batches", type=int, default=0)
     parser.add_argument("--max-eval-batches", type=int, default=0)
     parser.add_argument("--log-every-steps", type=int, default=100)
-    parser.add_argument("--eval-every-train-steps", type=int, default=64)
+    parser.add_argument("--eval-every-train-steps", type=int, default=1024)
     parser.add_argument("--early-stopping-patience", type=int, default=20)
     parser.add_argument("--early-stopping-min-delta", type=float, default=1e-4)
     parser.add_argument("--warmup-epochs", type=int, default=0)
@@ -1784,7 +1799,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
     checkpoint_path = output_dir / "last.pt"
     log_path = Path(args.log_file)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    resume_checkpoint = torch.load(checkpoint_path, map_location="cpu") if checkpoint_path.exists() else None
+    resume_checkpoint, resume_warning = load_resume_checkpoint(checkpoint_path)
     if resume_checkpoint is None:
         log_path.write_text("", encoding="utf-8")
     log_json_event(
@@ -1797,6 +1812,8 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             "args": vars(args),
         },
     )
+    if resume_warning is not None:
+        log_json_event(log_path, {"event": "resume_checkpoint_ignored", "message": resume_warning})
 
     train_dataset, val_dataset, test_dataset, supcon_train_dataset, supcon_val_dataset = build_datasets(args)
     if use_gabor and "plastic" not in train_dataset.class_to_idx:
@@ -1901,12 +1918,15 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
     start_supcon_validation_index = 0
     supcon_completed = bool(args.skip_supcon)
 
-    if resume_state.get("stage") == "supcon":
+    if resume_state.get("stage") == "supcon" and "optimizer_state_dict" in resume_state and "scheduler_state_dict" in resume_state:
         supcon_optimizer.load_state_dict(resume_state["optimizer_state_dict"])
         supcon_scheduler.load_state_dict(resume_state["scheduler_state_dict"])
         start_supcon_epoch = int(resume_state.get("epoch", 1))
         start_supcon_epoch_step = int(resume_state.get("epoch_step_completed", 0))
         start_supcon_validation_index = int(resume_state.get("validation_index", 0))
+        supcon_completed = False
+    elif resume_state.get("stage") == "supcon":
+        log_json_event(log_path, {"event": "resume_fallback", "stage": "supcon", "reason": "missing_optimizer_or_scheduler_state"})
         supcon_completed = False
     elif resume_state.get("stage") == "arcface":
         supcon_completed = True
@@ -2092,7 +2112,22 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             warmup_steps=args.warmup_steps,
         )
         _, trainable_params = parameter_counts(model)
-        same_resume_phase = resume_state.get("stage") == "arcface" and phase_index == resume_phase_index
+        same_resume_phase = (
+            resume_state.get("stage") == "arcface"
+            and phase_index == resume_phase_index
+            and "optimizer_state_dict" in resume_state
+            and "scheduler_state_dict" in resume_state
+        )
+        if resume_state.get("stage") == "arcface" and phase_index == resume_phase_index and not same_resume_phase:
+            log_json_event(
+                log_path,
+                {
+                    "event": "resume_fallback",
+                    "stage": "arcface",
+                    "phase_index": phase_index,
+                    "reason": "missing_optimizer_or_scheduler_state",
+                },
+            )
         if same_resume_phase:
             optimizer.load_state_dict(resume_state["optimizer_state_dict"])
             scheduler.load_state_dict(resume_state["scheduler_state_dict"])
