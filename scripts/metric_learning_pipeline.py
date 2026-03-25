@@ -936,7 +936,26 @@ def build_sam_optimizer(
     )
 
 
-def build_supcon_optimizer(model: MetricLearningEfficientNetB0, args: argparse.Namespace) -> SAM:
+def build_base_optimizer(
+    parameter_groups: list[dict[str, Any]],
+    weight_decay: float,
+    adam_betas: tuple[float, float],
+) -> Optimizer:
+    sanitized_groups = []
+    for group in parameter_groups:
+        sanitized = dict(group)
+        sanitized.pop("rho", None)
+        sanitized_groups.append(sanitized)
+    return AdamW(sanitized_groups, weight_decay=weight_decay, betas=adam_betas)
+
+
+def build_optimizer_from_groups(parameter_groups: list[dict[str, Any]], args: argparse.Namespace) -> Optimizer:
+    if args.optimizer == "sam":
+        return build_sam_optimizer(parameter_groups, args.sam_rho, args.weight_decay, (args.adam_beta1, args.adam_beta2))
+    return build_base_optimizer(parameter_groups, args.weight_decay, (args.adam_beta1, args.adam_beta2))
+
+
+def build_supcon_optimizer(model: MetricLearningEfficientNetB0, args: argparse.Namespace) -> Optimizer:
     head_params = []
     if not isinstance(model.front_end, IdentityFrontEnd):
         head_params.extend(parameter for parameter in model.front_end.parameters() if parameter.requires_grad)
@@ -954,10 +973,10 @@ def build_supcon_optimizer(model: MetricLearningEfficientNetB0, args: argparse.N
         param_groups.append({"params": head_params, "lr": args.supcon_head_lr, "rho": args.sam_rho})
     if backbone_params:
         param_groups.append({"params": backbone_params, "lr": args.supcon_backbone_lr, "rho": args.sam_rho})
-    return build_sam_optimizer(param_groups, args.sam_rho, args.weight_decay, (args.adam_beta1, args.adam_beta2))
+    return build_optimizer_from_groups(param_groups, args)
 
 
-def build_arcface_optimizer(model: MetricLearningEfficientNetB0, args: argparse.Namespace) -> SAM:
+def build_arcface_optimizer(model: MetricLearningEfficientNetB0, args: argparse.Namespace) -> Optimizer:
     head_params = []
     if not isinstance(model.front_end, IdentityFrontEnd):
         head_params.extend(parameter for parameter in model.front_end.parameters() if parameter.requires_grad)
@@ -975,7 +994,27 @@ def build_arcface_optimizer(model: MetricLearningEfficientNetB0, args: argparse.
         param_groups.append({"params": head_params, "lr": args.head_lr, "rho": args.sam_rho})
     if backbone_params:
         param_groups.append({"params": backbone_params, "lr": args.backbone_lr, "rho": args.sam_rho})
-    return build_sam_optimizer(param_groups, args.sam_rho, args.weight_decay, (args.adam_beta1, args.adam_beta2))
+    return build_optimizer_from_groups(param_groups, args)
+
+
+def base_optimizer_for_scheduler(optimizer: Optimizer) -> Optimizer:
+    return optimizer.base_optimizer if isinstance(optimizer, SAM) else optimizer
+
+
+def optimizer_learning_rates(optimizer: Optimizer) -> list[float]:
+    return [group["lr"] for group in base_optimizer_for_scheduler(optimizer).param_groups]
+
+
+def model_dtype_for_args(args: argparse.Namespace) -> torch.dtype:
+    return torch.float64 if args.precision == 64 else torch.float32
+
+
+def autocast_enabled(device: torch.device, args: argparse.Namespace) -> bool:
+    return False
+
+
+def move_images_to_device(images: torch.Tensor, device: torch.device, args: argparse.Namespace) -> torch.Tensor:
+    return images.to(device=device, dtype=model_dtype_for_args(args), non_blocking=True)
 
 
 class WarmupCosineScheduler:
@@ -1060,7 +1099,7 @@ def train_supcon_epoch(
     model: MetricLearningEfficientNetB0,
     loader: DataLoader,
     criterion: SupConLoss,
-    optimizer: SAM,
+    optimizer: Optimizer,
     scheduler: WarmupCosineScheduler,
     device: torch.device,
     backbone_modules: list[tuple[str, nn.Module]],
@@ -1069,6 +1108,7 @@ def train_supcon_epoch(
     log_path: Path,
     log_every_steps: int,
     train_progress: dict[str, int],
+    args: argparse.Namespace,
 ) -> float:
     model.train()
     freeze_frozen_batchnorms(backbone_modules)
@@ -1078,30 +1118,36 @@ def train_supcon_epoch(
     progress = tqdm(enumerate(limited_batches(loader, max_batches), start=1), total=total_batches, leave=False)
 
     for step_in_epoch, (view_one, view_two, labels) in progress:
-        view_one = view_one.to(device, non_blocking=True)
-        view_two = view_two.to(device, non_blocking=True)
+        view_one = move_images_to_device(view_one, device, args)
+        view_two = move_images_to_device(view_two, device, args)
         labels = labels.to(device, non_blocking=True)
 
         optimizer.zero_grad(set_to_none=True)
-        with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
+        with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
             emb_one = model.encode(view_one)
             emb_two = model.encode(view_two)
             proj_one = model.supcon_projection(emb_one)
             proj_two = model.supcon_projection(emb_two)
             stacked = torch.stack([proj_one, proj_two], dim=1)
             loss = criterion(stacked, labels)
-        loss.backward()
-        optimizer.first_step(zero_grad=True)
+        if isinstance(optimizer, SAM):
+            loss.backward()
+            optimizer.first_step(zero_grad=True)
 
-        with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
-            emb_one = model.encode(view_one)
-            emb_two = model.encode(view_two)
-            proj_one = model.supcon_projection(emb_one)
-            proj_two = model.supcon_projection(emb_two)
-            stacked = torch.stack([proj_one, proj_two], dim=1)
-            second_loss = criterion(stacked, labels)
-        second_loss.backward()
-        optimizer.second_step(zero_grad=True)
+            with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
+                emb_one = model.encode(view_one)
+                emb_two = model.encode(view_two)
+                proj_one = model.supcon_projection(emb_one)
+                proj_two = model.supcon_projection(emb_two)
+                stacked = torch.stack([proj_one, proj_two], dim=1)
+                second_loss = criterion(stacked, labels)
+            second_loss.backward()
+            optimizer.second_step(zero_grad=True)
+        else:
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            second_loss = loss
         scheduler.step()
 
         batch_size = labels.size(0)
@@ -1122,7 +1168,7 @@ def train_supcon_epoch(
                 "epoch_source_samples_seen": total_seen,
                 "global_source_samples_seen": train_progress["global_source_samples_seen"],
                 "running_loss": total_loss / max(1, total_seen),
-                "learning_rates": [group["lr"] for group in optimizer.base_optimizer.param_groups],
+                "learning_rates": optimizer_learning_rates(optimizer),
             }
             log_json_event(log_path, event)
 
@@ -1134,7 +1180,7 @@ def train_supcon_steps(
     batch_iterator,
     step_limit: int,
     criterion: SupConLoss,
-    optimizer: SAM,
+    optimizer: Optimizer,
     scheduler: WarmupCosineScheduler,
     device: torch.device,
     backbone_modules: list[tuple[str, nn.Module]],
@@ -1143,6 +1189,7 @@ def train_supcon_steps(
     log_path: Path,
     log_every_steps: int,
     train_progress: dict[str, int],
+    args: argparse.Namespace,
 ) -> tuple[float, int, int]:
     model.train()
     freeze_frozen_batchnorms(backbone_modules)
@@ -1157,30 +1204,36 @@ def train_supcon_steps(
             break
 
         step_in_epoch = epoch_step_offset + local_step + 1
-        view_one = view_one.to(device, non_blocking=True)
-        view_two = view_two.to(device, non_blocking=True)
+        view_one = move_images_to_device(view_one, device, args)
+        view_two = move_images_to_device(view_two, device, args)
         labels = labels.to(device, non_blocking=True)
 
         optimizer.zero_grad(set_to_none=True)
-        with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
+        with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
             emb_one = model.encode(view_one)
             emb_two = model.encode(view_two)
             proj_one = model.supcon_projection(emb_one)
             proj_two = model.supcon_projection(emb_two)
             stacked = torch.stack([proj_one, proj_two], dim=1)
             loss = criterion(stacked, labels)
-        loss.backward()
-        optimizer.first_step(zero_grad=True)
+        if isinstance(optimizer, SAM):
+            loss.backward()
+            optimizer.first_step(zero_grad=True)
 
-        with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
-            emb_one = model.encode(view_one)
-            emb_two = model.encode(view_two)
-            proj_one = model.supcon_projection(emb_one)
-            proj_two = model.supcon_projection(emb_two)
-            stacked = torch.stack([proj_one, proj_two], dim=1)
-            second_loss = criterion(stacked, labels)
-        second_loss.backward()
-        optimizer.second_step(zero_grad=True)
+            with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
+                emb_one = model.encode(view_one)
+                emb_two = model.encode(view_two)
+                proj_one = model.supcon_projection(emb_one)
+                proj_two = model.supcon_projection(emb_two)
+                stacked = torch.stack([proj_one, proj_two], dim=1)
+                second_loss = criterion(stacked, labels)
+            second_loss.backward()
+            optimizer.second_step(zero_grad=True)
+        else:
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            second_loss = loss
         scheduler.step()
 
         batch_size = labels.size(0)
@@ -1201,7 +1254,7 @@ def train_supcon_steps(
                 "epoch_source_samples_seen": total_seen,
                 "global_source_samples_seen": train_progress["global_source_samples_seen"],
                 "running_loss": total_loss / max(1, total_seen),
-                "learning_rates": [group["lr"] for group in optimizer.base_optimizer.param_groups],
+                "learning_rates": optimizer_learning_rates(optimizer),
             }
             log_json_event(log_path, event)
 
@@ -1219,6 +1272,7 @@ def evaluate_supcon(
     stage: str,
     split: str,
     eval_context: dict[str, object] | None = None,
+    args: argparse.Namespace | None = None,
 ) -> float:
     model.eval()
     total_loss = 0.0
@@ -1226,8 +1280,8 @@ def evaluate_supcon(
     eval_context = dict(eval_context or {})
     with torch.no_grad():
         for eval_step, (view_one, view_two, labels) in enumerate(limited_batches(loader, max_batches), start=1):
-            view_one = view_one.to(device, non_blocking=True)
-            view_two = view_two.to(device, non_blocking=True)
+            view_one = move_images_to_device(view_one, device, args) if args is not None else view_one.to(device, non_blocking=True)
+            view_two = move_images_to_device(view_two, device, args) if args is not None else view_two.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
             emb_one = model.encode(view_one)
             emb_two = model.encode(view_two)
@@ -1336,7 +1390,7 @@ def train_arcface_epoch(
     model: MetricLearningEfficientNetB0,
     loader: DataLoader,
     criterion: nn.Module,
-    optimizer: SAM,
+    optimizer: Optimizer,
     scheduler: WarmupCosineScheduler,
     device: torch.device,
     backbone_modules: list[tuple[str, nn.Module]],
@@ -1358,22 +1412,28 @@ def train_arcface_epoch(
     progress = tqdm(enumerate(limited_batches(loader, max_batches), start=1), total=total_batches, leave=False)
 
     for step_in_epoch, (images, labels) in progress:
-        images = images.to(device, non_blocking=True)
+        images = move_images_to_device(images, device, args)
         labels = labels.to(device, non_blocking=True)
         mixed_images, labels_a, labels_b, lam, mix_type = apply_batch_mix(images, labels, args)
 
         optimizer.zero_grad(set_to_none=True)
-        with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
+        with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
             embeddings = model.encode(mixed_images)
             loss = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion)
-        loss.backward()
-        optimizer.first_step(zero_grad=True)
+        if isinstance(optimizer, SAM):
+            loss.backward()
+            optimizer.first_step(zero_grad=True)
 
-        with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
-            embeddings = model.encode(mixed_images)
-            second_loss = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion)
-        second_loss.backward()
-        optimizer.second_step(zero_grad=True)
+            with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
+                embeddings = model.encode(mixed_images)
+                second_loss = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion)
+            second_loss.backward()
+            optimizer.second_step(zero_grad=True)
+        else:
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            second_loss = loss
         scheduler.step()
 
         with torch.no_grad():
@@ -1407,7 +1467,7 @@ def train_arcface_epoch(
                 "running_acc": total_correct / max(1, total_seen),
                 "mix_type": mix_type,
                 "mix_lambda": lam,
-                "learning_rates": [group["lr"] for group in optimizer.base_optimizer.param_groups],
+                "learning_rates": optimizer_learning_rates(optimizer),
             }
             log_json_event(log_path, event)
 
@@ -1419,7 +1479,7 @@ def train_arcface_steps(
     batch_iterator,
     step_limit: int,
     criterion: nn.Module,
-    optimizer: SAM,
+    optimizer: Optimizer,
     scheduler: WarmupCosineScheduler,
     device: torch.device,
     backbone_modules: list[tuple[str, nn.Module]],
@@ -1446,22 +1506,28 @@ def train_arcface_steps(
             break
 
         step_in_epoch = epoch_step_offset + local_step + 1
-        images = images.to(device, non_blocking=True)
+        images = move_images_to_device(images, device, args)
         labels = labels.to(device, non_blocking=True)
         mixed_images, labels_a, labels_b, lam, mix_type = apply_batch_mix(images, labels, args)
 
         optimizer.zero_grad(set_to_none=True)
-        with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
+        with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
             embeddings = model.encode(mixed_images)
             loss = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion)
-        loss.backward()
-        optimizer.first_step(zero_grad=True)
+        if isinstance(optimizer, SAM):
+            loss.backward()
+            optimizer.first_step(zero_grad=True)
 
-        with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
-            embeddings = model.encode(mixed_images)
-            second_loss = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion)
-        second_loss.backward()
-        optimizer.second_step(zero_grad=True)
+            with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
+                embeddings = model.encode(mixed_images)
+                second_loss = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion)
+            second_loss.backward()
+            optimizer.second_step(zero_grad=True)
+        else:
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            second_loss = loss
         scheduler.step()
 
         with torch.no_grad():
@@ -1495,7 +1561,7 @@ def train_arcface_steps(
                 "running_acc": total_correct / max(1, total_seen),
                 "mix_type": mix_type,
                 "mix_lambda": lam,
-                "learning_rates": [group["lr"] for group in optimizer.base_optimizer.param_groups],
+                "learning_rates": optimizer_learning_rates(optimizer),
             }
             log_json_event(log_path, event)
 
@@ -1513,6 +1579,7 @@ def evaluate_arcface(
     stage: str,
     split: str,
     eval_context: dict[str, object] | None = None,
+    args: argparse.Namespace | None = None,
 ) -> tuple[float, float]:
     model.eval()
     total_loss = 0.0
@@ -1521,7 +1588,7 @@ def evaluate_arcface(
     eval_context = dict(eval_context or {})
     with torch.no_grad():
         for eval_step, (images, labels) in enumerate(limited_batches(loader, max_batches), start=1):
-            images = images.to(device, non_blocking=True)
+            images = move_images_to_device(images, device, args) if args is not None else images.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
             embeddings = model.encode(images)
             margin_logits = model.classify(embeddings, labels)
@@ -1556,6 +1623,7 @@ def collect_logits_and_labels(
     log_path: Path,
     log_every_eval_steps: int,
     split: str,
+    args: argparse.Namespace | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     model.eval()
     logits_list: list[torch.Tensor] = []
@@ -1563,7 +1631,7 @@ def collect_logits_and_labels(
     with torch.no_grad():
         total_seen = 0
         for eval_step, (images, labels) in enumerate(limited_batches(loader, max_batches), start=1):
-            images = images.to(device, non_blocking=True)
+            images = move_images_to_device(images, device, args) if args is not None else images.to(device, non_blocking=True)
             embeddings = model.encode(images)
             logits = model.classify(embeddings, labels=None)
             logits_list.append(logits.cpu())
@@ -1817,6 +1885,8 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--head-lr", type=float, default=1e-3)
     parser.add_argument("--backbone-lr", type=float, default=1e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--optimizer", choices=["sam", "adamw"], default="sam")
+    parser.add_argument("--precision", choices=[32, 64], type=int, default=32)
     parser.add_argument("--adam-beta1", type=float, default=0.9)
     parser.add_argument("--adam-beta2", type=float, default=0.999)
     parser.add_argument("--label-smoothing", type=float, default=0.0)
@@ -1846,7 +1916,7 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
 
 
 def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
-    if args.grad_accum_steps != 1:
+    if args.optimizer == "sam" and args.grad_accum_steps != 1:
         raise ValueError("SAM support in this trainer requires --grad-accum-steps 1")
     if args.unfreeze_chunk_size < 1:
         raise ValueError("--unfreeze-chunk-size must be >= 1")
@@ -1867,7 +1937,8 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
 
     seed_everything(args.seed)
     torch.backends.cudnn.benchmark = True
-    torch.set_float32_matmul_precision("high")
+    if args.precision == 32:
+        torch.set_float32_matmul_precision("high")
     model_name = "efficientnet_b0_metric_learning_gabor" if use_gabor else "efficientnet_b0_metric_learning"
 
     output_dir = Path(args.output_dir)
@@ -1940,6 +2011,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
     test_eval_batches = min(len(test_loader), args.max_eval_batches) if args.max_eval_batches > 0 else len(test_loader)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model_dtype = model_dtype_for_args(args)
     model = MetricLearningEfficientNetB0(
         num_classes=len(train_dataset.classes),
         weights_mode=args.weights,
@@ -1947,7 +2019,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         projection_dim=args.projection_dim,
         use_gabor=use_gabor,
         args=args,
-    ).to(device)
+    ).to(device=device, dtype=model_dtype)
     if resume_checkpoint is not None:
         model.load_state_dict(resume_checkpoint["model_state_dict"])
     backbone_modules = backbone_leaf_modules(model)
@@ -1980,7 +2052,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
     thawed_supcon = set_trainability_for_supcon(model, backbone_modules, args.supcon_unfreeze_backbone_modules)
     supcon_optimizer = build_supcon_optimizer(model, args)
     supcon_scheduler = build_scheduler(
-        supcon_optimizer.base_optimizer,
+        base_optimizer_for_scheduler(supcon_optimizer),
         max_epochs=args.supcon_epochs,
         steps_per_epoch=steps_per_epoch_for_dataset(supcon_train_dataset, args.batch_size, args.max_train_batches),
         warmup_epochs=args.warmup_epochs,
@@ -2047,6 +2119,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                     log_path=log_path,
                     log_every_steps=args.log_every_steps,
                     train_progress=train_progress,
+                    args=args,
                 )
                 if steps_done == 0:
                     break
@@ -2086,6 +2159,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                         "epoch_step": epoch_steps_done,
                         "global_train_step": train_progress["global_train_step"],
                     },
+                    args=args,
                 )
                 log_json_event(
                     log_path,
@@ -2218,7 +2292,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         thawed = set_trainability_for_arcface(model, backbone_modules, phase.unfrozen_backbone_modules)
         optimizer = build_arcface_optimizer(model, args)
         scheduler = build_scheduler(
-            optimizer.base_optimizer,
+            base_optimizer_for_scheduler(optimizer),
             max_epochs=phase.max_epochs,
             steps_per_epoch=steps_per_epoch_for_dataset(train_dataset, args.batch_size, args.max_train_batches),
             warmup_epochs=args.warmup_epochs,
@@ -2340,6 +2414,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                         "epoch_step": epoch_steps_done,
                         "global_train_step": train_progress["global_train_step"],
                     },
+                    args=args,
                 )
                 log_json_event(
                     log_path,
@@ -2498,6 +2573,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         log_path,
         args.log_eval_every_steps,
         "val",
+        args,
     )
     log_json_event(log_path, {"event": "final_evaluation_finished", "split": "val", "eval_batches": val_eval_batches})
     log_json_event(log_path, {"event": "final_evaluation_started", "split": "test", "eval_batches": test_eval_batches})
@@ -2509,6 +2585,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         log_path,
         args.log_eval_every_steps,
         "test",
+        args,
     )
     log_json_event(log_path, {"event": "final_evaluation_finished", "split": "test", "eval_batches": test_eval_batches})
 
