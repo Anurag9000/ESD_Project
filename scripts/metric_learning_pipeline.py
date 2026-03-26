@@ -2145,7 +2145,7 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--dataset-root", default="Dataset_Final")
     parser.add_argument("--image-size", type=int, default=224)
-    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--num-workers", type=int, default=16)
     parser.add_argument("--augment-repeats", type=int, default=16)
     parser.add_argument("--augment-gaussian-sigmas", type=float, default=2.0)
@@ -2189,7 +2189,9 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--eval-every-train-steps", type=int, default=1024)
     parser.add_argument("--confidence-threshold", type=float, default=0.80)
     parser.add_argument("--confidence-penalty-weight", type=float, default=0.25)
-    parser.add_argument("--early-stopping-patience", type=int, default=20)
+    parser.add_argument("--supcon-early-stopping-patience", type=int, default=10)
+    parser.add_argument("--head-early-stopping-patience", type=int, default=10)
+    parser.add_argument("--stage-early-stopping-patience", type=int, default=10)
     parser.add_argument("--early-stopping-min-delta", type=float, default=1e-4)
     parser.add_argument("--warmup-epochs", type=int, default=0)
     parser.add_argument("--warmup-steps", type=int, default=1024)
@@ -2225,8 +2227,12 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         raise ValueError("--confidence-threshold must be between 0 and 1")
     if args.confidence_penalty_weight < 0.0:
         raise ValueError("--confidence-penalty-weight must be >= 0")
-    if args.early_stopping_patience < 1:
-        raise ValueError("--early-stopping-patience must be >= 1")
+    if args.supcon_early_stopping_patience < 1:
+        raise ValueError("--supcon-early-stopping-patience must be >= 1")
+    if args.head_early_stopping_patience < 1:
+        raise ValueError("--head-early-stopping-patience must be >= 1")
+    if args.stage_early_stopping_patience < 1:
+        raise ValueError("--stage-early-stopping-patience must be >= 1")
 
     seed_everything(args.seed)
     torch.backends.cudnn.benchmark = True
@@ -2297,7 +2303,9 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             "val_steps_per_eval": len(val_loader),
             "test_steps_per_eval": len(test_loader),
             "eval_every_train_steps": args.eval_every_train_steps,
-            "early_stopping_patience": args.early_stopping_patience,
+            "supcon_early_stopping_patience": args.supcon_early_stopping_patience,
+            "head_early_stopping_patience": args.head_early_stopping_patience,
+            "stage_early_stopping_patience": args.stage_early_stopping_patience,
             "warmup_epochs": args.warmup_epochs,
             "warmup_steps": args.warmup_steps,
         },
@@ -2551,7 +2559,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                         },
                     },
                 )
-                if supcon_wait >= args.early_stopping_patience:
+                if supcon_wait >= args.supcon_early_stopping_patience:
                     event = {
                         "stage": "supcon",
                         "stopped_early": True,
@@ -2654,6 +2662,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             phase_best_epoch = 0
             phase_best_state = cpu_state_dict(model)
             phase_wait = 0
+        phase_patience = args.head_early_stopping_patience if phase_index == 1 else args.stage_early_stopping_patience
 
         for epoch in range(start_phase_epoch if same_resume_phase else 1, phase.max_epochs + 1):
             train_dataset.set_epoch(augmentation_epoch_cursor)
@@ -2794,6 +2803,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                     "phase_best_val_loss": phase_best_loss,
                     "phase_best_val_acc": phase_best_acc,
                     "checks_without_improvement": phase_wait,
+                    "patience_limit": phase_patience,
                     "patience_unit": "validation_window",
                     "validation_window_steps": args.eval_every_train_steps,
                 }
@@ -2835,7 +2845,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                     },
                 )
 
-                if phase_wait >= args.early_stopping_patience:
+                if phase_wait >= phase_patience:
                     event = {
                         "stage": "arcface",
                         "phase_index": phase_index,

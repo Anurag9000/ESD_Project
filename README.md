@@ -214,15 +214,17 @@ Current optimization stack:
 Current defaults:
 
 - `image-size = 224`
-- `batch-size = 8`
-- `num-workers = 4`
+- `batch-size = 256`
+- `num-workers = 16`
 - `augment-repeats = 16`
 - `supcon-epochs = 200`
 - `head-epochs = 200`
 - `stage-epochs = 200`
 - `unfreeze-chunk-size = 20`
-- `early-stopping-patience = 20`
-- `eval-every-train-steps = 64`
+- `supcon-early-stopping-patience = 10`
+- `head-early-stopping-patience = 10`
+- `stage-early-stopping-patience = 10`
+- `eval-every-train-steps = 1024`
 - `warmup-steps = 1024`
 - `log-every-steps = 100`
 - `mixup-prob = 0.20`
@@ -231,7 +233,7 @@ Current defaults:
 Practical note:
 
 - `200` is a hard cap, not a claim that learning is impossible beyond 200
-- early stopping can stop earlier if validation does not improve for 20 consecutive validation windows
+- early stopping can stop earlier if validation does not improve for 10 consecutive validation windows in the relevant stage
 - `--skip-supcon` skips the contrastive stage and starts directly with ArcFace fine-tuning
 - if a matching `Results/.../last.pt` exists, the trainer auto-resumes from that checkpoint
 
@@ -457,7 +459,7 @@ Core data and loading:
   - default: `224`
 - `--batch-size`
   - per-step batch size
-  - default: `8`
+  - default: `256`
 - `--num-workers`
   - dataloader worker count
   - default: `16`
@@ -619,9 +621,15 @@ Logging, evaluation cadence, and stopping:
 - `--eval-every-train-steps`
   - run validation every N training steps
   - default: `1024`
-- `--early-stopping-patience`
-  - stop after this many consecutive validation windows without improvement
-  - default: `20`
+- `--supcon-early-stopping-patience`
+  - SupCon-stage validation patience in validation windows
+  - default: `10`
+- `--head-early-stopping-patience`
+  - head-only ArcFace validation patience in validation windows
+  - default: `10`
+- `--stage-early-stopping-patience`
+  - progressive unfreeze ArcFace validation patience in validation windows
+  - default: `10`
 - `--early-stopping-min-delta`
   - minimum improvement threshold
   - default: `1e-4`
