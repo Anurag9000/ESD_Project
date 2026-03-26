@@ -217,7 +217,6 @@ Current defaults:
 - `batch-size = 512`
 - `num-workers = 4`
 - `prefetch-factor = PyTorch default`
-- `eval loader workers = 0`
 - `augment-repeats = 16`
 - `supcon-epochs = 200`
 - `head-epochs = 200`

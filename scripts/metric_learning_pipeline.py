@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import gc
 import io
 import json
 import math
@@ -1339,6 +1340,9 @@ def train_supcon_steps(
     log_path: Path,
     log_every_steps: int,
     train_progress: dict[str, int],
+    step_checkpoint_path: Path,
+    class_names: list[str],
+    class_to_idx: dict[str, int],
     args: argparse.Namespace,
 ) -> tuple[float, int, int]:
     model.train()
@@ -1396,6 +1400,20 @@ def train_supcon_steps(
         steps_done += 1
         train_progress["global_train_step"] += 1
         train_progress["global_source_samples_seen"] += batch_size
+        save_step_checkpoint(
+            path=step_checkpoint_path,
+            model=model,
+            class_names=class_names,
+            class_to_idx=class_to_idx,
+            args=args,
+            train_progress=train_progress,
+            stage="supcon",
+            epoch=epoch,
+            epoch_step=step_in_epoch,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            scaler=scaler,
+        )
 
         if train_progress["global_train_step"] % log_every_steps == 0:
             event = {
@@ -1712,6 +1730,9 @@ def train_arcface_steps(
     log_path: Path,
     log_every_steps: int,
     train_progress: dict[str, int],
+    step_checkpoint_path: Path,
+    class_names: list[str],
+    class_to_idx: dict[str, int],
     args: argparse.Namespace,
 ) -> tuple[float, float, int, int]:
     model.train()
@@ -1779,6 +1800,22 @@ def train_arcface_steps(
         steps_done += 1
         train_progress["global_train_step"] += 1
         train_progress["global_source_samples_seen"] += batch_size
+        save_step_checkpoint(
+            path=step_checkpoint_path,
+            model=model,
+            class_names=class_names,
+            class_to_idx=class_to_idx,
+            args=args,
+            train_progress=train_progress,
+            stage="arcface",
+            epoch=epoch,
+            epoch_step=step_in_epoch,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            scaler=scaler,
+            phase_index=phase_index,
+            phase_name=phase_name,
+        )
 
         if train_progress["global_train_step"] % log_every_steps == 0:
             event = {
@@ -2094,6 +2131,82 @@ def save_training_checkpoint(path: Path, payload: dict[str, Any]) -> None:
     torch.save(payload, path)
 
 
+def save_step_checkpoint(
+    path: Path,
+    model: nn.Module,
+    class_names: list[str],
+    class_to_idx: dict[str, int],
+    args: argparse.Namespace,
+    train_progress: dict[str, int],
+    stage: str,
+    epoch: int,
+    epoch_step: int,
+    optimizer: Optimizer,
+    scheduler: WarmupCosineScheduler,
+    scaler: torch.amp.GradScaler,
+    phase_index: int | None = None,
+    phase_name: str | None = None,
+) -> None:
+    resume_payload: dict[str, Any] = {
+        "stage": stage,
+        "epoch": epoch,
+        "epoch_step_completed": epoch_step,
+        "optimizer_state_dict": optimizer.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict(),
+        "scaler_state_dict": scaler.state_dict(),
+    }
+    if phase_index is not None:
+        resume_payload["phase_index"] = phase_index
+    if phase_name is not None:
+        resume_payload["phase_name"] = phase_name
+    torch.save(
+        {
+            "model_state_dict": cpu_state_dict(model),
+            "class_names": class_names,
+            "class_to_idx": class_to_idx,
+            "args": vars(args),
+            "train_progress": dict(train_progress),
+            "resume": resume_payload,
+        },
+        path,
+    )
+
+
+def shutdown_loader_workers(loader: DataLoader | None) -> None:
+    if loader is None:
+        return
+    iterator = getattr(loader, "_iterator", None)
+    if iterator is None:
+        return
+    shutdown = getattr(iterator, "_shutdown_workers", None)
+    if callable(shutdown):
+        try:
+            shutdown()
+        except Exception:
+            pass
+    try:
+        loader._iterator = None
+    except Exception:
+        pass
+
+
+def release_training_memory(device: torch.device, *loaders: DataLoader | None) -> None:
+    for loader in loaders:
+        shutdown_loader_workers(loader)
+    gc.collect()
+    if device.type == "cuda":
+        try:
+            torch.cuda.synchronize(device)
+        except RuntimeError:
+            pass
+        torch.cuda.empty_cache()
+        if hasattr(torch.cuda, "ipc_collect"):
+            try:
+                torch.cuda.ipc_collect()
+            except RuntimeError:
+                pass
+
+
 def load_resume_checkpoint(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     if not path.exists():
         return None, None
@@ -2248,6 +2361,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_path = output_dir / "last.pt"
+    step_checkpoint_path = output_dir / "step_last.pt"
     resume_path = Path(args.resume_checkpoint) if args.resume_checkpoint else checkpoint_path
     log_path = Path(args.log_file)
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2286,12 +2400,12 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
     )
 
     train_loader = make_loader(train_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False, sampler=train_sampler)
-    val_loader = make_loader(val_dataset, args.batch_size, 0, None, shuffle=False)
-    test_loader = make_loader(test_dataset, args.batch_size, 0, None, shuffle=False)
+    val_loader = make_loader(val_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False)
+    test_loader = make_loader(test_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False)
     supcon_train_loader = make_loader(
         supcon_train_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False, sampler=supcon_sampler
     )
-    supcon_val_loader = make_loader(supcon_val_dataset, args.batch_size, 0, None, shuffle=False)
+    supcon_val_loader = make_loader(supcon_val_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False)
     log_json_event(
         log_path,
         {
@@ -2431,7 +2545,6 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             supcon_sampler.set_epoch(augmentation_epoch_cursor)
             supcon_sampler.set_start_index(start_index)
             supcon_steps_per_epoch = max(0, supcon_steps_full_epoch - (start_supcon_epoch_step if epoch == start_supcon_epoch else 0))
-            supcon_iterator = iter(limited_batches(supcon_train_loader, args.max_train_batches))
             epoch_steps_done = start_supcon_epoch_step if epoch == start_supcon_epoch else 0
             epoch_samples_seen = 0
             epoch_loss_sum = 0.0
@@ -2440,6 +2553,10 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
 
             while epoch_steps_done < supcon_steps_full_epoch:
                 step_window = min(args.eval_every_train_steps, supcon_steps_full_epoch - epoch_steps_done)
+                step_start_index = epoch_steps_done * args.batch_size
+                supcon_sampler.set_epoch(augmentation_epoch_cursor)
+                supcon_sampler.set_start_index(step_start_index)
+                supcon_iterator = iter(limited_batches(supcon_train_loader, args.max_train_batches))
                 window_train_loss, steps_done, window_samples = train_supcon_steps(
                     model=model,
                     batch_iterator=supcon_iterator,
@@ -2455,8 +2572,12 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                     log_path=log_path,
                     log_every_steps=args.log_every_steps,
                     train_progress=train_progress,
+                    step_checkpoint_path=step_checkpoint_path,
+                    class_names=train_dataset.classes,
+                    class_to_idx=train_dataset.class_to_idx,
                     args=args,
                 )
+                del supcon_iterator
                 if steps_done == 0:
                     break
 
@@ -2466,6 +2587,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                 validation_index += 1
                 progress.update(steps_done)
                 progress.set_postfix(loss=f"{epoch_loss_sum / max(1, epoch_samples_seen):.4f}")
+                release_training_memory(device, supcon_train_loader)
 
                 log_json_event(
                     log_path,
@@ -2497,6 +2619,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                     },
                     args=args,
                 )
+                release_training_memory(device, supcon_val_loader)
                 log_json_event(
                     log_path,
                     {
@@ -2585,7 +2708,9 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             if stop_supcon:
                 break
             augmentation_epoch_cursor += 1
+            release_training_memory(device, supcon_train_loader, supcon_val_loader)
         model.load_state_dict(supcon_best_state)
+        release_training_memory(device, supcon_train_loader, supcon_val_loader)
     else:
         start_supcon_epoch_step = 0
         start_supcon_validation_index = 0
@@ -2680,7 +2805,6 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             train_sampler.set_start_index(start_index)
             phase_steps_full_epoch = steps_per_epoch_for_dataset(train_dataset, args.batch_size, args.max_train_batches)
             phase_steps_per_epoch = max(0, phase_steps_full_epoch - (start_phase_epoch_step if same_resume_phase and epoch == start_phase_epoch else 0))
-            phase_iterator = iter(limited_batches(train_loader, args.max_train_batches))
             epoch_steps_done = start_phase_epoch_step if same_resume_phase and epoch == start_phase_epoch else 0
             epoch_samples_seen = 0
             epoch_loss_sum = 0.0
@@ -2691,6 +2815,10 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
 
             while epoch_steps_done < phase_steps_full_epoch:
                 step_window = min(args.eval_every_train_steps, phase_steps_full_epoch - epoch_steps_done)
+                step_start_index = epoch_steps_done * args.batch_size
+                train_sampler.set_epoch(augmentation_epoch_cursor)
+                train_sampler.set_start_index(step_start_index)
+                phase_iterator = iter(limited_batches(train_loader, args.max_train_batches))
                 window_train_loss, window_train_acc, steps_done, window_samples = train_arcface_steps(
                     model=model,
                     batch_iterator=phase_iterator,
@@ -2708,8 +2836,12 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                     log_path=log_path,
                     log_every_steps=args.log_every_steps,
                     train_progress=train_progress,
+                    step_checkpoint_path=step_checkpoint_path,
+                    class_names=train_dataset.classes,
+                    class_to_idx=train_dataset.class_to_idx,
                     args=args,
                 )
+                del phase_iterator
                 if steps_done == 0:
                     break
 
@@ -2723,6 +2855,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                     loss=f"{epoch_loss_sum / max(1, epoch_samples_seen):.4f}",
                     acc=f"{epoch_correct_sum / max(1, epoch_samples_seen):.4f}",
                 )
+                release_training_memory(device, train_loader)
 
                 log_json_event(
                     log_path,
@@ -2758,6 +2891,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                     },
                     args=args,
                 )
+                release_training_memory(device, val_loader)
                 log_json_event(
                     log_path,
                     {
@@ -2874,8 +3008,10 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             if phase_stopped:
                 break
             augmentation_epoch_cursor += 1
+            release_training_memory(device, train_loader, val_loader)
 
         model.load_state_dict(phase_best_state)
+        release_training_memory(device, train_loader, val_loader)
         save_training_checkpoint(
             checkpoint_path,
             {
@@ -2907,6 +3043,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         resume_phase_index = phase_index + 1
 
     model.load_state_dict(best_arcface_state)
+    release_training_memory(device, train_loader, val_loader, supcon_train_loader, supcon_val_loader)
 
     log_json_event(log_path, {"event": "final_evaluation_started", "split": "val", "eval_batches": val_eval_batches})
     val_logits, val_targets = collect_logits_and_labels(
@@ -2919,6 +3056,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         "val",
         args,
     )
+    release_training_memory(device, val_loader)
     log_json_event(log_path, {"event": "final_evaluation_finished", "split": "val", "eval_batches": val_eval_batches})
     log_json_event(log_path, {"event": "final_evaluation_started", "split": "test", "eval_batches": test_eval_batches})
     test_logits, test_targets = collect_logits_and_labels(
@@ -2931,6 +3069,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         "test",
         args,
     )
+    release_training_memory(device, test_loader)
     log_json_event(log_path, {"event": "final_evaluation_finished", "split": "test", "eval_batches": test_eval_batches})
 
     val_metrics = compute_classification_metrics(val_logits, val_targets, train_dataset.classes, args.confidence_threshold)
