@@ -914,7 +914,7 @@ def make_loader(
     dataset: Dataset,
     batch_size: int,
     num_workers: int,
-    prefetch_factor: int,
+    prefetch_factor: int | None,
     shuffle: bool,
     sampler: Sampler[int] | None = None,
 ) -> DataLoader:
@@ -927,14 +927,9 @@ def make_loader(
         "pin_memory": torch.cuda.is_available(),
         "persistent_workers": num_workers > 0,
     }
-    if num_workers > 0:
-        # Large batches plus multiple workers can exhaust host shared memory before the
-        # GPU ever becomes the bottleneck, especially in SupCon where each sample yields
-        # two augmented views. Keep the queue depth explicit and tunable.
+    if num_workers > 0 and prefetch_factor is not None:
         loader_kwargs["prefetch_factor"] = prefetch_factor
-    return DataLoader(
-        **loader_kwargs,
-    )
+    return DataLoader(**loader_kwargs)
 
 
 def build_datasets(
@@ -2156,7 +2151,7 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument("--prefetch-factor", type=int, default=1)
+    parser.add_argument("--prefetch-factor", type=int, default=None)
     parser.add_argument("--augment-repeats", type=int, default=16)
     parser.add_argument("--augment-gaussian-sigmas", type=float, default=2.0)
     parser.add_argument("--mixup-prob", type=float, default=0.20)

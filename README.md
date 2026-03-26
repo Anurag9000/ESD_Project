@@ -216,7 +216,7 @@ Current defaults:
 - `image-size = 224`
 - `batch-size = 256`
 - `num-workers = 4`
-- `prefetch-factor = 1`
+- `prefetch-factor = PyTorch default`
 - `augment-repeats = 16`
 - `supcon-epochs = 200`
 - `head-epochs = 200`
@@ -463,7 +463,10 @@ Core data and loading:
   - default: `256`
 - `--num-workers`
   - dataloader worker count
-  - default: `16`
+  - default: `4`
+- `--prefetch-factor`
+  - dataloader batches queued ahead per worker
+  - default: PyTorch default when omitted
 
 Augmentation and batch mixing:
 
