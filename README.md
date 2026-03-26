@@ -214,9 +214,9 @@ Current optimization stack:
 Current defaults:
 
 - `image-size = 224`
-- `batch-size = 256`
+- `batch-size = 512`
 - `num-workers = 8`
-- `prefetch-factor = PyTorch default`
+- `prefetch-factor = 4`
 - `augment-repeats = 16`
 - `supcon-epochs = 200`
 - `head-epochs = 200`
@@ -460,13 +460,13 @@ Core data and loading:
   - default: `224`
 - `--batch-size`
   - per-step batch size
-  - default: `256`
+  - default: `512`
 - `--num-workers`
   - dataloader worker count
   - default: `8`
 - `--prefetch-factor`
   - dataloader batches queued ahead per worker
-  - default: PyTorch default when omitted
+  - default: `4`
 
 Augmentation and batch mixing:
 
