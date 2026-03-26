@@ -914,17 +914,26 @@ def make_loader(
     dataset: Dataset,
     batch_size: int,
     num_workers: int,
+    prefetch_factor: int,
     shuffle: bool,
     sampler: Sampler[int] | None = None,
 ) -> DataLoader:
+    loader_kwargs: dict[str, object] = {
+        "dataset": dataset,
+        "batch_size": batch_size,
+        "shuffle": shuffle if sampler is None else False,
+        "sampler": sampler,
+        "num_workers": num_workers,
+        "pin_memory": torch.cuda.is_available(),
+        "persistent_workers": num_workers > 0,
+    }
+    if num_workers > 0:
+        # Large batches plus multiple workers can exhaust host shared memory before the
+        # GPU ever becomes the bottleneck, especially in SupCon where each sample yields
+        # two augmented views. Keep the queue depth explicit and tunable.
+        loader_kwargs["prefetch_factor"] = prefetch_factor
     return DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=shuffle if sampler is None else False,
-        sampler=sampler,
-        num_workers=num_workers,
-        pin_memory=torch.cuda.is_available(),
-        persistent_workers=num_workers > 0,
+        **loader_kwargs,
     )
 
 
@@ -2147,6 +2156,7 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--prefetch-factor", type=int, default=1)
     parser.add_argument("--augment-repeats", type=int, default=16)
     parser.add_argument("--augment-gaussian-sigmas", type=float, default=2.0)
     parser.add_argument("--mixup-prob", type=float, default=0.20)
@@ -2280,11 +2290,13 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         else make_epoch_sampler(supcon_train_dataset, args.seed + 202, shuffle=True)
     )
 
-    train_loader = make_loader(train_dataset, args.batch_size, args.num_workers, shuffle=False, sampler=train_sampler)
-    val_loader = make_loader(val_dataset, args.batch_size, args.num_workers, shuffle=False)
-    test_loader = make_loader(test_dataset, args.batch_size, args.num_workers, shuffle=False)
-    supcon_train_loader = make_loader(supcon_train_dataset, args.batch_size, args.num_workers, shuffle=False, sampler=supcon_sampler)
-    supcon_val_loader = make_loader(supcon_val_dataset, args.batch_size, args.num_workers, shuffle=False)
+    train_loader = make_loader(train_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False, sampler=train_sampler)
+    val_loader = make_loader(val_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False)
+    test_loader = make_loader(test_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False)
+    supcon_train_loader = make_loader(
+        supcon_train_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False, sampler=supcon_sampler
+    )
+    supcon_val_loader = make_loader(supcon_val_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False)
     log_json_event(
         log_path,
         {
