@@ -443,6 +443,209 @@ cd /home/anurag-basistha/Projects/ESD
 ./run_gabor.sh
 ```
 
+## CLI Flags
+
+The training scripts [run_non_gabor.sh](/home/anurag-basistha/Projects/ESD/run_non_gabor.sh) and [run_gabor.sh](/home/anurag-basistha/Projects/ESD/run_gabor.sh) forward all extra flags to the shared parser in [metric_learning_pipeline.py](/home/anurag-basistha/Projects/ESD/scripts/metric_learning_pipeline.py).
+
+Core data and loading:
+
+- `--dataset-root`
+  - dataset root directory
+  - default: `Dataset_Final`
+- `--image-size`
+  - resized square input resolution
+  - default: `224`
+- `--batch-size`
+  - per-step batch size
+  - default: `8`
+- `--num-workers`
+  - dataloader worker count
+  - default: `4`
+
+Augmentation and batch mixing:
+
+- `--augment-repeats`
+  - deterministic augmentation-bank size for `train` and `test`
+  - default: `16`
+- `--augment-gaussian-sigmas`
+  - controls how tightly augmentation magnitudes cluster around the safe band
+  - default: `2.0`
+- `--mixup-prob`
+  - batch-level MixUp probability during ArcFace training
+  - default: `0.20`
+- `--cutmix-prob`
+  - batch-level CutMix probability during ArcFace training
+  - default: `0.20`
+
+Embedding and projection:
+
+- `--embedding-dim`
+  - ArcFace embedding dimension
+  - default: `512`
+- `--projection-dim`
+  - SupCon projection head dimension
+  - default: `256`
+
+Training stages:
+
+- `--supcon-epochs`
+  - hard cap for the SupCon stage
+  - default: `200`
+- `--supcon-unfreeze-backbone-modules`
+  - number of backbone leaf modules trainable during SupCon
+  - default: `0`
+- `--skip-supcon`
+  - skip contrastive pretraining and start directly with ArcFace
+- `--head-epochs`
+  - hard cap for head-only ArcFace training
+  - default: `200`
+- `--stage-epochs`
+  - hard cap for each progressive unfreeze phase
+  - default: `200`
+- `--unfreeze-chunk-size`
+  - how many backbone leaf modules are added per progressive phase
+  - default: `20`
+- `--max-progressive-phases`
+  - optional limit on number of progressive ArcFace phases
+  - default: `0` meaning no extra limit
+
+Loss and classifier settings:
+
+- `--supcon-temperature`
+  - SupCon temperature
+  - default: `0.07`
+- `--arcface-margin`
+  - ArcFace angular margin
+  - default: `0.35`
+- `--arcface-scale`
+  - ArcFace logit scale
+  - default: `30.0`
+- `--label-smoothing`
+  - cross-entropy label smoothing for ArcFace
+  - default: `0.0`
+- `--confidence-threshold`
+  - accuracy threshold; predictions below this confidence are counted as incorrect in ArcFace metrics and final classification metrics
+  - default: `0.80`
+- `--confidence-penalty-weight`
+  - extra differentiable penalty for correctly predicted, non-mixed ArcFace samples whose true-class confidence is below the threshold
+  - default: `0.25`
+
+Optimization:
+
+- `--supcon-head-lr`
+  - SupCon head learning rate
+  - default: `3e-4`
+- `--supcon-backbone-lr`
+  - SupCon backbone learning rate
+  - default: `1e-4`
+- `--head-lr`
+  - ArcFace head learning rate
+  - default: `1e-3`
+- `--backbone-lr`
+  - ArcFace backbone learning rate
+  - default: `1e-4`
+- `--weight-decay`
+  - weight decay
+  - default: `1e-4`
+- `--optimizer`
+  - optimizer choice
+  - choices: `sam`, `adamw`
+  - default: `sam`
+- `--precision`
+  - model/input precision mode currently supported by the trainer
+  - choices: `32`, `64`
+  - default: `32`
+- `--adam-beta1`
+  - Adam or AdamW beta1
+  - default: `0.9`
+- `--adam-beta2`
+  - Adam or AdamW beta2
+  - default: `0.999`
+- `--sam-rho`
+  - SAM neighborhood radius when `--optimizer sam`
+  - default: `0.05`
+- `--grad-accum-steps`
+  - gradient accumulation steps
+  - default: `1`
+  - current SAM path requires `1`
+
+Sampling, initialization, and outputs:
+
+- `--weighted-sampling`
+  - enables class-balanced weighted sampling for `train`
+- `--weights`
+  - torchvision backbone initialization
+  - choices: `default`, `none`
+  - default: `default`
+- `--output-dir`
+  - run artifact directory
+  - default: `Results/metric_learning_experiment`
+- `--log-file`
+  - JSONL log path
+  - default: `logs/metric_learning_experiment.log.jsonl`
+- `--seed`
+  - random seed
+  - default: `42`
+
+Resume controls:
+
+- `--resume-checkpoint`
+  - optional explicit checkpoint path to load instead of auto-detecting `last.pt`
+- `--resume-mode`
+  - resume behavior
+  - choices: `latest`, `global_best`, `phase_best`
+  - default: `latest`
+- `--resume-phase-index`
+  - force restart from a specific ArcFace phase index
+  - default: `0` meaning infer from checkpoint
+- `--resume-phase-name`
+  - force restart from a specific ArcFace phase name
+  - default: empty
+
+Logging, evaluation cadence, and stopping:
+
+- `--max-train-batches`
+  - optional train batch cap for smoke tests
+  - default: `0` meaning no cap
+- `--max-eval-batches`
+  - optional eval batch cap for smoke tests
+  - default: `0` meaning no cap
+- `--log-every-steps`
+  - train-step log cadence
+  - default: `100`
+- `--log-eval-every-steps`
+  - eval-step log cadence
+  - default: `1000`
+- `--eval-every-train-steps`
+  - run validation every N training steps
+  - default: `1024`
+- `--early-stopping-patience`
+  - stop after this many consecutive validation windows without improvement
+  - default: `20`
+- `--early-stopping-min-delta`
+  - minimum improvement threshold
+  - default: `1e-4`
+- `--warmup-epochs`
+  - warmup expressed in epochs if `--warmup-steps` is zero
+  - default: `0`
+- `--warmup-steps`
+  - explicit LR warmup in optimizer steps
+  - default: `1024`
+
+Gabor-only flags:
+
+- `--gabor-kernel-size`
+  - default: `15`
+- `--gabor-orientations`
+  - default: `8`
+- `--gabor-wavelengths`
+  - comma-separated wavelengths
+  - default: `4.0,8.0`
+- `--gabor-sigma`
+  - default: `4.5`
+- `--gabor-gamma`
+  - default: `0.6`
+
 ## Project History Summary
 
 This repo went through these major steps:
@@ -486,16 +689,16 @@ The repo is Git-initialized, and the dataset archive is tracked using Git LFS:
 
 - [Dataset_Final.zip](/home/anurag-basistha/Projects/ESD/Dataset_Final.zip) -> Git LFS
 - extracted dataset folder -> ignored
-- `Results/` -> ignored
-- `logs/` -> ignored
+- `Results/` -> Git LFS tracked when added
+- `logs/` -> Git LFS tracked when added
 
 ## Known Caveats
 
 - The dataset currently has 4 classes, not 3.
 - There is no separate `plastic` class anymore.
 - The Gabor model may help on texture-sensitive distinctions, but it is not guaranteed to outperform the plain model.
-- The 20 augmentation variants are deterministic per source image, not freshly resampled every epoch.
-- Validation and test also use the split-safe augmentation wrapper in the current setup.
+- The 16 augmentation variants are deterministic per source image, not freshly resampled every epoch.
+- Validation is clean and unaugmented, while test keeps the split-safe augmentation wrapper.
 - `efficientnet_b0` is much more practical than the previously attempted `efficientnet_v2_l`, but training can still be long because the pipeline includes SupCon, SAM, ArcFace, and progressive unfreezing.
 
 ## Recommended Mental Model
