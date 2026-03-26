@@ -54,6 +54,7 @@ Total images across all splits: **56,167**
 
 - [Dataset_Final.zip](/home/anurag-basistha/Projects/ESD/Dataset_Final.zip): dataset archive, tracked with Git LFS
 - [Dataset_Final](/home/anurag-basistha/Projects/ESD/Dataset_Final): extracted dataset used locally for training
+- [SMART_DUSTBIN_PLATFORM_SPEC.md](/home/anurag-basistha/Projects/ESD/SMART_DUSTBIN_PLATFORM_SPEC.md): formal mobile + backend + edge deployment specification for the smart dustbin system
 - [scripts/metric_learning_pipeline.py](/home/anurag-basistha/Projects/ESD/scripts/metric_learning_pipeline.py): shared training pipeline
 - [scripts/train_efficientnet_b0_progressive.py](/home/anurag-basistha/Projects/ESD/scripts/train_efficientnet_b0_progressive.py): plain EfficientNet-B0 trainer
 - [scripts/train_efficientnet_b0_gabor_progressive.py](/home/anurag-basistha/Projects/ESD/scripts/train_efficientnet_b0_gabor_progressive.py): Gabor variant
