@@ -229,8 +229,6 @@ Current defaults:
 - `eval-every-train-steps = 1024`
 - `warmup-steps = 1024`
 - `log-every-steps = 100`
-- `mixup-prob = 0.20`
-- `cutmix-prob = 0.20`
 
 Practical note:
 
@@ -323,23 +321,12 @@ Image-level augmentations:
 | Cutout hole aspect ratio | Applied per hole | `0.80-1.25` | `0.70-1.35` | centered at `1.0` |
 | Cutout fill color | Applied per hole | n/a | `0.0-1.0` | Gaussian around `0.5` with std `0.25` |
 
-Batch-level augmentations used during ArcFace training only:
-
-| Augmentation | Trigger | Safe Gaussian band | Hard clip | Mean / notes |
-|---|---|---|---|---|
-| MixUp probability | CLI-controlled | n/a | n/a | current default `0.20` |
-| MixUp minor fraction | When MixUp triggers | `0.10-0.25` | `0.00-0.40` | mean `0.16`, lambda is `1 - minor_fraction` |
-| CutMix probability | CLI-controlled | n/a | n/a | current default `0.20` |
-| CutMix patch area fraction | When CutMix triggers | `0.10-0.25` | `0.00-0.40` | mean `0.16` |
-| CutMix patch aspect ratio | When CutMix triggers, log-space | `0.80-1.25` | `0.60-1.60` | centered at `1.0` |
-
 Precision note:
 
 - every generated image passes through the full implemented augmentation pipeline
 - transform magnitudes are not sampled uniformly anymore; they are drawn from clipped Gaussians centered on the safe values and clipped at the hard ceilings
 - some transform parameters may still land near identity
 - some transforms are probabilistic, so this is not the same as “every transform always strongly applied”
-- MixUp and CutMix are applied only during ArcFace training, not during evaluation
 
 ## Logging
 
@@ -363,8 +350,7 @@ Step-level logs include:
 - batch size
 - cumulative samples seen
 - running loss
-- running accuracy for ArcFace training
-- batch mixing type and lambda when MixUp or CutMix is active
+- running thresholded and raw accuracy for ArcFace training
 - current learning rates
 
 Default log paths:
@@ -469,7 +455,7 @@ Core data and loading:
   - dataloader batches queued ahead per worker
   - default: PyTorch default when omitted
 
-Augmentation and batch mixing:
+Augmentation:
 
 - `--augment-repeats`
   - deterministic augmentation-bank size for `train` and `test`
@@ -477,12 +463,6 @@ Augmentation and batch mixing:
 - `--augment-gaussian-sigmas`
   - controls how tightly augmentation magnitudes cluster around the safe band
   - default: `2.0`
-- `--mixup-prob`
-  - batch-level MixUp probability during ArcFace training
-  - default: `0.20`
-- `--cutmix-prob`
-  - batch-level CutMix probability during ArcFace training
-  - default: `0.20`
 
 Embedding and projection:
 
@@ -533,9 +513,6 @@ Loss and classifier settings:
 - `--confidence-threshold`
   - accuracy threshold; predictions below this confidence are counted as incorrect in ArcFace metrics and final classification metrics
   - default: `0.80`
-- `--confidence-penalty-weight`
-  - extra differentiable penalty for correctly predicted, non-mixed ArcFace samples whose true-class confidence is below the threshold
-  - default: `0.25`
 
 Optimization:
 

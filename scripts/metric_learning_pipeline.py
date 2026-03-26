@@ -1232,12 +1232,8 @@ def limited_batches(loader: DataLoader, max_batches: int):
         yield batch
 
 
-def improved_metric(best_loss: float, best_acc: float, val_loss: float, val_acc: float, min_delta: float) -> bool:
-    if val_loss < best_loss - min_delta:
-        return True
-    if abs(val_loss - best_loss) <= min_delta and val_acc > best_acc:
-        return True
-    return False
+def improved_metric(best_loss: float, val_loss: float, min_delta: float) -> bool:
+    return val_loss < best_loss - min_delta
 
 
 def train_supcon_epoch(
@@ -1480,98 +1476,26 @@ def evaluate_supcon(
     return total_loss / max(1, total_seen)
 
 
-def sample_mix_probability(rng: random.Random, safe_low: float, safe_high: float, hard_low: float, hard_high: float, gaussian_sigmas: float) -> float:
-    return sample_safe_range(rng, safe_low, safe_high, hard_low, hard_high, gaussian_sigmas, mean=(safe_low + safe_high) / 2.0)
-
-
-def sample_mixup_lambda(rng: random.Random, gaussian_sigmas: float) -> float:
-    minor_fraction = sample_safe_range(rng, 0.10, 0.25, 0.0, 0.40, gaussian_sigmas, mean=0.16)
-    return 1.0 - minor_fraction
-
-
-def sample_cutmix_box(
-    batch_height: int,
-    batch_width: int,
-    rng: random.Random,
-    gaussian_sigmas: float,
-) -> tuple[int, int, int, int]:
-    area_fraction = sample_safe_range(rng, 0.10, 0.25, 0.0, 0.40, gaussian_sigmas, mean=0.16)
-    aspect = sample_log_safe_ratio(rng, 0.8, 1.25, 0.6, 1.6, gaussian_sigmas)
-    box_area = area_fraction * batch_height * batch_width
-    cut_h = max(1, int(round(math.sqrt(box_area / max(aspect, 1e-6)))))
-    cut_w = max(1, int(round(cut_h * aspect)))
-    cut_h = min(cut_h, batch_height)
-    cut_w = min(cut_w, batch_width)
-    cy = rng.randint(0, batch_height - 1)
-    cx = rng.randint(0, batch_width - 1)
-    y1 = max(0, cy - cut_h // 2)
-    y2 = min(batch_height, y1 + cut_h)
-    x1 = max(0, cx - cut_w // 2)
-    x2 = min(batch_width, x1 + cut_w)
-    return x1, y1, x2, y2
-
-
-def apply_batch_mix(
-    images: torch.Tensor,
-    labels: torch.Tensor,
-    args: argparse.Namespace,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float, str]:
-    if images.size(0) < 2:
-        return images, labels, labels, 1.0, "none"
-
-    rng = random
-    mixup_prob = args.mixup_prob
-    cutmix_prob = args.cutmix_prob
-    total_prob = mixup_prob + cutmix_prob
-    if total_prob <= 0.0 or rng.random() >= total_prob:
-        return images, labels, labels, 1.0, "none"
-
-    permutation = torch.randperm(images.size(0), device=images.device)
-    shuffled = images[permutation]
-    labels_b = labels[permutation]
-    chooser = rng.random() * total_prob
-
-    if chooser < cutmix_prob:
-        x1, y1, x2, y2 = sample_cutmix_box(images.size(2), images.size(3), rng, args.augment_gaussian_sigmas)
-        mixed = images.clone()
-        mixed[:, :, y1:y2, x1:x2] = shuffled[:, :, y1:y2, x1:x2]
-        box_area = max(0, x2 - x1) * max(0, y2 - y1)
-        lam = 1.0 - (box_area / float(images.size(2) * images.size(3)))
-        return mixed, labels, labels_b, lam, "cutmix"
-
-    lam = sample_mixup_lambda(rng, args.augment_gaussian_sigmas)
-    mixed = images * lam + shuffled * (1.0 - lam)
-    return mixed, labels, labels_b, lam, "mixup"
-
-
-def mixed_arcface_loss(
+def arcface_loss(
     model: MetricLearningEfficientNetB0,
     embeddings: torch.Tensor,
-    labels_a: torch.Tensor,
-    labels_b: torch.Tensor,
-    lam: float,
+    labels: torch.Tensor,
     criterion: nn.Module,
     args: argparse.Namespace,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    logits_a = model.classify(embeddings, labels_a)
-    base_loss = criterion(logits_a, labels_a)
-    if lam >= 0.999999:
-        if args.confidence_penalty_weight <= 0.0:
-            return base_loss, embeddings.new_zeros(())
-        plain_logits = model.classify(embeddings, labels=None)
-        probabilities = torch.softmax(plain_logits, dim=1)
-        true_class_confidence = probabilities.gather(1, labels_a.unsqueeze(1)).squeeze(1)
-        predictions = plain_logits.argmax(dim=1)
-        correct_mask = predictions == labels_a
-        if correct_mask.any():
-            confidence_gap = (args.confidence_threshold - true_class_confidence).clamp(min=0.0)
-            penalty = confidence_gap[correct_mask].square().mean()
-        else:
-            penalty = embeddings.new_zeros(())
-        return base_loss + args.confidence_penalty_weight * penalty, penalty
-    logits_b = model.classify(embeddings, labels_b)
-    base_loss = lam * base_loss + (1.0 - lam) * criterion(logits_b, labels_b)
-    return base_loss, embeddings.new_zeros(())
+    logits = model.classify(embeddings, labels)
+    base_loss = criterion(logits, labels)
+    plain_logits = model.classify(embeddings, labels=None)
+    probabilities = torch.softmax(plain_logits, dim=1)
+    true_class_confidence = probabilities.gather(1, labels.unsqueeze(1)).squeeze(1)
+    predictions = plain_logits.argmax(dim=1)
+    correct_mask = predictions == labels
+    if correct_mask.any():
+        confidence_gap = (args.confidence_threshold - true_class_confidence).clamp(min=0.0)
+        penalty = confidence_gap[correct_mask].square().mean()
+    else:
+        penalty = embeddings.new_zeros(())
+    return base_loss, penalty
 
 
 def confidence_qualified_predictions(logits: torch.Tensor, confidence_threshold: float) -> tuple[torch.Tensor, torch.Tensor]:
@@ -1589,22 +1513,6 @@ def confidence_qualified_correct_count(
     raw_correct = (predictions == labels)
     qualified_correct = raw_correct & confident_mask
     return int(qualified_correct.sum().item()), int(raw_correct.sum().item())
-
-
-def confidence_qualified_mixed_correct_count(
-    logits: torch.Tensor,
-    labels_a: torch.Tensor,
-    labels_b: torch.Tensor,
-    lam: float,
-    confidence_threshold: float,
-) -> tuple[float, float]:
-    predictions, confident_mask = confidence_qualified_predictions(logits, confidence_threshold)
-    raw_correct = lam * (predictions == labels_a).sum().item() + (1.0 - lam) * (predictions == labels_b).sum().item()
-    qualified_correct = (
-        lam * ((predictions == labels_a) & confident_mask).sum().item()
-        + (1.0 - lam) * ((predictions == labels_b) & confident_mask).sum().item()
-    )
-    return float(qualified_correct), float(raw_correct)
 
 
 def train_arcface_epoch(
@@ -1630,7 +1538,7 @@ def train_arcface_epoch(
     total_loss = 0.0
     total_correct = 0.0
     total_raw_correct = 0.0
-    total_penalty = 0.0
+    total_confidence_gap = 0.0
     total_seen = 0
     total_batches = min(len(loader), max_batches) if max_batches > 0 else len(loader)
     progress = tqdm(enumerate(limited_batches(loader, max_batches), start=1), total=total_batches, leave=False)
@@ -1638,20 +1546,18 @@ def train_arcface_epoch(
     for step_in_epoch, (images, labels) in progress:
         images = move_images_to_device(images, device, args)
         labels = labels.to(device, non_blocking=True)
-        mixed_images, labels_a, labels_b, lam, mix_type = apply_batch_mix(images, labels, args)
-
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
-            embeddings = model.encode(mixed_images)
-            loss, penalty = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion, args)
+            embeddings = model.encode(images)
+            loss, penalty = arcface_loss(model, embeddings, labels, criterion, args)
         if isinstance(optimizer, SAM):
             scaler.scale(loss).backward()
             scaler.unscale_(base_optimizer_for_scheduler(optimizer))
             optimizer.first_step(zero_grad=True)
 
             with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
-                embeddings = model.encode(mixed_images)
-                second_loss, second_penalty = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion, args)
+                embeddings = model.encode(images)
+                second_loss, second_penalty = arcface_loss(model, embeddings, labels, criterion, args)
             scaler.scale(second_loss).backward()
             scaler.unscale_(base_optimizer_for_scheduler(optimizer))
             optimizer.second_step(zero_grad=True)
@@ -1667,18 +1573,12 @@ def train_arcface_epoch(
 
         with torch.no_grad():
             with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
-                eval_logits = model.classify(model.encode(mixed_images), labels=None)
-            qualified_correct, raw_correct = confidence_qualified_mixed_correct_count(
-                eval_logits,
-                labels_a,
-                labels_b,
-                lam,
-                args.confidence_threshold,
-            )
+                eval_logits = model.classify(model.encode(images), labels=None)
+            qualified_correct, raw_correct = confidence_qualified_correct_count(eval_logits, labels, args.confidence_threshold)
 
         batch_size = labels.size(0)
         total_loss += second_loss.item() * batch_size
-        total_penalty += second_penalty.item() * batch_size
+        total_confidence_gap += second_penalty.item() * batch_size
         total_correct += qualified_correct
         total_raw_correct += raw_correct
         total_seen += batch_size
@@ -1701,11 +1601,8 @@ def train_arcface_epoch(
                 "running_loss": total_loss / max(1, total_seen),
                 "running_acc": total_correct / max(1, total_seen),
                 "running_raw_acc": total_raw_correct / max(1, total_seen),
-                "running_confidence_penalty": total_penalty / max(1, total_seen),
-                "mix_type": mix_type,
-                "mix_lambda": lam,
+                "running_confidence_gap": total_confidence_gap / max(1, total_seen),
                 "confidence_threshold": args.confidence_threshold,
-                "confidence_penalty_weight": args.confidence_penalty_weight,
                 "learning_rates": optimizer_learning_rates(optimizer),
             }
             log_json_event(log_path, event)
@@ -1734,13 +1631,13 @@ def train_arcface_steps(
     class_names: list[str],
     class_to_idx: dict[str, int],
     args: argparse.Namespace,
-) -> tuple[float, float, int, int]:
+) -> tuple[float, float, float, int, int]:
     model.train()
     freeze_frozen_batchnorms(backbone_modules)
     total_loss = 0.0
     total_correct = 0.0
     total_raw_correct = 0.0
-    total_penalty = 0.0
+    total_confidence_gap = 0.0
     total_seen = 0
     steps_done = 0
 
@@ -1753,20 +1650,18 @@ def train_arcface_steps(
         step_in_epoch = epoch_step_offset + local_step + 1
         images = move_images_to_device(images, device, args)
         labels = labels.to(device, non_blocking=True)
-        mixed_images, labels_a, labels_b, lam, mix_type = apply_batch_mix(images, labels, args)
-
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
-            embeddings = model.encode(mixed_images)
-            loss, penalty = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion, args)
+            embeddings = model.encode(images)
+            loss, penalty = arcface_loss(model, embeddings, labels, criterion, args)
         if isinstance(optimizer, SAM):
             scaler.scale(loss).backward()
             scaler.unscale_(base_optimizer_for_scheduler(optimizer))
             optimizer.first_step(zero_grad=True)
 
             with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
-                embeddings = model.encode(mixed_images)
-                second_loss, second_penalty = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion, args)
+                embeddings = model.encode(images)
+                second_loss, second_penalty = arcface_loss(model, embeddings, labels, criterion, args)
             scaler.scale(second_loss).backward()
             scaler.unscale_(base_optimizer_for_scheduler(optimizer))
             optimizer.second_step(zero_grad=True)
@@ -1782,18 +1677,12 @@ def train_arcface_steps(
 
         with torch.no_grad():
             with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
-                eval_logits = model.classify(model.encode(mixed_images), labels=None)
-            qualified_correct, raw_correct = confidence_qualified_mixed_correct_count(
-                eval_logits,
-                labels_a,
-                labels_b,
-                lam,
-                args.confidence_threshold,
-            )
+                eval_logits = model.classify(model.encode(images), labels=None)
+            qualified_correct, raw_correct = confidence_qualified_correct_count(eval_logits, labels, args.confidence_threshold)
 
         batch_size = labels.size(0)
         total_loss += second_loss.item() * batch_size
-        total_penalty += second_penalty.item() * batch_size
+        total_confidence_gap += second_penalty.item() * batch_size
         total_correct += qualified_correct
         total_raw_correct += raw_correct
         total_seen += batch_size
@@ -1832,16 +1721,19 @@ def train_arcface_steps(
                 "running_loss": total_loss / max(1, total_seen),
                 "running_acc": total_correct / max(1, total_seen),
                 "running_raw_acc": total_raw_correct / max(1, total_seen),
-                "running_confidence_penalty": total_penalty / max(1, total_seen),
-                "mix_type": mix_type,
-                "mix_lambda": lam,
+                "running_confidence_gap": total_confidence_gap / max(1, total_seen),
                 "confidence_threshold": args.confidence_threshold,
-                "confidence_penalty_weight": args.confidence_penalty_weight,
                 "learning_rates": optimizer_learning_rates(optimizer),
             }
             log_json_event(log_path, event)
 
-    return total_loss / max(1, total_seen), total_correct / max(1, total_seen), steps_done, total_seen
+    return (
+        total_loss / max(1, total_seen),
+        total_correct / max(1, total_seen),
+        total_raw_correct / max(1, total_seen),
+        steps_done,
+        total_seen,
+    )
 
 
 def evaluate_arcface(
@@ -1856,7 +1748,7 @@ def evaluate_arcface(
     split: str,
     eval_context: dict[str, object] | None = None,
     args: argparse.Namespace | None = None,
-) -> tuple[float, float]:
+) -> tuple[float, float, float]:
     model.eval()
     total_loss = 0.0
     total_correct = 0
@@ -1894,7 +1786,11 @@ def evaluate_arcface(
                         **eval_context,
                     },
                 )
-    return total_loss / max(1, total_seen), total_correct / max(1, total_seen)
+    return (
+        total_loss / max(1, total_seen),
+        total_correct / max(1, total_seen),
+        total_raw_correct / max(1, total_seen),
+    )
 
 
 def collect_logits_and_labels(
@@ -2267,8 +2163,6 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--prefetch-factor", type=int, default=None)
     parser.add_argument("--augment-repeats", type=int, default=16)
     parser.add_argument("--augment-gaussian-sigmas", type=float, default=2.0)
-    parser.add_argument("--mixup-prob", type=float, default=0.20)
-    parser.add_argument("--cutmix-prob", type=float, default=0.20)
     parser.add_argument("--embedding-dim", type=int, default=512)
     parser.add_argument("--projection-dim", type=int, default=256)
     parser.add_argument("--supcon-epochs", type=int, default=200)
@@ -2306,7 +2200,6 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--log-eval-every-steps", type=int, default=1000)
     parser.add_argument("--eval-every-train-steps", type=int, default=1024)
     parser.add_argument("--confidence-threshold", type=float, default=0.80)
-    parser.add_argument("--confidence-penalty-weight", type=float, default=0.25)
     parser.add_argument("--supcon-early-stopping-patience", type=int, default=10)
     parser.add_argument("--head-early-stopping-patience", type=int, default=10)
     parser.add_argument("--stage-early-stopping-patience", type=int, default=10)
@@ -2333,8 +2226,6 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         raise ValueError("--augment-repeats must be >= 1")
     if args.augment_gaussian_sigmas <= 0:
         raise ValueError("--augment-gaussian-sigmas must be > 0")
-    if args.mixup_prob < 0 or args.cutmix_prob < 0 or args.mixup_prob + args.cutmix_prob > 1.0:
-        raise ValueError("--mixup-prob and --cutmix-prob must be >= 0 and sum to <= 1")
     if args.log_every_steps < 1:
         raise ValueError("--log-every-steps must be >= 1")
     if args.log_eval_every_steps < 1:
@@ -2343,8 +2234,6 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         raise ValueError("--eval-every-train-steps must be >= 1")
     if args.confidence_threshold < 0.0 or args.confidence_threshold > 1.0:
         raise ValueError("--confidence-threshold must be between 0 and 1")
-    if args.confidence_penalty_weight < 0.0:
-        raise ValueError("--confidence-penalty-weight must be >= 0")
     if args.supcon_early_stopping_patience < 1:
         raise ValueError("--supcon-early-stopping-patience must be >= 1")
     if args.head_early_stopping_patience < 1:
@@ -2459,6 +2348,11 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
     total_params, _ = parameter_counts(model)
     best_val_loss = float(resume_checkpoint.get("best_val_loss", float("inf"))) if resume_checkpoint is not None else float("inf")
     best_val_acc = float(resume_checkpoint.get("best_val_acc", -1.0)) if resume_checkpoint is not None else -1.0
+    best_val_raw_acc = (
+        float(resume_checkpoint.get("best_val_raw_acc", resume_checkpoint.get("best_val_acc", -1.0)))
+        if resume_checkpoint is not None
+        else -1.0
+    )
     augmentation_epoch_cursor = int(resume_checkpoint.get("augmentation_epoch_cursor", 0)) if resume_checkpoint is not None else 0
     best_arcface_state = (
         resume_checkpoint.get("best_arcface_state", cpu_state_dict(model))
@@ -2672,6 +2566,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                         "train_progress": train_progress,
                         "best_val_loss": best_val_loss,
                         "best_val_acc": best_val_acc,
+                        "best_val_raw_acc": best_val_raw_acc,
                         "best_arcface_state": best_arcface_state,
                         "supcon_best_state": supcon_best_state,
                         "supcon_best_loss": supcon_best_loss,
@@ -2727,6 +2622,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             "history": history,
             "best_val_loss": best_val_loss,
             "best_val_acc": best_val_acc,
+            "best_val_raw_acc": best_val_raw_acc,
             "best_arcface_state": best_arcface_state,
             "supcon_best_state": supcon_best_state,
             "supcon_best_loss": supcon_best_loss,
@@ -2785,12 +2681,14 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                 scaler.load_state_dict(resume_state["scaler_state_dict"])
             phase_best_loss = float(resume_state.get("phase_best_loss", float("inf")))
             phase_best_acc = float(resume_state.get("phase_best_acc", -1.0))
+            phase_best_raw_acc = float(resume_state.get("phase_best_raw_acc", resume_state.get("phase_best_acc", -1.0)))
             phase_best_epoch = int(resume_state.get("phase_best_epoch", 0))
             phase_best_state = resume_checkpoint.get("phase_best_state", cpu_state_dict(model))
             phase_wait = int(resume_state.get("phase_wait", 0))
         else:
             phase_best_loss = float("inf")
             phase_best_acc = -1.0
+            phase_best_raw_acc = -1.0
             phase_best_epoch = 0
             phase_best_state = cpu_state_dict(model)
             phase_wait = 0
@@ -2809,6 +2707,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             epoch_samples_seen = 0
             epoch_loss_sum = 0.0
             epoch_correct_sum = 0.0
+            epoch_raw_correct_sum = 0.0
             validation_index = start_phase_validation_index if same_resume_phase and epoch == start_phase_epoch else 0
             phase_stopped = False
             progress = tqdm(total=phase_steps_per_epoch, leave=False)
@@ -2819,7 +2718,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                 train_sampler.set_epoch(augmentation_epoch_cursor)
                 train_sampler.set_start_index(step_start_index)
                 phase_iterator = iter(limited_batches(train_loader, args.max_train_batches))
-                window_train_loss, window_train_acc, steps_done, window_samples = train_arcface_steps(
+                window_train_loss, window_train_acc, window_train_raw_acc, steps_done, window_samples = train_arcface_steps(
                     model=model,
                     batch_iterator=phase_iterator,
                     step_limit=step_window,
@@ -2849,6 +2748,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                 epoch_samples_seen += window_samples
                 epoch_loss_sum += window_train_loss * window_samples
                 epoch_correct_sum += window_train_acc * window_samples
+                epoch_raw_correct_sum += window_train_raw_acc * window_samples
                 validation_index += 1
                 progress.update(steps_done)
                 progress.set_postfix(
@@ -2871,7 +2771,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                         "eval_batches": val_eval_batches,
                     },
                 )
-                val_loss, val_acc = evaluate_arcface(
+                val_loss, val_acc, val_raw_acc = evaluate_arcface(
                     model=model,
                     loader=val_loader,
                     criterion=arcface_criterion,
@@ -2906,20 +2806,23 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                         "eval_batches": val_eval_batches,
                         "val_loss": val_loss,
                         "val_acc": val_acc,
+                        "val_raw_acc": val_raw_acc,
                     },
                 )
-                if improved_metric(phase_best_loss, phase_best_acc, val_loss, val_acc, args.early_stopping_min_delta):
+                if improved_metric(phase_best_loss, val_loss, args.early_stopping_min_delta):
                     phase_best_loss = val_loss
                     phase_best_acc = val_acc
+                    phase_best_raw_acc = val_raw_acc
                     phase_best_epoch = epoch
                     phase_best_state = cpu_state_dict(model)
                     phase_wait = 0
                 else:
                     phase_wait += 1
 
-                if improved_metric(best_val_loss, best_val_acc, val_loss, val_acc, args.early_stopping_min_delta):
+                if improved_metric(best_val_loss, val_loss, args.early_stopping_min_delta):
                     best_val_loss = val_loss
                     best_val_acc = val_acc
+                    best_val_raw_acc = val_raw_acc
                     best_arcface_state = cpu_state_dict(model)
 
                 row = {
@@ -2937,12 +2840,16 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                     "total_params": total_params,
                     "window_train_loss": window_train_loss,
                     "window_train_acc": window_train_acc,
+                    "window_train_raw_acc": window_train_raw_acc,
                     "epoch_running_train_loss": epoch_loss_sum / max(1, epoch_samples_seen),
                     "epoch_running_train_acc": epoch_correct_sum / max(1, epoch_samples_seen),
+                    "epoch_running_train_raw_acc": epoch_raw_correct_sum / max(1, epoch_samples_seen),
                     "val_loss": val_loss,
                     "val_acc": val_acc,
+                    "val_raw_acc": val_raw_acc,
                     "phase_best_val_loss": phase_best_loss,
                     "phase_best_val_acc": phase_best_acc,
+                    "phase_best_val_raw_acc": phase_best_raw_acc,
                     "checks_without_improvement": phase_wait,
                     "patience_limit": phase_patience,
                     "patience_unit": "validation_window",
@@ -2960,6 +2867,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                         "history": history,
                         "best_val_loss": best_val_loss,
                         "best_val_acc": best_val_acc,
+                        "best_val_raw_acc": best_val_raw_acc,
                         "best_arcface_state": best_arcface_state,
                         "supcon_best_state": supcon_best_state,
                         "supcon_best_loss": supcon_best_loss,
@@ -2977,6 +2885,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                             "validation_index": validation_index,
                             "phase_best_loss": phase_best_loss,
                             "phase_best_acc": phase_best_acc,
+                            "phase_best_raw_acc": phase_best_raw_acc,
                             "phase_best_epoch": phase_best_epoch,
                             "phase_wait": phase_wait,
                             "optimizer_state_dict": optimizer.state_dict(),
@@ -2995,6 +2904,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                         "best_epoch_in_phase": phase_best_epoch,
                         "phase_best_val_loss": phase_best_loss,
                         "phase_best_val_acc": phase_best_acc,
+                        "phase_best_val_raw_acc": phase_best_raw_acc,
                         "stopped_at_epoch_step": epoch_steps_done,
                         "global_train_step": train_progress["global_train_step"],
                     }
@@ -3022,6 +2932,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                 "history": history,
                 "best_val_loss": best_val_loss,
                 "best_val_acc": best_val_acc,
+                "best_val_raw_acc": best_val_raw_acc,
                 "best_arcface_state": best_arcface_state,
                 "supcon_best_state": supcon_best_state,
                 "supcon_best_loss": supcon_best_loss,
@@ -3124,6 +3035,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             "phase_plan": [asdict(phase) for phase in phases],
             "best_val_loss": best_val_loss,
             "best_val_acc": best_val_acc,
+            "best_val_raw_acc": best_val_raw_acc,
         },
         "optimization": {
             "optimizer": "AdamW + SAM",
@@ -3134,17 +3046,15 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             "warmup_epochs": args.warmup_epochs,
             "warmup_steps": args.warmup_steps,
         },
-        "batch_mixing": {
-            "mixup_prob": args.mixup_prob,
-            "cutmix_prob": args.cutmix_prob,
-        },
         "image_augmentation": {
             "gaussian_sigmas": args.augment_gaussian_sigmas,
             "shadow_probability": SHADOW_PROBABILITY,
             "glare_probability": GLARE_PROBABILITY,
         },
         "early_stopping": {
-            "patience": args.early_stopping_patience,
+            "supcon_patience": args.supcon_early_stopping_patience,
+            "head_patience": args.head_early_stopping_patience,
+            "stage_patience": args.stage_early_stopping_patience,
             "min_delta": args.early_stopping_min_delta,
             "monitor": "val_loss",
             "check_unit": "validation_window",
@@ -3168,7 +3078,20 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
     save_json(output_dir / "metrics.json", metrics)
     save_json(output_dir / "validation_metrics.json", val_metrics)
     save_json(output_dir / "test_metrics.json", test_metrics)
-    final_event = {"event": "run_finished", "validation_accuracy": val_metrics["accuracy"], "test_accuracy": test_metrics["accuracy"]}
+    final_event = {
+        "event": "run_finished",
+        "validation_accuracy": val_metrics["accuracy"],
+        "validation_raw_accuracy": val_metrics["raw_accuracy"],
+        "test_accuracy": test_metrics["accuracy"],
+        "test_raw_accuracy": test_metrics["raw_accuracy"],
+    }
     log_json_event(log_path, final_event)
-    print({"validation_accuracy": val_metrics["accuracy"], "test_accuracy": test_metrics["accuracy"]})
+    print(
+        {
+            "validation_accuracy": val_metrics["accuracy"],
+            "validation_raw_accuracy": val_metrics["raw_accuracy"],
+            "test_accuracy": test_metrics["accuracy"],
+            "test_raw_accuracy": test_metrics["raw_accuracy"],
+        }
+    )
     return 0

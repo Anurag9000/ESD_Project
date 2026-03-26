@@ -8,8 +8,14 @@ Dataset_Final_original_backup.zip
 runs/smoke_*/
 Results/smoke_*/
 logs/smoke_*
+/Results/
+/logs/
 
 .DS_Store
+/post-checkout
+/post-commit
+/post-merge
+/pre-push
 
 # Accidental Android Studio / Gradle project clutter at repo root
 /.gradle/

@@ -66,10 +66,6 @@ The augmentation stack includes only image-classification-safe transforms:
 - specular glare overlays
 - cutout / coarse occlusion
 
-ArcFace training also uses conservative batch mixing:
-- `MixUp`
-- `CutMix`
-
 ## Outputs
 
 Each run writes result artifacts to its output directory under `Results/...`:
