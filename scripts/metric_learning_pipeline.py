@@ -2286,12 +2286,12 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
     )
 
     train_loader = make_loader(train_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False, sampler=train_sampler)
-    val_loader = make_loader(val_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False)
-    test_loader = make_loader(test_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False)
+    val_loader = make_loader(val_dataset, args.batch_size, 0, None, shuffle=False)
+    test_loader = make_loader(test_dataset, args.batch_size, 0, None, shuffle=False)
     supcon_train_loader = make_loader(
         supcon_train_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False, sampler=supcon_sampler
     )
-    supcon_val_loader = make_loader(supcon_val_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False)
+    supcon_val_loader = make_loader(supcon_val_dataset, args.batch_size, 0, None, shuffle=False)
     log_json_event(
         log_path,
         {
