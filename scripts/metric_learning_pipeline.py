@@ -1514,12 +1514,60 @@ def mixed_arcface_loss(
     labels_b: torch.Tensor,
     lam: float,
     criterion: nn.Module,
-) -> torch.Tensor:
+    args: argparse.Namespace,
+) -> tuple[torch.Tensor, torch.Tensor]:
     logits_a = model.classify(embeddings, labels_a)
+    base_loss = criterion(logits_a, labels_a)
     if lam >= 0.999999:
-        return criterion(logits_a, labels_a)
+        if args.confidence_penalty_weight <= 0.0:
+            return base_loss, embeddings.new_zeros(())
+        plain_logits = model.classify(embeddings, labels=None)
+        probabilities = torch.softmax(plain_logits, dim=1)
+        true_class_confidence = probabilities.gather(1, labels_a.unsqueeze(1)).squeeze(1)
+        predictions = plain_logits.argmax(dim=1)
+        correct_mask = predictions == labels_a
+        if correct_mask.any():
+            confidence_gap = (args.confidence_threshold - true_class_confidence).clamp(min=0.0)
+            penalty = confidence_gap[correct_mask].square().mean()
+        else:
+            penalty = embeddings.new_zeros(())
+        return base_loss + args.confidence_penalty_weight * penalty, penalty
     logits_b = model.classify(embeddings, labels_b)
-    return lam * criterion(logits_a, labels_a) + (1.0 - lam) * criterion(logits_b, labels_b)
+    base_loss = lam * base_loss + (1.0 - lam) * criterion(logits_b, labels_b)
+    return base_loss, embeddings.new_zeros(())
+
+
+def confidence_qualified_predictions(logits: torch.Tensor, confidence_threshold: float) -> tuple[torch.Tensor, torch.Tensor]:
+    probabilities = torch.softmax(logits, dim=1)
+    confidence, predictions = probabilities.max(dim=1)
+    return predictions, confidence >= confidence_threshold
+
+
+def confidence_qualified_correct_count(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    confidence_threshold: float,
+) -> tuple[int, int]:
+    predictions, confident_mask = confidence_qualified_predictions(logits, confidence_threshold)
+    raw_correct = (predictions == labels)
+    qualified_correct = raw_correct & confident_mask
+    return int(qualified_correct.sum().item()), int(raw_correct.sum().item())
+
+
+def confidence_qualified_mixed_correct_count(
+    logits: torch.Tensor,
+    labels_a: torch.Tensor,
+    labels_b: torch.Tensor,
+    lam: float,
+    confidence_threshold: float,
+) -> tuple[float, float]:
+    predictions, confident_mask = confidence_qualified_predictions(logits, confidence_threshold)
+    raw_correct = lam * (predictions == labels_a).sum().item() + (1.0 - lam) * (predictions == labels_b).sum().item()
+    qualified_correct = (
+        lam * ((predictions == labels_a) & confident_mask).sum().item()
+        + (1.0 - lam) * ((predictions == labels_b) & confident_mask).sum().item()
+    )
+    return float(qualified_correct), float(raw_correct)
 
 
 def train_arcface_epoch(
@@ -1542,7 +1590,9 @@ def train_arcface_epoch(
     model.train()
     freeze_frozen_batchnorms(backbone_modules)
     total_loss = 0.0
-    total_correct = 0
+    total_correct = 0.0
+    total_raw_correct = 0.0
+    total_penalty = 0.0
     total_seen = 0
     total_batches = min(len(loader), max_batches) if max_batches > 0 else len(loader)
     progress = tqdm(enumerate(limited_batches(loader, max_batches), start=1), total=total_batches, leave=False)
@@ -1555,14 +1605,14 @@ def train_arcface_epoch(
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
             embeddings = model.encode(mixed_images)
-            loss = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion)
+            loss, penalty = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion, args)
         if isinstance(optimizer, SAM):
             loss.backward()
             optimizer.first_step(zero_grad=True)
 
             with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
                 embeddings = model.encode(mixed_images)
-                second_loss = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion)
+                second_loss, second_penalty = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion, args)
             second_loss.backward()
             optimizer.second_step(zero_grad=True)
         else:
@@ -1570,18 +1620,24 @@ def train_arcface_epoch(
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
             second_loss = loss
+            second_penalty = penalty
         scheduler.step()
 
         with torch.no_grad():
             eval_logits = model.classify(model.encode(mixed_images), labels=None)
-            predictions = eval_logits.argmax(dim=1)
+            qualified_correct, raw_correct = confidence_qualified_mixed_correct_count(
+                eval_logits,
+                labels_a,
+                labels_b,
+                lam,
+                args.confidence_threshold,
+            )
 
         batch_size = labels.size(0)
         total_loss += second_loss.item() * batch_size
-        total_correct += (
-            lam * (predictions == labels_a).sum().item()
-            + (1.0 - lam) * (predictions == labels_b).sum().item()
-        )
+        total_penalty += second_penalty.item() * batch_size
+        total_correct += qualified_correct
+        total_raw_correct += raw_correct
         total_seen += batch_size
         train_progress["global_train_step"] += 1
         train_progress["global_source_samples_seen"] += batch_size
@@ -1601,8 +1657,12 @@ def train_arcface_epoch(
                 "global_source_samples_seen": train_progress["global_source_samples_seen"],
                 "running_loss": total_loss / max(1, total_seen),
                 "running_acc": total_correct / max(1, total_seen),
+                "running_raw_acc": total_raw_correct / max(1, total_seen),
+                "running_confidence_penalty": total_penalty / max(1, total_seen),
                 "mix_type": mix_type,
                 "mix_lambda": lam,
+                "confidence_threshold": args.confidence_threshold,
+                "confidence_penalty_weight": args.confidence_penalty_weight,
                 "learning_rates": optimizer_learning_rates(optimizer),
             }
             log_json_event(log_path, event)
@@ -1632,6 +1692,8 @@ def train_arcface_steps(
     freeze_frozen_batchnorms(backbone_modules)
     total_loss = 0.0
     total_correct = 0.0
+    total_raw_correct = 0.0
+    total_penalty = 0.0
     total_seen = 0
     steps_done = 0
 
@@ -1649,14 +1711,14 @@ def train_arcface_steps(
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
             embeddings = model.encode(mixed_images)
-            loss = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion)
+            loss, penalty = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion, args)
         if isinstance(optimizer, SAM):
             loss.backward()
             optimizer.first_step(zero_grad=True)
 
             with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
                 embeddings = model.encode(mixed_images)
-                second_loss = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion)
+                second_loss, second_penalty = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion, args)
             second_loss.backward()
             optimizer.second_step(zero_grad=True)
         else:
@@ -1664,18 +1726,24 @@ def train_arcface_steps(
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
             second_loss = loss
+            second_penalty = penalty
         scheduler.step()
 
         with torch.no_grad():
             eval_logits = model.classify(model.encode(mixed_images), labels=None)
-            predictions = eval_logits.argmax(dim=1)
+            qualified_correct, raw_correct = confidence_qualified_mixed_correct_count(
+                eval_logits,
+                labels_a,
+                labels_b,
+                lam,
+                args.confidence_threshold,
+            )
 
         batch_size = labels.size(0)
         total_loss += second_loss.item() * batch_size
-        total_correct += (
-            lam * (predictions == labels_a).sum().item()
-            + (1.0 - lam) * (predictions == labels_b).sum().item()
-        )
+        total_penalty += second_penalty.item() * batch_size
+        total_correct += qualified_correct
+        total_raw_correct += raw_correct
         total_seen += batch_size
         steps_done += 1
         train_progress["global_train_step"] += 1
@@ -1695,8 +1763,12 @@ def train_arcface_steps(
                 "global_source_samples_seen": train_progress["global_source_samples_seen"],
                 "running_loss": total_loss / max(1, total_seen),
                 "running_acc": total_correct / max(1, total_seen),
+                "running_raw_acc": total_raw_correct / max(1, total_seen),
+                "running_confidence_penalty": total_penalty / max(1, total_seen),
                 "mix_type": mix_type,
                 "mix_lambda": lam,
+                "confidence_threshold": args.confidence_threshold,
+                "confidence_penalty_weight": args.confidence_penalty_weight,
                 "learning_rates": optimizer_learning_rates(optimizer),
             }
             log_json_event(log_path, event)
@@ -1720,6 +1792,7 @@ def evaluate_arcface(
     model.eval()
     total_loss = 0.0
     total_correct = 0
+    total_raw_correct = 0
     total_seen = 0
     eval_context = dict(eval_context or {})
     with torch.no_grad():
@@ -1731,7 +1804,9 @@ def evaluate_arcface(
             logits = model.classify(embeddings, labels=None)
             loss = criterion(margin_logits, labels)
             total_loss += loss.item() * labels.size(0)
-            total_correct += (logits.argmax(dim=1) == labels).sum().item()
+            qualified_correct, raw_correct = confidence_qualified_correct_count(logits, labels, args.confidence_threshold)
+            total_correct += qualified_correct
+            total_raw_correct += raw_correct
             total_seen += labels.size(0)
             if eval_step % log_every_eval_steps == 0:
                 log_json_event(
@@ -1745,6 +1820,8 @@ def evaluate_arcface(
                         "samples_seen": total_seen,
                         "running_loss": total_loss / max(1, total_seen),
                         "running_acc": total_correct / max(1, total_seen),
+                        "running_raw_acc": total_raw_correct / max(1, total_seen),
+                        "confidence_threshold": args.confidence_threshold,
                         **eval_context,
                     },
                 )
@@ -1858,9 +1935,16 @@ def macro_weighted(values: list[float | None], weights: list[float]) -> tuple[fl
     return macro, weighted
 
 
-def compute_classification_metrics(logits: np.ndarray, targets: np.ndarray, class_names: list[str]) -> dict[str, Any]:
+def compute_classification_metrics(
+    logits: np.ndarray,
+    targets: np.ndarray,
+    class_names: list[str],
+    confidence_threshold: float,
+) -> dict[str, Any]:
     probabilities = torch.softmax(torch.from_numpy(logits), dim=1).numpy()
     predictions = logits.argmax(axis=1)
+    confidence = probabilities.max(axis=1)
+    qualified_matches = (predictions == targets) & (confidence >= confidence_threshold)
     num_classes = len(class_names)
     support = np.bincount(targets, minlength=num_classes)
     cm = confusion_matrix_from_predictions(targets, predictions, num_classes)
@@ -1899,7 +1983,8 @@ def compute_classification_metrics(logits: np.ndarray, targets: np.ndarray, clas
         roc_aucs.append(roc_auc)
         pr_aucs.append(pr_auc)
 
-    accuracy = float((predictions == targets).mean())
+    raw_accuracy = float((predictions == targets).mean())
+    accuracy = float(qualified_matches.mean())
     balanced_accuracy = float(sum(recalls) / num_classes)
     macro_roc_auc, weighted_roc_auc = macro_weighted(roc_aucs, support.tolist())
     macro_pr_auc, weighted_pr_auc = macro_weighted(pr_aucs, support.tolist())
@@ -1925,6 +2010,9 @@ def compute_classification_metrics(logits: np.ndarray, targets: np.ndarray, clas
     return {
         "num_classes": num_classes,
         "num_samples": int(total_samples),
+        "confidence_threshold": confidence_threshold,
+        "rejection_rate": float((confidence < confidence_threshold).mean()),
+        "raw_accuracy": raw_accuracy,
         "accuracy": accuracy,
         "top1_accuracy": top1,
         "top3_accuracy": top3,
@@ -2070,6 +2158,8 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--log-every-steps", type=int, default=100)
     parser.add_argument("--log-eval-every-steps", type=int, default=1000)
     parser.add_argument("--eval-every-train-steps", type=int, default=1024)
+    parser.add_argument("--confidence-threshold", type=float, default=0.80)
+    parser.add_argument("--confidence-penalty-weight", type=float, default=0.25)
     parser.add_argument("--early-stopping-patience", type=int, default=20)
     parser.add_argument("--early-stopping-min-delta", type=float, default=1e-4)
     parser.add_argument("--warmup-epochs", type=int, default=0)
@@ -2102,6 +2192,10 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         raise ValueError("--log-eval-every-steps must be >= 1")
     if args.eval_every_train_steps < 1:
         raise ValueError("--eval-every-train-steps must be >= 1")
+    if args.confidence_threshold < 0.0 or args.confidence_threshold > 1.0:
+        raise ValueError("--confidence-threshold must be between 0 and 1")
+    if args.confidence_penalty_weight < 0.0:
+        raise ValueError("--confidence-penalty-weight must be >= 0")
     if args.early_stopping_patience < 1:
         raise ValueError("--early-stopping-patience must be >= 1")
 
@@ -2783,8 +2877,8 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
     )
     log_json_event(log_path, {"event": "final_evaluation_finished", "split": "test", "eval_batches": test_eval_batches})
 
-    val_metrics = compute_classification_metrics(val_logits, val_targets, train_dataset.classes)
-    test_metrics = compute_classification_metrics(test_logits, test_targets, train_dataset.classes)
+    val_metrics = compute_classification_metrics(val_logits, val_targets, train_dataset.classes, args.confidence_threshold)
+    test_metrics = compute_classification_metrics(test_logits, test_targets, train_dataset.classes, args.confidence_threshold)
 
     final_checkpoint = {
         "model_state_dict": model.state_dict(),
