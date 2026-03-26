@@ -651,6 +651,7 @@ class MetricLearningEfficientNetB0(nn.Module):
         args: argparse.Namespace,
     ) -> None:
         super().__init__()
+        self.classifier_head_type = args.classifier_head
         weights = EfficientNet_B0_Weights.DEFAULT if weights_mode == "default" else None
         self.front_end: nn.Module
         if use_gabor:
@@ -675,6 +676,7 @@ class MetricLearningEfficientNetB0(nn.Module):
             nn.GELU(),
             nn.Linear(projection_dim, projection_dim),
         )
+        self.ce_head = nn.Linear(embedding_dim, num_classes)
         self.arcface_head = ArcMarginProduct(embedding_dim, num_classes, s=args.arcface_scale, m=args.arcface_margin)
 
     def forward_backbone(self, x: torch.Tensor) -> torch.Tensor:
@@ -697,6 +699,8 @@ class MetricLearningEfficientNetB0(nn.Module):
         return F.normalize(self.projection_head(embeddings), dim=1)
 
     def classify(self, embeddings: torch.Tensor, labels: torch.Tensor | None = None) -> torch.Tensor:
+        if self.classifier_head_type == "ce":
+            return self.ce_head(embeddings)
         return self.arcface_head(embeddings, labels)
 
 
@@ -965,8 +969,9 @@ def build_datasets(
 
 def build_phase_plan(total_modules: int, args: argparse.Namespace) -> list[PhaseSpec]:
     phases: list[PhaseSpec] = []
+    phase_prefix = args.classifier_head
     if args.head_epochs > 0:
-        phases.append(PhaseSpec(name="arcface_head_only", unfrozen_backbone_modules=0, max_epochs=args.head_epochs))
+        phases.append(PhaseSpec(name=f"{phase_prefix}_head_only", unfrozen_backbone_modules=0, max_epochs=args.head_epochs))
     count = 0
     phase_index = 0
     while count < total_modules and args.stage_epochs > 0:
@@ -974,7 +979,7 @@ def build_phase_plan(total_modules: int, args: argparse.Namespace) -> list[Phase
         phase_index += 1
         if args.max_progressive_phases and phase_index > args.max_progressive_phases:
             break
-        phases.append(PhaseSpec(name=f"arcface_last_{count}_modules", unfrozen_backbone_modules=count, max_epochs=args.stage_epochs))
+        phases.append(PhaseSpec(name=f"{phase_prefix}_last_{count}_modules", unfrozen_backbone_modules=count, max_epochs=args.stage_epochs))
     return phases
 
 
@@ -1001,6 +1006,8 @@ def set_trainability_for_supcon(
         parameter.requires_grad = True
     for parameter in model.embedding_norm.parameters():
         parameter.requires_grad = True
+    for parameter in model.ce_head.parameters():
+        parameter.requires_grad = False
     for parameter in model.arcface_head.parameters():
         parameter.requires_grad = False
     if not isinstance(model.front_end, IdentityFrontEnd):
@@ -1027,8 +1034,10 @@ def set_trainability_for_arcface(
         parameter.requires_grad = True
     for parameter in model.embedding_norm.parameters():
         parameter.requires_grad = True
+    for parameter in model.ce_head.parameters():
+        parameter.requires_grad = model.classifier_head_type == "ce"
     for parameter in model.arcface_head.parameters():
-        parameter.requires_grad = True
+        parameter.requires_grad = model.classifier_head_type == "arcface"
     for parameter in model.projection_head.parameters():
         parameter.requires_grad = False
     if not isinstance(model.front_end, IdentityFrontEnd):
@@ -1123,6 +1132,7 @@ def build_arcface_optimizer(model: MetricLearningEfficientNetB0, args: argparse.
         head_params.extend(parameter for parameter in model.front_end.parameters() if parameter.requires_grad)
     head_params.extend(parameter for parameter in model.embedding.parameters() if parameter.requires_grad)
     head_params.extend(parameter for parameter in model.embedding_norm.parameters() if parameter.requires_grad)
+    head_params.extend(parameter for parameter in model.ce_head.parameters() if parameter.requires_grad)
     head_params.extend(parameter for parameter in model.arcface_head.parameters() if parameter.requires_grad)
     head_ids = {id(parameter) for parameter in head_params}
     backbone_params = [
@@ -2000,6 +2010,44 @@ def compute_classification_metrics(
     }
 
 
+def compute_correct_confidence_by_class(
+    logits: np.ndarray,
+    targets: np.ndarray,
+    class_names: list[str],
+) -> dict[str, Any]:
+    probabilities = torch.softmax(torch.from_numpy(logits), dim=1).numpy()
+    predictions = logits.argmax(axis=1)
+    confidence = probabilities.max(axis=1)
+
+    per_class: dict[str, Any] = {}
+    all_correct_confidences: list[float] = []
+    for class_index, class_name in enumerate(class_names):
+        class_mask = targets == class_index
+        correct_mask = class_mask & (predictions == targets)
+        correct_confidences = confidence[correct_mask]
+        class_confidences = confidence[class_mask]
+        all_correct_confidences.extend(correct_confidences.tolist())
+        per_class[class_name] = {
+            "support": int(class_mask.sum()),
+            "correct_count": int(correct_mask.sum()),
+            "average_confidence_on_correct_predictions": (
+                float(correct_confidences.mean()) if correct_confidences.size > 0 else None
+            ),
+            "average_confidence_all_samples_of_class": (
+                float(class_confidences.mean()) if class_confidences.size > 0 else None
+            ),
+        }
+
+    return {
+        "num_classes": len(class_names),
+        "num_samples": int(targets.shape[0]),
+        "overall_average_confidence_on_correct_predictions": (
+            float(np.mean(all_correct_confidences)) if all_correct_confidences else None
+        ),
+        "per_class": per_class,
+    }
+
+
 def save_json(path: Path, payload: object) -> None:
     with path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
@@ -2173,6 +2221,7 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--unfreeze-chunk-size", type=int, default=20)
     parser.add_argument("--max-progressive-phases", type=int, default=0)
     parser.add_argument("--supcon-temperature", type=float, default=0.07)
+    parser.add_argument("--classifier-head", choices=("arcface", "ce"), default="arcface")
     parser.add_argument("--arcface-margin", type=float, default=0.35)
     parser.add_argument("--arcface-scale", type=float, default=30.0)
     parser.add_argument("--supcon-head-lr", type=float, default=3e-4)
@@ -2985,6 +3034,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
 
     val_metrics = compute_classification_metrics(val_logits, val_targets, train_dataset.classes, args.confidence_threshold)
     test_metrics = compute_classification_metrics(test_logits, test_targets, train_dataset.classes, args.confidence_threshold)
+    test_correct_confidence = compute_correct_confidence_by_class(test_logits, test_targets, train_dataset.classes)
 
     final_checkpoint = {
         "model_state_dict": model.state_dict(),
@@ -2999,6 +3049,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
 
     metrics = {
         "model_name": model_name,
+        "classifier_head": args.classifier_head,
         "device": str(device),
         "output_dir": str(output_dir),
         "log_file": str(log_path),
@@ -3078,6 +3129,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
     save_json(output_dir / "metrics.json", metrics)
     save_json(output_dir / "validation_metrics.json", val_metrics)
     save_json(output_dir / "test_metrics.json", test_metrics)
+    save_json(output_dir / "test_correct_confidence_by_class.json", test_correct_confidence)
     final_event = {
         "event": "run_finished",
         "validation_accuracy": val_metrics["accuracy"],
