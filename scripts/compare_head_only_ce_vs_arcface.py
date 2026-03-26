@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,21 @@ def configure_run(base_args, classifier_head: str, run_output_dir: Path, run_log
     args.resume_phase_index = 0
     args.resume_phase_name = ""
     return args
+
+
+def export_named_checkpoints(run_output_dir: Path, comparison_root: Path, classifier_head: str) -> dict[str, str]:
+    exported: dict[str, str] = {}
+    checkpoint_mapping = {
+        "best.pt": comparison_root / f"{classifier_head}_head_only_best.pth",
+        "last.pt": comparison_root / f"{classifier_head}_head_only_last.pth",
+        "step_last.pt": comparison_root / f"{classifier_head}_head_only_step_last.pth",
+    }
+    for source_name, destination_path in checkpoint_mapping.items():
+        source_path = run_output_dir / source_name
+        if source_path.exists():
+            shutil.copy2(source_path, destination_path)
+            exported[source_name] = str(destination_path)
+    return exported
 
 
 def compare_confidence_reports(
@@ -126,6 +142,9 @@ def main() -> int:
     if run_experiment(arcface_args, use_gabor=False) != 0:
         return 1
 
+    ce_exported_checkpoints = export_named_checkpoints(ce_output_dir, comparison_root, "ce")
+    arcface_exported_checkpoints = export_named_checkpoints(arcface_output_dir, comparison_root, "arcface")
+
     ce_metrics = load_json(ce_output_dir / "metrics.json")
     arcface_metrics = load_json(arcface_output_dir / "metrics.json")
     ce_confidence = load_json(ce_output_dir / "test_correct_confidence_by_class.json")
@@ -156,12 +175,14 @@ def main() -> int:
             "ce": {
                 "output_dir": str(ce_output_dir),
                 "log_file": str(ce_log_path),
+                "exported_checkpoints": ce_exported_checkpoints,
                 "test_raw_accuracy": ce_raw_accuracy,
                 "test_thresholded_accuracy": ce_metrics["test_metrics"]["accuracy"],
             },
             "arcface": {
                 "output_dir": str(arcface_output_dir),
                 "log_file": str(arcface_log_path),
+                "exported_checkpoints": arcface_exported_checkpoints,
                 "test_raw_accuracy": arcface_raw_accuracy,
                 "test_thresholded_accuracy": arcface_metrics["test_metrics"]["accuracy"],
             },
