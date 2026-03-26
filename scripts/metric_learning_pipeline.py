@@ -16,7 +16,7 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn.functional as F
-from PIL import Image
+from PIL import Image, ImageFilter
 from torch import nn
 from torch.optim import AdamW, Optimizer
 from torch.utils.data import DataLoader, Dataset, Sampler
@@ -32,6 +32,11 @@ IMAGENET_STD = (0.229, 0.224, 0.225)
 SPLIT_OFFSETS = {"train": 0, "val": 10_000_000, "test": 20_000_000}
 SHADOW_PROBABILITY = 0.20
 GLARE_PROBABILITY = 0.25
+MOTION_BLUR_PROBABILITY = 0.18
+DEFOCUS_BLUR_PROBABILITY = 0.18
+RESOLUTION_DEGRADE_PROBABILITY = 0.20
+TRUNCATION_PROBABILITY = 0.20
+SMUDGE_PROBABILITY = 0.18
 
 
 @dataclass
@@ -251,6 +256,49 @@ def random_perspective(image: Image.Image, rng: random.Random, gaussian_sigmas: 
     )
 
 
+def apply_resolution_degradation(image: Image.Image, rng: random.Random, gaussian_sigmas: float) -> Image.Image:
+    if rng.random() >= RESOLUTION_DEGRADE_PROBABILITY:
+        return image
+    width, height = image.size
+    scale = sample_safe_range(rng, 0.45, 0.80, 0.25, 1.0, gaussian_sigmas, mean=0.60)
+    down_w = max(8, int(round(width * scale)))
+    down_h = max(8, int(round(height * scale)))
+    down_mode = InterpolationMode.BILINEAR if rng.random() < 0.5 else InterpolationMode.BICUBIC
+    up_mode = InterpolationMode.BILINEAR if rng.random() < 0.7 else InterpolationMode.BICUBIC
+    image = TF.resize(image, [down_h, down_w], interpolation=down_mode)
+    return TF.resize(image, [height, width], interpolation=up_mode)
+
+
+def apply_border_truncation(image: Image.Image, rng: random.Random, gaussian_sigmas: float) -> Image.Image:
+    if rng.random() >= TRUNCATION_PROBABILITY:
+        return image
+    width, height = image.size
+    keep_fraction = sample_safe_range(rng, 0.85, 1.0, 0.70, 1.0, gaussian_sigmas, mean=0.93)
+    keep_ratio = sample_log_safe_ratio(rng, 0.85, 1.15, 0.70, 1.30, gaussian_sigmas)
+    crop_w = min(width, max(2, int(round(width * keep_fraction * math.sqrt(keep_ratio)))))
+    crop_h = min(height, max(2, int(round(height * keep_fraction / math.sqrt(keep_ratio)))))
+    max_left = max(0, width - crop_w)
+    max_top = max(0, height - crop_h)
+
+    anchor = rng.choice(("left", "right", "top", "bottom", "top_left", "top_right", "bottom_left", "bottom_right"))
+    if anchor in {"left", "top_left", "bottom_left"}:
+        left = 0
+    elif anchor in {"right", "top_right", "bottom_right"}:
+        left = max_left
+    else:
+        left = rng.randint(0, max_left)
+
+    if anchor in {"top", "top_left", "top_right"}:
+        top = 0
+    elif anchor in {"bottom", "bottom_left", "bottom_right"}:
+        top = max_top
+    else:
+        top = rng.randint(0, max_top)
+
+    image = TF.crop(image, top=top, left=left, height=crop_h, width=crop_w)
+    return TF.resize(image, [height, width], interpolation=InterpolationMode.BILINEAR)
+
+
 def jpeg_compress(image: Image.Image, rng: random.Random, gaussian_sigmas: float) -> Image.Image:
     quality = int(round(sample_safe_range(rng, 50.0, 100.0, 35.0, 100.0, gaussian_sigmas, mean=75.0)))
     buffer = io.BytesIO()
@@ -258,6 +306,59 @@ def jpeg_compress(image: Image.Image, rng: random.Random, gaussian_sigmas: float
     buffer.seek(0)
     compressed = Image.open(buffer)
     return compressed.convert("RGB")
+
+
+def motion_blur_kernel(kernel_size: int, angle_degrees: float) -> torch.Tensor:
+    base = Image.new("F", (kernel_size, kernel_size), 0.0)
+    center = kernel_size // 2
+    for x in range(kernel_size):
+        base.putpixel((x, center), 1.0)
+    rotated = base.rotate(angle_degrees, resample=Image.Resampling.BILINEAR)
+    kernel = torch.from_numpy(np.array(rotated, dtype=np.float32))
+    kernel = kernel / max(float(kernel.sum()), 1e-6)
+    return kernel
+
+
+def apply_motion_blur(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: float) -> torch.Tensor:
+    if rng.random() >= MOTION_BLUR_PROBABILITY:
+        return tensor
+    length = sample_safe_range(rng, 3.0, 9.0, 1.0, 15.0, gaussian_sigmas, mean=5.5)
+    kernel_size = max(3, int(round(length)))
+    if kernel_size % 2 == 0:
+        kernel_size += 1
+    angle = rng.uniform(0.0, 180.0)
+    kernel = motion_blur_kernel(kernel_size, angle).to(dtype=tensor.dtype, device=tensor.device)
+    kernel = kernel.view(1, 1, kernel_size, kernel_size).repeat(3, 1, 1, 1)
+    blurred = F.conv2d(tensor.unsqueeze(0), kernel, padding=kernel_size // 2, groups=3)
+    return blurred.squeeze(0)
+
+
+def defocus_blur_kernel(radius: float) -> torch.Tensor:
+    radius = max(radius, 0.5)
+    kernel_size = max(3, int(math.ceil(radius * 2.0)) * 2 + 1)
+    center = kernel_size // 2
+    yy, xx = torch.meshgrid(
+        torch.arange(kernel_size, dtype=torch.float32),
+        torch.arange(kernel_size, dtype=torch.float32),
+        indexing="ij",
+    )
+    dist = torch.sqrt((xx - center) ** 2 + (yy - center) ** 2)
+    kernel = (dist <= radius).float()
+    kernel = kernel / max(float(kernel.sum()), 1e-6)
+    return kernel
+
+
+def apply_defocus_blur(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: float) -> torch.Tensor:
+    if rng.random() >= DEFOCUS_BLUR_PROBABILITY:
+        return tensor
+    radius = sample_safe_range(rng, 0.8, 1.8, 0.0, 3.0, gaussian_sigmas, mean=1.2)
+    if radius < 0.25:
+        return tensor
+    kernel = defocus_blur_kernel(radius).to(dtype=tensor.dtype, device=tensor.device)
+    kernel_size = kernel.shape[0]
+    kernel = kernel.view(1, 1, kernel_size, kernel_size).repeat(3, 1, 1, 1)
+    blurred = F.conv2d(tensor.unsqueeze(0), kernel, padding=kernel_size // 2, groups=3)
+    return blurred.squeeze(0)
 
 
 def apply_gaussian_noise(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: float) -> torch.Tensor:
@@ -300,6 +401,36 @@ def apply_illumination_gradient(tensor: torch.Tensor, rng: random.Random, gaussi
         ramp = torch.linspace(start, end, steps=height, dtype=tensor.dtype).view(1, height, 1)
         mask = ramp.expand(1, height, width)
     return tensor * mask
+
+
+def apply_smudge_overlay(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: float) -> torch.Tensor:
+    if rng.random() >= SMUDGE_PROBABILITY:
+        return tensor
+    _, height, width = tensor.shape
+    ys = torch.linspace(-1.0, 1.0, steps=height, dtype=tensor.dtype, device=tensor.device)
+    xs = torch.linspace(-1.0, 1.0, steps=width, dtype=tensor.dtype, device=tensor.device)
+    yy, xx = torch.meshgrid(ys, xs, indexing="ij")
+    overlay = torch.zeros((height, width), dtype=tensor.dtype, device=tensor.device)
+    blob_count = rng.randint(1, 3)
+    for _ in range(blob_count):
+        cx = sample_safe_range(rng, -0.45, 0.45, -0.85, 0.85, gaussian_sigmas, mean=0.0)
+        cy = sample_safe_range(rng, -0.45, 0.45, -0.85, 0.85, gaussian_sigmas, mean=0.0)
+        sigma_x = sample_safe_range(rng, 0.10, 0.22, 0.04, 0.35, gaussian_sigmas, mean=0.15)
+        sigma_y = sample_safe_range(rng, 0.07, 0.18, 0.03, 0.30, gaussian_sigmas, mean=0.12)
+        opacity = sample_safe_range(rng, 0.05, 0.14, 0.0, 0.25, gaussian_sigmas, mean=0.09)
+        blob = torch.exp(-(((xx - cx) ** 2) / (2 * sigma_x * sigma_x) + ((yy - cy) ** 2) / (2 * sigma_y * sigma_y)))
+        overlay = torch.maximum(overlay, blob * opacity)
+    stain_color = torch.tensor(
+        [
+            sample_safe_range(rng, 0.32, 0.55, 0.20, 0.65, gaussian_sigmas, mean=0.43),
+            sample_safe_range(rng, 0.28, 0.46, 0.18, 0.56, gaussian_sigmas, mean=0.36),
+            sample_safe_range(rng, 0.18, 0.34, 0.10, 0.44, gaussian_sigmas, mean=0.24),
+        ],
+        dtype=tensor.dtype,
+        device=tensor.device,
+    ).view(3, 1, 1)
+    overlay = overlay.unsqueeze(0)
+    return tensor * (1.0 - overlay) + stain_color * overlay
 
 
 def apply_shadow_overlay(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: float, shadow_prob: float) -> torch.Tensor:
@@ -381,6 +512,7 @@ def apply_cutout(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: floa
 
 def augmented_tensor_from_image(image: Image.Image, image_size: int, rng: random.Random, gaussian_sigmas: float) -> torch.Tensor:
     image = random_resized_crop(image, image_size, rng, gaussian_sigmas)
+    image = apply_border_truncation(image, rng, gaussian_sigmas)
 
     if rng.random() < 0.5:
         image = TF.hflip(image)
@@ -411,6 +543,7 @@ def augmented_tensor_from_image(image: Image.Image, image_size: int, rng: random
     image = TF.adjust_gamma(image, sample_safe_range(rng, 0.85, 1.2, 0.75, 1.3, gaussian_sigmas, mean=1.0), gain=1.0)
     image = TF.adjust_sharpness(image, sample_safe_range(rng, 0.7, 1.4, 0.5, 1.8, gaussian_sigmas, mean=1.0))
     image = jpeg_compress(image, rng, gaussian_sigmas)
+    image = apply_resolution_degradation(image, rng, gaussian_sigmas)
 
     tensor = TF.to_tensor(image)
     blur_sigma = sample_safe_range(rng, 0.0, 1.0, 0.0, 1.8, gaussian_sigmas, mean=0.5)
@@ -421,12 +554,15 @@ def augmented_tensor_from_image(image: Image.Image, image_size: int, rng: random
             kernel_size=[kernel_size, kernel_size],
             sigma=[blur_sigma, blur_sigma],
         )
+    tensor = apply_motion_blur(tensor, rng, gaussian_sigmas)
+    tensor = apply_defocus_blur(tensor, rng, gaussian_sigmas)
     tensor = apply_gaussian_noise(tensor, rng, gaussian_sigmas)
     tensor = apply_channel_shift(tensor, rng, gaussian_sigmas)
     tensor = apply_grayscale_mix(tensor, rng, gaussian_sigmas)
     tensor = apply_illumination_gradient(tensor, rng, gaussian_sigmas)
     tensor = apply_shadow_overlay(tensor, rng, gaussian_sigmas, shadow_prob=SHADOW_PROBABILITY)
     tensor = apply_specular_glare(tensor, rng, gaussian_sigmas, glare_prob=GLARE_PROBABILITY)
+    tensor = apply_smudge_overlay(tensor, rng, gaussian_sigmas)
     tensor = apply_cutout(tensor, rng, gaussian_sigmas)
     tensor = tensor.clamp(0.0, 1.0)
     return TF.normalize(tensor, IMAGENET_MEAN, IMAGENET_STD)
@@ -1852,6 +1988,36 @@ def load_resume_checkpoint(path: Path) -> tuple[dict[str, Any] | None, str | Non
         return None, f"{type(exc).__name__}: {exc}. Corrupted checkpoint moved to {corrupt_path.name}"
 
 
+def checkpoint_state_for_mode(resume_checkpoint: dict[str, Any], resume_mode: str) -> dict[str, torch.Tensor]:
+    if resume_mode == "global_best":
+        return resume_checkpoint.get("best_arcface_state", resume_checkpoint["model_state_dict"])
+    if resume_mode == "phase_best":
+        return resume_checkpoint.get(
+            "phase_best_state",
+            resume_checkpoint.get("best_arcface_state", resume_checkpoint["model_state_dict"]),
+        )
+    return resume_checkpoint["model_state_dict"]
+
+
+def resolve_phase_start_index(
+    args: argparse.Namespace,
+    phases: list[PhaseSpec],
+    resume_state: dict[str, Any],
+) -> int:
+    if args.resume_phase_name:
+        for index, phase in enumerate(phases, start=1):
+            if phase.name == args.resume_phase_name:
+                return index
+        raise ValueError(f"--resume-phase-name {args.resume_phase_name!r} did not match any phase")
+    if args.resume_phase_index > 0:
+        if args.resume_phase_index > len(phases):
+            raise ValueError(f"--resume-phase-index must be <= {len(phases)}")
+        return args.resume_phase_index
+    if resume_state.get("stage") == "arcface":
+        return int(resume_state.get("phase_index", 1))
+    return 1
+
+
 def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     description = (
         "Metric-learning EfficientNet B0 training with deterministic 16x split-safe augmentation, "
@@ -1894,6 +2060,10 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--weights", choices=("default", "none"), default="default")
     parser.add_argument("--output-dir", default="Results/metric_learning_experiment")
     parser.add_argument("--log-file", default="logs/metric_learning_experiment.log.jsonl")
+    parser.add_argument("--resume-checkpoint", default="")
+    parser.add_argument("--resume-mode", choices=("latest", "global_best", "phase_best"), default="latest")
+    parser.add_argument("--resume-phase-index", type=int, default=0)
+    parser.add_argument("--resume-phase-name", default="")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-train-batches", type=int, default=0)
     parser.add_argument("--max-eval-batches", type=int, default=0)
@@ -1944,9 +2114,10 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_path = output_dir / "last.pt"
+    resume_path = Path(args.resume_checkpoint) if args.resume_checkpoint else checkpoint_path
     log_path = Path(args.log_file)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    resume_checkpoint, resume_warning = load_resume_checkpoint(checkpoint_path)
+    resume_checkpoint, resume_warning = load_resume_checkpoint(resume_path)
     if resume_checkpoint is None:
         log_path.write_text("", encoding="utf-8")
     log_json_event(
@@ -1956,6 +2127,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             "model_name": model_name,
             "output_dir": str(output_dir),
             "log_file": str(log_path),
+            "resume_path": str(resume_path),
             "args": vars(args),
         },
     )
@@ -2021,7 +2193,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         args=args,
     ).to(device=device, dtype=model_dtype)
     if resume_checkpoint is not None:
-        model.load_state_dict(resume_checkpoint["model_state_dict"])
+        model.load_state_dict(checkpoint_state_for_mode(resume_checkpoint, args.resume_mode))
     backbone_modules = backbone_leaf_modules(model)
     train_progress = (
         dict(resume_checkpoint.get("train_progress", {}))
@@ -2047,6 +2219,22 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         else cpu_state_dict(model)
     )
     resume_state = dict(resume_checkpoint.get("resume", {})) if resume_checkpoint is not None else {}
+    resume_from_best_phase = resume_checkpoint is not None and args.resume_mode != "latest"
+    if resume_from_best_phase:
+        resume_state = {
+            "stage": "arcface",
+            "epoch": 1,
+            "epoch_step_completed": 0,
+            "validation_index": 0,
+        }
+        log_json_event(
+            log_path,
+            {
+                "event": "resume_best_mode",
+                "resume_mode": args.resume_mode,
+                "resume_path": str(resume_path),
+            },
+        )
 
     supcon_loss = SupConLoss(args.supcon_temperature)
     thawed_supcon = set_trainability_for_supcon(model, backbone_modules, args.supcon_unfreeze_backbone_modules)
@@ -2080,9 +2268,15 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         supcon_completed = False
     elif resume_state.get("stage") == "arcface":
         supcon_completed = True
-    elif args.skip_supcon:
+    elif args.skip_supcon or resume_from_best_phase:
         supcon_completed = True
-        log_json_event(log_path, {"event": "supcon_skipped"})
+        log_json_event(
+            log_path,
+            {
+                "event": "supcon_skipped",
+                "reason": "resume_from_best_phase" if resume_from_best_phase else "flag",
+            },
+        )
 
     if not supcon_completed:
         supcon_steps_full_epoch = steps_per_epoch_for_dataset(supcon_train_dataset, args.batch_size, args.max_train_batches)
@@ -2281,10 +2475,10 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             },
         },
     )
-    resume_phase_index = int(resume_state.get("phase_index", 1)) if resume_state.get("stage") == "arcface" else 1
-    start_phase_epoch = int(resume_state.get("epoch", 1)) if resume_state.get("stage") == "arcface" else 1
-    start_phase_epoch_step = int(resume_state.get("epoch_step_completed", 0)) if resume_state.get("stage") == "arcface" else 0
-    start_phase_validation_index = int(resume_state.get("validation_index", 0)) if resume_state.get("stage") == "arcface" else 0
+    resume_phase_index = resolve_phase_start_index(args, phases, resume_state)
+    start_phase_epoch = int(resume_state.get("epoch", 1)) if resume_state.get("stage") == "arcface" and not resume_from_best_phase else 1
+    start_phase_epoch_step = int(resume_state.get("epoch_step_completed", 0)) if resume_state.get("stage") == "arcface" and not resume_from_best_phase else 0
+    start_phase_validation_index = int(resume_state.get("validation_index", 0)) if resume_state.get("stage") == "arcface" and not resume_from_best_phase else 0
 
     for phase_index, phase in enumerate(phases, start=1):
         if phase_index < resume_phase_index:

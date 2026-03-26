@@ -258,30 +258,76 @@ This means:
 - those variants are independent from one another in parameter sampling
 - the same source image cannot leak across splits
 
-What the augmentation pipeline currently includes:
+Current split behavior:
 
-- random resized crop
-- horizontal flip
-- vertical flip
-- affine transform
-- perspective transform
-- brightness change
-- contrast change
-- saturation change
-- hue change
-- gamma change
-- sharpness change
-- JPEG compression
-- Gaussian blur
-- additive Gaussian noise
-- channel shift
-- grayscale mixing
-- illumination gradient
-- shadow overlay
-- specular glare / reflection-like highlight overlay
-- cutout / coarse occlusion
-- MixUp during ArcFace training
-- CutMix during ArcFace training
+- `train`: augmented, `16x`
+- `val`: clean preprocessing only, no augmentation
+- `test`: augmented, `16x`
+
+Augmentation definitions live in:
+
+- [scripts/metric_learning_pipeline.py](/home/anurag-basistha/Projects/ESD/scripts/metric_learning_pipeline.py)
+
+Image-level augmentations:
+
+| Augmentation | Current behavior | Safe Gaussian band | Hard clip | Mean / notes |
+|---|---|---|---|---|
+| Random resized crop retained area | Always applied | `0.70-1.00` | `0.55-1.00` | mean `0.85` |
+| Random resized crop aspect ratio | Always applied, log-space | `0.80-1.25` | `0.70-1.35` | centered at `1.0` |
+| Horizontal flip | Probabilistic | n/a | n/a | probability `0.50` |
+| Vertical flip | Probabilistic | n/a | n/a | probability `0.05` |
+| Translation X/Y | Always applied through affine | `+/-0.10` | `+/-0.15` | symmetric around `0` |
+| Rotation | Always applied through affine | `+/-15 deg` | `+/-25 deg` | symmetric around `0` |
+| Scale | Always applied through affine | `0.85-1.15` | `0.75-1.25` | mean `1.0` |
+| Shear X/Y | Always applied through affine | `+/-8 deg` | `+/-12 deg` | symmetric around `0` |
+| Perspective distortion | Always applied | `0.05-0.15` | `0.00-0.20` | mean `0.10` |
+| Border truncation retained fraction | Probabilistic | `0.85-1.00` | `0.70-1.00` | probability `0.20`, mean `0.93` |
+| Border truncation aspect ratio | Applied when truncation triggers, log-space | `0.85-1.15` | `0.70-1.30` | centered at `1.0` |
+| Brightness | Always applied | `0.80-1.20` | `0.65-1.35` | mean `1.0` |
+| Contrast | Always applied | `0.80-1.25` | `0.70-1.40` | mean `1.0` |
+| Saturation | Always applied | `0.80-1.25` | `0.70-1.35` | mean `1.0` |
+| Hue | Always applied | `+/-0.04` | `+/-0.08` | symmetric around `0` |
+| Gamma | Always applied | `0.85-1.20` | `0.75-1.30` | mean `1.0` |
+| Sharpness | Always applied | `0.70-1.40` | `0.50-1.80` | mean `1.0` |
+| JPEG quality | Always applied | `50-100` | `35-100` | mean `75` |
+| Resolution degradation scale | Probabilistic downsample-upsample | `0.45-0.80` | `0.25-1.00` | probability `0.20`, mean `0.60` |
+| Gaussian blur sigma | Applied if sigma `> 0.05` | `0.00-1.00` | `0.00-1.80` | mean `0.50` |
+| Motion blur length | Probabilistic | `3-9 px` | `1-15 px` | probability `0.18`, mean `5.5`, random direction |
+| Defocus blur radius | Probabilistic | `0.8-1.8 px` | `0.0-3.0 px` | probability `0.18`, mean `1.2` |
+| Gaussian noise std | Always sampled | `0.00-0.02` | `0.00-0.06` | mean `0.01` |
+| Channel shift per channel | Always applied | `+/-0.02` | `+/-0.05` | symmetric around `0` |
+| Grayscale mix | Always applied | `0.00-0.08` | `0.00-0.15` | mean `0.04` |
+| Illumination gradient endpoints | Always applied | `0.80-1.05` | `0.70-1.10` | mean `0.95` |
+| Shadow overlay darkness | Probabilistic | `0.82-0.95` | `0.70-1.00` | probability `0.20`, mean `0.90` |
+| Shadow midpoint | Applied when shadow triggers | `0.35-0.65` | `0.15-0.85` | mean `0.50` |
+| Shadow softness | Applied when shadow triggers | `0.08-0.18` | `0.03-0.30` | mean `0.12` |
+| Specular glare center X/Y | Probabilistic | `-0.4 to 0.4` | `-0.8 to 0.8` | probability `0.25`, mean `0.0` |
+| Specular glare sigma X | Applied when glare triggers | `0.08-0.18` | `0.03-0.30` | mean `0.12` |
+| Specular glare sigma Y | Applied when glare triggers | `0.05-0.14` | `0.02-0.22` | mean `0.09` |
+| Specular glare intensity | Applied when glare triggers | `0.10-0.22` | `0.00-0.35` | mean `0.16` |
+| Specular glare color scale R | Applied when glare triggers | `0.95-1.05` | `0.90-1.10` | mean `1.00` |
+| Specular glare color scale G | Applied when glare triggers | `0.97-1.08` | `0.90-1.12` | mean `1.02` |
+| Specular glare color scale B | Applied when glare triggers | `1.00-1.12` | `0.92-1.18` | mean `1.06` |
+| Smudge center X/Y | Probabilistic | `-0.45 to 0.45` | `-0.85 to 0.85` | probability `0.18`, mean `0.0` |
+| Smudge sigma X | Applied when smudge triggers | `0.10-0.22` | `0.04-0.35` | mean `0.15` |
+| Smudge sigma Y | Applied when smudge triggers | `0.07-0.18` | `0.03-0.30` | mean `0.12` |
+| Smudge opacity | Applied when smudge triggers | `0.05-0.14` | `0.00-0.25` | mean `0.09` |
+| Smudge stain color R | Applied when smudge triggers | `0.32-0.55` | `0.20-0.65` | mean `0.43` |
+| Smudge stain color G | Applied when smudge triggers | `0.28-0.46` | `0.18-0.56` | mean `0.36` |
+| Smudge stain color B | Applied when smudge triggers | `0.18-0.34` | `0.10-0.44` | mean `0.24` |
+| Cutout total occlusion fraction | Always sampled | `0.08-0.15` | `0.02-0.25` | mean `0.11`, 1 to 3 holes |
+| Cutout hole aspect ratio | Applied per hole | `0.80-1.25` | `0.70-1.35` | centered at `1.0` |
+| Cutout fill color | Applied per hole | n/a | `0.0-1.0` | Gaussian around `0.5` with std `0.25` |
+
+Batch-level augmentations used during ArcFace training only:
+
+| Augmentation | Trigger | Safe Gaussian band | Hard clip | Mean / notes |
+|---|---|---|---|---|
+| MixUp probability | CLI-controlled | n/a | n/a | current default `0.20` |
+| MixUp minor fraction | When MixUp triggers | `0.10-0.25` | `0.00-0.40` | mean `0.16`, lambda is `1 - minor_fraction` |
+| CutMix probability | CLI-controlled | n/a | n/a | current default `0.20` |
+| CutMix patch area fraction | When CutMix triggers | `0.10-0.25` | `0.00-0.40` | mean `0.16` |
+| CutMix patch aspect ratio | When CutMix triggers, log-space | `0.80-1.25` | `0.60-1.60` | centered at `1.0` |
 
 Precision note:
 
