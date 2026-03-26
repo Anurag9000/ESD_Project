@@ -1142,11 +1142,15 @@ def optimizer_learning_rates(optimizer: Optimizer) -> list[float]:
 
 
 def model_dtype_for_args(args: argparse.Namespace) -> torch.dtype:
-    return torch.float64 if args.precision == 64 else torch.float32
+    return torch.float64 if str(args.precision) == "64" else torch.float32
 
 
 def autocast_enabled(device: torch.device, args: argparse.Namespace) -> bool:
-    return False
+    return device.type == "cuda" and str(args.precision) == "mixed"
+
+
+def build_grad_scaler(device: torch.device, args: argparse.Namespace) -> torch.amp.GradScaler:
+    return torch.amp.GradScaler("cuda", enabled=autocast_enabled(device, args))
 
 
 def move_images_to_device(images: torch.Tensor, device: torch.device, args: argparse.Namespace) -> torch.Tensor:
@@ -1236,6 +1240,7 @@ def train_supcon_epoch(
     loader: DataLoader,
     criterion: SupConLoss,
     optimizer: Optimizer,
+    scaler: torch.amp.GradScaler,
     scheduler: WarmupCosineScheduler,
     device: torch.device,
     backbone_modules: list[tuple[str, nn.Module]],
@@ -1267,7 +1272,8 @@ def train_supcon_epoch(
             stacked = torch.stack([proj_one, proj_two], dim=1)
             loss = criterion(stacked, labels)
         if isinstance(optimizer, SAM):
-            loss.backward()
+            scaler.scale(loss).backward()
+            scaler.unscale_(base_optimizer_for_scheduler(optimizer))
             optimizer.first_step(zero_grad=True)
 
             with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
@@ -1277,11 +1283,14 @@ def train_supcon_epoch(
                 proj_two = model.supcon_projection(emb_two)
                 stacked = torch.stack([proj_one, proj_two], dim=1)
                 second_loss = criterion(stacked, labels)
-            second_loss.backward()
+            scaler.scale(second_loss).backward()
+            scaler.unscale_(base_optimizer_for_scheduler(optimizer))
             optimizer.second_step(zero_grad=True)
+            scaler.update()
         else:
-            loss.backward()
-            optimizer.step()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             optimizer.zero_grad(set_to_none=True)
             second_loss = loss
         scheduler.step()
@@ -1317,6 +1326,7 @@ def train_supcon_steps(
     step_limit: int,
     criterion: SupConLoss,
     optimizer: Optimizer,
+    scaler: torch.amp.GradScaler,
     scheduler: WarmupCosineScheduler,
     device: torch.device,
     backbone_modules: list[tuple[str, nn.Module]],
@@ -1353,7 +1363,8 @@ def train_supcon_steps(
             stacked = torch.stack([proj_one, proj_two], dim=1)
             loss = criterion(stacked, labels)
         if isinstance(optimizer, SAM):
-            loss.backward()
+            scaler.scale(loss).backward()
+            scaler.unscale_(base_optimizer_for_scheduler(optimizer))
             optimizer.first_step(zero_grad=True)
 
             with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
@@ -1363,11 +1374,14 @@ def train_supcon_steps(
                 proj_two = model.supcon_projection(emb_two)
                 stacked = torch.stack([proj_one, proj_two], dim=1)
                 second_loss = criterion(stacked, labels)
-            second_loss.backward()
+            scaler.scale(second_loss).backward()
+            scaler.unscale_(base_optimizer_for_scheduler(optimizer))
             optimizer.second_step(zero_grad=True)
+            scaler.update()
         else:
-            loss.backward()
-            optimizer.step()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             optimizer.zero_grad(set_to_none=True)
             second_loss = loss
         scheduler.step()
@@ -1419,11 +1433,12 @@ def evaluate_supcon(
             view_one = move_images_to_device(view_one, device, args) if args is not None else view_one.to(device, non_blocking=True)
             view_two = move_images_to_device(view_two, device, args) if args is not None else view_two.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
-            emb_one = model.encode(view_one)
-            emb_two = model.encode(view_two)
-            proj_one = model.supcon_projection(emb_one)
-            proj_two = model.supcon_projection(emb_two)
-            loss = criterion(torch.stack([proj_one, proj_two], dim=1), labels)
+            with torch.amp.autocast("cuda", enabled=args is not None and autocast_enabled(device, args)):
+                emb_one = model.encode(view_one)
+                emb_two = model.encode(view_two)
+                proj_one = model.supcon_projection(emb_one)
+                proj_two = model.supcon_projection(emb_two)
+                loss = criterion(torch.stack([proj_one, proj_two], dim=1), labels)
             total_loss += loss.item() * labels.size(0)
             total_seen += labels.size(0)
             if eval_step % log_every_eval_steps == 0:
@@ -1575,6 +1590,7 @@ def train_arcface_epoch(
     loader: DataLoader,
     criterion: nn.Module,
     optimizer: Optimizer,
+    scaler: torch.amp.GradScaler,
     scheduler: WarmupCosineScheduler,
     device: torch.device,
     backbone_modules: list[tuple[str, nn.Module]],
@@ -1607,24 +1623,29 @@ def train_arcface_epoch(
             embeddings = model.encode(mixed_images)
             loss, penalty = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion, args)
         if isinstance(optimizer, SAM):
-            loss.backward()
+            scaler.scale(loss).backward()
+            scaler.unscale_(base_optimizer_for_scheduler(optimizer))
             optimizer.first_step(zero_grad=True)
 
             with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
                 embeddings = model.encode(mixed_images)
                 second_loss, second_penalty = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion, args)
-            second_loss.backward()
+            scaler.scale(second_loss).backward()
+            scaler.unscale_(base_optimizer_for_scheduler(optimizer))
             optimizer.second_step(zero_grad=True)
+            scaler.update()
         else:
-            loss.backward()
-            optimizer.step()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             optimizer.zero_grad(set_to_none=True)
             second_loss = loss
             second_penalty = penalty
         scheduler.step()
 
         with torch.no_grad():
-            eval_logits = model.classify(model.encode(mixed_images), labels=None)
+            with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
+                eval_logits = model.classify(model.encode(mixed_images), labels=None)
             qualified_correct, raw_correct = confidence_qualified_mixed_correct_count(
                 eval_logits,
                 labels_a,
@@ -1676,6 +1697,7 @@ def train_arcface_steps(
     step_limit: int,
     criterion: nn.Module,
     optimizer: Optimizer,
+    scaler: torch.amp.GradScaler,
     scheduler: WarmupCosineScheduler,
     device: torch.device,
     backbone_modules: list[tuple[str, nn.Module]],
@@ -1713,24 +1735,29 @@ def train_arcface_steps(
             embeddings = model.encode(mixed_images)
             loss, penalty = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion, args)
         if isinstance(optimizer, SAM):
-            loss.backward()
+            scaler.scale(loss).backward()
+            scaler.unscale_(base_optimizer_for_scheduler(optimizer))
             optimizer.first_step(zero_grad=True)
 
             with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
                 embeddings = model.encode(mixed_images)
                 second_loss, second_penalty = mixed_arcface_loss(model, embeddings, labels_a, labels_b, lam, criterion, args)
-            second_loss.backward()
+            scaler.scale(second_loss).backward()
+            scaler.unscale_(base_optimizer_for_scheduler(optimizer))
             optimizer.second_step(zero_grad=True)
+            scaler.update()
         else:
-            loss.backward()
-            optimizer.step()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             optimizer.zero_grad(set_to_none=True)
             second_loss = loss
             second_penalty = penalty
         scheduler.step()
 
         with torch.no_grad():
-            eval_logits = model.classify(model.encode(mixed_images), labels=None)
+            with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
+                eval_logits = model.classify(model.encode(mixed_images), labels=None)
             qualified_correct, raw_correct = confidence_qualified_mixed_correct_count(
                 eval_logits,
                 labels_a,
@@ -1799,10 +1826,11 @@ def evaluate_arcface(
         for eval_step, (images, labels) in enumerate(limited_batches(loader, max_batches), start=1):
             images = move_images_to_device(images, device, args) if args is not None else images.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
-            embeddings = model.encode(images)
-            margin_logits = model.classify(embeddings, labels)
-            logits = model.classify(embeddings, labels=None)
-            loss = criterion(margin_logits, labels)
+            with torch.amp.autocast("cuda", enabled=args is not None and autocast_enabled(device, args)):
+                embeddings = model.encode(images)
+                margin_logits = model.classify(embeddings, labels)
+                logits = model.classify(embeddings, labels=None)
+                loss = criterion(margin_logits, labels)
             total_loss += loss.item() * labels.size(0)
             qualified_correct, raw_correct = confidence_qualified_correct_count(logits, labels, args.confidence_threshold)
             total_correct += qualified_correct
@@ -1845,8 +1873,9 @@ def collect_logits_and_labels(
         total_seen = 0
         for eval_step, (images, labels) in enumerate(limited_batches(loader, max_batches), start=1):
             images = move_images_to_device(images, device, args) if args is not None else images.to(device, non_blocking=True)
-            embeddings = model.encode(images)
-            logits = model.classify(embeddings, labels=None)
+            with torch.amp.autocast("cuda", enabled=args is not None and autocast_enabled(device, args)):
+                embeddings = model.encode(images)
+                logits = model.classify(embeddings, labels=None)
             logits_list.append(logits.cpu())
             labels_list.append(labels.cpu())
             total_seen += labels.size(0)
@@ -2140,7 +2169,7 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--backbone-lr", type=float, default=1e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--optimizer", choices=["sam", "adamw"], default="sam")
-    parser.add_argument("--precision", choices=[32, 64], type=int, default=32)
+    parser.add_argument("--precision", choices=("mixed", "32", "64"), default="mixed")
     parser.add_argument("--adam-beta1", type=float, default=0.9)
     parser.add_argument("--adam-beta2", type=float, default=0.999)
     parser.add_argument("--label-smoothing", type=float, default=0.0)
@@ -2201,7 +2230,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
 
     seed_everything(args.seed)
     torch.backends.cudnn.benchmark = True
-    if args.precision == 32:
+    if str(args.precision) in {"32", "mixed"}:
         torch.set_float32_matmul_precision("high")
     model_name = "efficientnet_b0_metric_learning_gabor" if use_gabor else "efficientnet_b0_metric_learning"
 
@@ -2374,6 +2403,9 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
 
     if not supcon_completed:
         supcon_steps_full_epoch = steps_per_epoch_for_dataset(supcon_train_dataset, args.batch_size, args.max_train_batches)
+        supcon_scaler = build_grad_scaler(device, args)
+        if resume_state.get("stage") == "supcon" and "scaler_state_dict" in resume_state:
+            supcon_scaler.load_state_dict(resume_state["scaler_state_dict"])
         for epoch in range(start_supcon_epoch, args.supcon_epochs + 1):
             train_dataset.set_epoch(augmentation_epoch_cursor)
             val_dataset.set_epoch(0)
@@ -2399,6 +2431,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                     step_limit=step_window,
                     criterion=supcon_loss,
                     optimizer=supcon_optimizer,
+                    scaler=supcon_scaler,
                     scheduler=supcon_scheduler,
                     device=device,
                     backbone_modules=backbone_modules,
@@ -2514,6 +2547,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                             "validation_index": validation_index,
                             "optimizer_state_dict": supcon_optimizer.state_dict(),
                             "scheduler_state_dict": supcon_scheduler.state_dict(),
+                            "scaler_state_dict": supcon_scaler.state_dict(),
                         },
                     },
                 )
@@ -2579,6 +2613,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             continue
         thawed = set_trainability_for_arcface(model, backbone_modules, phase.unfrozen_backbone_modules)
         optimizer = build_arcface_optimizer(model, args)
+        scaler = build_grad_scaler(device, args)
         scheduler = build_scheduler(
             base_optimizer_for_scheduler(optimizer),
             max_epochs=phase.max_epochs,
@@ -2606,6 +2641,8 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         if same_resume_phase:
             optimizer.load_state_dict(resume_state["optimizer_state_dict"])
             scheduler.load_state_dict(resume_state["scheduler_state_dict"])
+            if "scaler_state_dict" in resume_state:
+                scaler.load_state_dict(resume_state["scaler_state_dict"])
             phase_best_loss = float(resume_state.get("phase_best_loss", float("inf")))
             phase_best_acc = float(resume_state.get("phase_best_acc", -1.0))
             phase_best_epoch = int(resume_state.get("phase_best_epoch", 0))
@@ -2644,6 +2681,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                     step_limit=step_window,
                     criterion=arcface_criterion,
                     optimizer=optimizer,
+                    scaler=scaler,
                     scheduler=scheduler,
                     device=device,
                     backbone_modules=backbone_modules,
@@ -2792,6 +2830,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                             "phase_wait": phase_wait,
                             "optimizer_state_dict": optimizer.state_dict(),
                             "scheduler_state_dict": scheduler.state_dict(),
+                            "scaler_state_dict": scaler.state_dict(),
                         },
                     },
                 )
