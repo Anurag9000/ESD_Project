@@ -215,7 +215,7 @@ Current defaults:
 
 - `image-size = 224`
 - `batch-size = 256`
-- `num-workers = 16`
+- `num-workers = 4`
 - `augment-repeats = 16`
 - `supcon-epochs = 200`
 - `head-epochs = 200`
