@@ -216,7 +216,7 @@ Current defaults:
 - `image-size = 224`
 - `batch-size = 512`
 - `num-workers = 8`
-- `prefetch-factor = 4`
+- `prefetch-factor = 2`
 - `augment-repeats = 16`
 - `supcon-epochs = 200`
 - `head-epochs = 200`
@@ -466,7 +466,7 @@ Core data and loading:
   - default: `8`
 - `--prefetch-factor`
   - dataloader batches queued ahead per worker
-  - default: `4`
+  - default: `2`
 
 Augmentation and batch mixing:
 

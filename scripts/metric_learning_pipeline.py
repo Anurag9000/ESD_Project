@@ -2151,7 +2151,7 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--num-workers", type=int, default=8)
-    parser.add_argument("--prefetch-factor", type=int, default=4)
+    parser.add_argument("--prefetch-factor", type=int, default=2)
     parser.add_argument("--augment-repeats", type=int, default=16)
     parser.add_argument("--augment-gaussian-sigmas", type=float, default=2.0)
     parser.add_argument("--mixup-prob", type=float, default=0.20)
