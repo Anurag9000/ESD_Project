@@ -10,3 +10,15 @@ Results/smoke_*/
 logs/smoke_*
 
 .DS_Store
+
+# Accidental Android Studio / Gradle project clutter at repo root
+/.gradle/
+/.idea/
+/app/
+/gradle/
+/build.gradle.kts
+/settings.gradle.kts
+/gradle.properties
+/local.properties
+/gradlew
+/gradlew.bat
