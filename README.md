@@ -460,7 +460,7 @@ Core data and loading:
   - default: `8`
 - `--num-workers`
   - dataloader worker count
-  - default: `4`
+  - default: `16`
 
 Augmentation and batch mixing:
 
@@ -553,8 +553,8 @@ Optimization:
   - default: `sam`
 - `--precision`
   - model/input precision mode currently supported by the trainer
-  - choices: `32`, `64`
-  - default: `32`
+  - choices: `mixed`, `32`, `64`
+  - default: `mixed`
 - `--adam-beta1`
   - Adam or AdamW beta1
   - default: `0.9`
