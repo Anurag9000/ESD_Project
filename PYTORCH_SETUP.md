@@ -26,10 +26,10 @@ The full pipeline is:
 2. Optionally run supervised contrastive pretraining on the embedding head.
 3. Early-stop the SupCon phase on validation SupCon loss with patience `20`.
 4. Restore the best SupCon checkpoint.
-5. Replace classification training with ArcFace metric learning.
-6. Train the ArcFace head first with the backbone frozen.
+5. Replace classification training with cross-entropy supervised learning.
+6. Train the classifier head first with the backbone frozen.
 7. Progressively unfreeze the backbone from the end in chunks, default `20` parameter-bearing modules at a time.
-8. For every ArcFace phase, early-stop on validation loss with patience `20`.
+8. For every cross-entropy phase, early-stop on validation loss with patience `20`.
 9. Restore the best phase checkpoint before moving to the next phase.
 10. Evaluate the best overall model on validation and test.
 
@@ -138,9 +138,9 @@ python scripts/train_efficientnet_b0_gabor_progressive.py \
 ## Notes
 
 - Both scripts default to pretrained ImageNet weights with `EfficientNet_B0_Weights.DEFAULT`.
-- Add `--skip-supcon` to bypass the contrastive pretraining stage and go straight into ArcFace fine-tuning.
+- Add `--skip-supcon` to bypass the contrastive pretraining stage and go straight into classifier fine-tuning.
 - If `Results/.../last.pt` already exists for the chosen run directory, the trainer automatically resumes from that checkpoint.
-- ArcFace was chosen over AdaFace because AdaFace is mainly useful for quality-varying face embeddings, while ArcFace is the cleaner metric-learning choice for generic multiclass material/object classification.
+- cross-entropy was chosen over AdaFace because AdaFace is mainly useful for quality-varying face embeddings, while cross-entropy is the cleaner metric-learning choice for generic multiclass material/object classification.
 - The current dataset no longer has a separate `plastic` class; it was merged into `other`.
 - The Gabor variant may help if texture cues matter, but it can also become a front-end bottleneck. That is why it is kept as a separate ablation instead of being forced into both models.
 - The dataset structure expected by the scripts is:

@@ -651,7 +651,6 @@ class MetricLearningEfficientNetB0(nn.Module):
         args: argparse.Namespace,
     ) -> None:
         super().__init__()
-        self.classifier_head_type = args.classifier_head
         weights = EfficientNet_B0_Weights.DEFAULT if weights_mode == "default" else None
         self.front_end: nn.Module
         if use_gabor:
@@ -677,7 +676,6 @@ class MetricLearningEfficientNetB0(nn.Module):
             nn.Linear(projection_dim, projection_dim),
         )
         self.ce_head = nn.Linear(embedding_dim, num_classes)
-        self.arcface_head = ArcMarginProduct(embedding_dim, num_classes, s=args.arcface_scale, m=args.arcface_margin)
 
     def forward_backbone(self, x: torch.Tensor) -> torch.Tensor:
         x = self.front_end(x)
@@ -699,39 +697,8 @@ class MetricLearningEfficientNetB0(nn.Module):
         return F.normalize(self.projection_head(embeddings), dim=1)
 
     def classify(self, embeddings: torch.Tensor, labels: torch.Tensor | None = None) -> torch.Tensor:
-        if self.classifier_head_type == "ce":
-            return self.ce_head(embeddings)
-        return self.arcface_head(embeddings, labels)
-
-
-class ArcMarginProduct(nn.Module):
-    def __init__(self, in_features: int, out_features: int, s: float = 30.0, m: float = 0.35) -> None:
-        super().__init__()
-        self.in_features = in_features
-        self.out_features = out_features
-        self.s = s
-        self.m = m
-        self.weight = nn.Parameter(torch.empty(out_features, in_features))
-        nn.init.xavier_uniform_(self.weight)
-
-        self.cos_m = math.cos(m)
-        self.sin_m = math.sin(m)
-        self.th = math.cos(math.pi - m)
-        self.mm = math.sin(math.pi - m) * m
-
-    def forward(self, embeddings: torch.Tensor, labels: torch.Tensor | None = None) -> torch.Tensor:
-        cosine = F.linear(F.normalize(embeddings), F.normalize(self.weight))
-        if labels is None:
-            return cosine * self.s
-
-        sine = torch.sqrt(torch.clamp(1.0 - cosine.square(), min=1e-7))
-        phi = cosine * self.cos_m - sine * self.sin_m
-        phi = torch.where(cosine > self.th, phi, cosine - self.mm)
-
-        one_hot = torch.zeros_like(cosine)
-        one_hot.scatter_(1, labels.view(-1, 1), 1.0)
-        logits = (one_hot * phi) + ((1.0 - one_hot) * cosine)
-        return logits * self.s
+        del labels
+        return self.ce_head(embeddings)
 
 
 class SupConLoss(nn.Module):
@@ -969,9 +936,8 @@ def build_datasets(
 
 def build_phase_plan(total_modules: int, args: argparse.Namespace) -> list[PhaseSpec]:
     phases: list[PhaseSpec] = []
-    phase_prefix = args.classifier_head
     if args.head_epochs > 0:
-        phases.append(PhaseSpec(name=f"{phase_prefix}_head_only", unfrozen_backbone_modules=0, max_epochs=args.head_epochs))
+        phases.append(PhaseSpec(name="ce_head_only", unfrozen_backbone_modules=0, max_epochs=args.head_epochs))
     count = 0
     phase_index = 0
     while count < total_modules and args.stage_epochs > 0:
@@ -979,7 +945,7 @@ def build_phase_plan(total_modules: int, args: argparse.Namespace) -> list[Phase
         phase_index += 1
         if args.max_progressive_phases and phase_index > args.max_progressive_phases:
             break
-        phases.append(PhaseSpec(name=f"{phase_prefix}_last_{count}_modules", unfrozen_backbone_modules=count, max_epochs=args.stage_epochs))
+        phases.append(PhaseSpec(name=f"ce_last_{count}_modules", unfrozen_backbone_modules=count, max_epochs=args.stage_epochs))
     return phases
 
 
@@ -1008,8 +974,6 @@ def set_trainability_for_supcon(
         parameter.requires_grad = True
     for parameter in model.ce_head.parameters():
         parameter.requires_grad = False
-    for parameter in model.arcface_head.parameters():
-        parameter.requires_grad = False
     if not isinstance(model.front_end, IdentityFrontEnd):
         for parameter in model.front_end.parameters():
             parameter.requires_grad = True
@@ -1023,7 +987,7 @@ def set_trainability_for_supcon(
     return [name for name, _ in thawed]
 
 
-def set_trainability_for_arcface(
+def set_trainability_for_classifier(
     model: MetricLearningEfficientNetB0,
     backbone_modules: list[tuple[str, nn.Module]],
     unfrozen_backbone_modules: int,
@@ -1035,9 +999,7 @@ def set_trainability_for_arcface(
     for parameter in model.embedding_norm.parameters():
         parameter.requires_grad = True
     for parameter in model.ce_head.parameters():
-        parameter.requires_grad = model.classifier_head_type == "ce"
-    for parameter in model.arcface_head.parameters():
-        parameter.requires_grad = model.classifier_head_type == "arcface"
+        parameter.requires_grad = True
     for parameter in model.projection_head.parameters():
         parameter.requires_grad = False
     if not isinstance(model.front_end, IdentityFrontEnd):
@@ -1126,14 +1088,13 @@ def build_supcon_optimizer(model: MetricLearningEfficientNetB0, args: argparse.N
     return build_optimizer_from_groups(param_groups, args)
 
 
-def build_arcface_optimizer(model: MetricLearningEfficientNetB0, args: argparse.Namespace) -> Optimizer:
+def build_classifier_optimizer(model: MetricLearningEfficientNetB0, args: argparse.Namespace) -> Optimizer:
     head_params = []
     if not isinstance(model.front_end, IdentityFrontEnd):
         head_params.extend(parameter for parameter in model.front_end.parameters() if parameter.requires_grad)
     head_params.extend(parameter for parameter in model.embedding.parameters() if parameter.requires_grad)
     head_params.extend(parameter for parameter in model.embedding_norm.parameters() if parameter.requires_grad)
     head_params.extend(parameter for parameter in model.ce_head.parameters() if parameter.requires_grad)
-    head_params.extend(parameter for parameter in model.arcface_head.parameters() if parameter.requires_grad)
     head_ids = {id(parameter) for parameter in head_params}
     backbone_params = [
         parameter
@@ -1486,7 +1447,7 @@ def evaluate_supcon(
     return total_loss / max(1, total_seen)
 
 
-def arcface_loss(
+def classifier_loss(
     model: MetricLearningEfficientNetB0,
     embeddings: torch.Tensor,
     labels: torch.Tensor,
@@ -1525,7 +1486,7 @@ def confidence_qualified_correct_count(
     return int(qualified_correct.sum().item()), int(raw_correct.sum().item())
 
 
-def train_arcface_epoch(
+def train_classifier_epoch(
     model: MetricLearningEfficientNetB0,
     loader: DataLoader,
     criterion: nn.Module,
@@ -1559,7 +1520,7 @@ def train_arcface_epoch(
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
             embeddings = model.encode(images)
-            loss, penalty = arcface_loss(model, embeddings, labels, criterion, args)
+            loss, penalty = classifier_loss(model, embeddings, labels, criterion, args)
         if isinstance(optimizer, SAM):
             scaler.scale(loss).backward()
             scaler.unscale_(base_optimizer_for_scheduler(optimizer))
@@ -1567,7 +1528,7 @@ def train_arcface_epoch(
 
             with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
                 embeddings = model.encode(images)
-                second_loss, second_penalty = arcface_loss(model, embeddings, labels, criterion, args)
+                second_loss, second_penalty = classifier_loss(model, embeddings, labels, criterion, args)
             scaler.scale(second_loss).backward()
             scaler.unscale_(base_optimizer_for_scheduler(optimizer))
             optimizer.second_step(zero_grad=True)
@@ -1599,7 +1560,7 @@ def train_arcface_epoch(
         if train_progress["global_train_step"] % log_every_steps == 0:
             event = {
                 "event": "train_step",
-                "stage": "arcface",
+                "stage": "classifier",
                 "phase_index": phase_index,
                 "phase_name": phase_name,
                 "epoch": epoch,
@@ -1620,7 +1581,7 @@ def train_arcface_epoch(
     return total_loss / max(1, total_seen), total_correct / max(1, total_seen)
 
 
-def train_arcface_steps(
+def train_classifier_steps(
     model: MetricLearningEfficientNetB0,
     batch_iterator,
     step_limit: int,
@@ -1663,7 +1624,7 @@ def train_arcface_steps(
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
             embeddings = model.encode(images)
-            loss, penalty = arcface_loss(model, embeddings, labels, criterion, args)
+            loss, penalty = classifier_loss(model, embeddings, labels, criterion, args)
         if isinstance(optimizer, SAM):
             scaler.scale(loss).backward()
             scaler.unscale_(base_optimizer_for_scheduler(optimizer))
@@ -1671,7 +1632,7 @@ def train_arcface_steps(
 
             with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
                 embeddings = model.encode(images)
-                second_loss, second_penalty = arcface_loss(model, embeddings, labels, criterion, args)
+                second_loss, second_penalty = classifier_loss(model, embeddings, labels, criterion, args)
             scaler.scale(second_loss).backward()
             scaler.unscale_(base_optimizer_for_scheduler(optimizer))
             optimizer.second_step(zero_grad=True)
@@ -1706,7 +1667,7 @@ def train_arcface_steps(
             class_to_idx=class_to_idx,
             args=args,
             train_progress=train_progress,
-            stage="arcface",
+            stage="classifier",
             epoch=epoch,
             epoch_step=step_in_epoch,
             optimizer=optimizer,
@@ -1719,7 +1680,7 @@ def train_arcface_steps(
         if train_progress["global_train_step"] % log_every_steps == 0:
             event = {
                 "event": "train_step",
-                "stage": "arcface",
+                "stage": "classifier",
                 "phase_index": phase_index,
                 "phase_name": phase_name,
                 "epoch": epoch,
@@ -1746,7 +1707,7 @@ def train_arcface_steps(
     )
 
 
-def evaluate_arcface(
+def evaluate_classifier(
     model: MetricLearningEfficientNetB0,
     loader: DataLoader,
     criterion: nn.Module,
@@ -2168,11 +2129,11 @@ def load_resume_checkpoint(path: Path) -> tuple[dict[str, Any] | None, str | Non
 
 def checkpoint_state_for_mode(resume_checkpoint: dict[str, Any], resume_mode: str) -> dict[str, torch.Tensor]:
     if resume_mode == "global_best":
-        return resume_checkpoint.get("best_arcface_state", resume_checkpoint["model_state_dict"])
+        return resume_checkpoint.get("best_classifier_state", resume_checkpoint["model_state_dict"])
     if resume_mode == "phase_best":
         return resume_checkpoint.get(
             "phase_best_state",
-            resume_checkpoint.get("best_arcface_state", resume_checkpoint["model_state_dict"]),
+            resume_checkpoint.get("best_classifier_state", resume_checkpoint["model_state_dict"]),
         )
     return resume_checkpoint["model_state_dict"]
 
@@ -2191,7 +2152,7 @@ def resolve_phase_start_index(
         if args.resume_phase_index > len(phases):
             raise ValueError(f"--resume-phase-index must be <= {len(phases)}")
         return args.resume_phase_index
-    if resume_state.get("stage") == "arcface":
+    if resume_state.get("stage") == "classifier":
         return int(resume_state.get("phase_index", 1))
     return 1
 
@@ -2199,7 +2160,7 @@ def resolve_phase_start_index(
 def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     description = (
         "Metric-learning EfficientNet B0 training with deterministic 16x split-safe augmentation, "
-        "SupCon warmup, SAM optimization, ArcFace classification, progressive unfreezing, and paper-style metrics"
+        "SupCon warmup, cross-entropy classification, progressive unfreezing, and paper-style metrics"
     )
     if use_gabor:
         description += " using a Gabor front-end."
@@ -2221,9 +2182,6 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--unfreeze-chunk-size", type=int, default=20)
     parser.add_argument("--max-progressive-phases", type=int, default=0)
     parser.add_argument("--supcon-temperature", type=float, default=0.07)
-    parser.add_argument("--classifier-head", choices=("arcface", "ce"), default="arcface")
-    parser.add_argument("--arcface-margin", type=float, default=0.35)
-    parser.add_argument("--arcface-scale", type=float, default=30.0)
     parser.add_argument("--supcon-head-lr", type=float, default=3e-4)
     parser.add_argument("--supcon-backbone-lr", type=float, default=1e-4)
     parser.add_argument("--head-lr", type=float, default=1e-3)
@@ -2403,11 +2361,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         else -1.0
     )
     augmentation_epoch_cursor = int(resume_checkpoint.get("augmentation_epoch_cursor", 0)) if resume_checkpoint is not None else 0
-    best_arcface_state = (
-        resume_checkpoint.get("best_arcface_state", cpu_state_dict(model))
-        if resume_checkpoint is not None
-        else cpu_state_dict(model)
-    )
+    best_classifier_state = resume_checkpoint.get("best_classifier_state", cpu_state_dict(model)) if resume_checkpoint is not None else cpu_state_dict(model)
     supcon_best_state = (
         resume_checkpoint.get("supcon_best_state", cpu_state_dict(model))
         if resume_checkpoint is not None
@@ -2417,7 +2371,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
     resume_from_best_phase = resume_checkpoint is not None and args.resume_mode != "latest"
     if resume_from_best_phase:
         resume_state = {
-            "stage": "arcface",
+            "stage": "classifier",
             "epoch": 1,
             "epoch_step_completed": 0,
             "validation_index": 0,
@@ -2461,7 +2415,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
     elif resume_state.get("stage") == "supcon":
         log_json_event(log_path, {"event": "resume_fallback", "stage": "supcon", "reason": "missing_optimizer_or_scheduler_state"})
         supcon_completed = False
-    elif resume_state.get("stage") == "arcface":
+    elif resume_state.get("stage") == "classifier":
         supcon_completed = True
     elif args.skip_supcon or resume_from_best_phase:
         supcon_completed = True
@@ -2616,7 +2570,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                         "best_val_loss": best_val_loss,
                         "best_val_acc": best_val_acc,
                         "best_val_raw_acc": best_val_raw_acc,
-                        "best_arcface_state": best_arcface_state,
+                        "best_classifier_state": best_classifier_state,
                         "supcon_best_state": supcon_best_state,
                         "supcon_best_loss": supcon_best_loss,
                         "supcon_best_epoch": supcon_best_epoch,
@@ -2659,7 +2613,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         start_supcon_epoch_step = 0
         start_supcon_validation_index = 0
 
-    arcface_criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
+    classifier_criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
     phases = build_phase_plan(len(backbone_modules), args)
     save_training_checkpoint(
         checkpoint_path,
@@ -2672,7 +2626,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             "best_val_loss": best_val_loss,
             "best_val_acc": best_val_acc,
             "best_val_raw_acc": best_val_raw_acc,
-            "best_arcface_state": best_arcface_state,
+            "best_classifier_state": best_classifier_state,
             "supcon_best_state": supcon_best_state,
             "supcon_best_loss": supcon_best_loss,
             "supcon_best_epoch": supcon_best_epoch,
@@ -2680,7 +2634,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             "augmentation_epoch_cursor": augmentation_epoch_cursor,
             "train_progress": train_progress,
             "resume": {
-                "stage": "arcface",
+                "stage": "classifier",
                 "phase_index": 1,
                 "epoch": 1,
                 "epoch_step_completed": 0,
@@ -2689,15 +2643,15 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         },
     )
     resume_phase_index = resolve_phase_start_index(args, phases, resume_state)
-    start_phase_epoch = int(resume_state.get("epoch", 1)) if resume_state.get("stage") == "arcface" and not resume_from_best_phase else 1
-    start_phase_epoch_step = int(resume_state.get("epoch_step_completed", 0)) if resume_state.get("stage") == "arcface" and not resume_from_best_phase else 0
-    start_phase_validation_index = int(resume_state.get("validation_index", 0)) if resume_state.get("stage") == "arcface" and not resume_from_best_phase else 0
+    start_phase_epoch = int(resume_state.get("epoch", 1)) if resume_state.get("stage") == "classifier" and not resume_from_best_phase else 1
+    start_phase_epoch_step = int(resume_state.get("epoch_step_completed", 0)) if resume_state.get("stage") == "classifier" and not resume_from_best_phase else 0
+    start_phase_validation_index = int(resume_state.get("validation_index", 0)) if resume_state.get("stage") == "classifier" and not resume_from_best_phase else 0
 
     for phase_index, phase in enumerate(phases, start=1):
         if phase_index < resume_phase_index:
             continue
-        thawed = set_trainability_for_arcface(model, backbone_modules, phase.unfrozen_backbone_modules)
-        optimizer = build_arcface_optimizer(model, args)
+        thawed = set_trainability_for_classifier(model, backbone_modules, phase.unfrozen_backbone_modules)
+        optimizer = build_classifier_optimizer(model, args)
         scaler = build_grad_scaler(device, args)
         scheduler = build_scheduler(
             base_optimizer_for_scheduler(optimizer),
@@ -2708,17 +2662,17 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         )
         _, trainable_params = parameter_counts(model)
         same_resume_phase = (
-            resume_state.get("stage") == "arcface"
+            resume_state.get("stage") == "classifier"
             and phase_index == resume_phase_index
             and "optimizer_state_dict" in resume_state
             and "scheduler_state_dict" in resume_state
         )
-        if resume_state.get("stage") == "arcface" and phase_index == resume_phase_index and not same_resume_phase:
+        if resume_state.get("stage") == "classifier" and phase_index == resume_phase_index and not same_resume_phase:
             log_json_event(
                 log_path,
                 {
                     "event": "resume_fallback",
-                    "stage": "arcface",
+                    "stage": "classifier",
                     "phase_index": phase_index,
                     "reason": "missing_optimizer_or_scheduler_state",
                 },
@@ -2767,11 +2721,11 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                 train_sampler.set_epoch(augmentation_epoch_cursor)
                 train_sampler.set_start_index(step_start_index)
                 phase_iterator = iter(limited_batches(train_loader, args.max_train_batches))
-                window_train_loss, window_train_acc, window_train_raw_acc, steps_done, window_samples = train_arcface_steps(
+                window_train_loss, window_train_acc, window_train_raw_acc, steps_done, window_samples = train_classifier_steps(
                     model=model,
                     batch_iterator=phase_iterator,
                     step_limit=step_window,
-                    criterion=arcface_criterion,
+                    criterion=classifier_criterion,
                     optimizer=optimizer,
                     scaler=scaler,
                     scheduler=scheduler,
@@ -2810,7 +2764,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                     log_path,
                     {
                         "event": "validation_started",
-                        "stage": "arcface",
+                        "stage": "classifier",
                         "phase_index": phase_index,
                         "phase_name": phase.name,
                         "epoch_in_phase": epoch,
@@ -2820,15 +2774,15 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                         "eval_batches": val_eval_batches,
                     },
                 )
-                val_loss, val_acc, val_raw_acc = evaluate_arcface(
+                val_loss, val_acc, val_raw_acc = evaluate_classifier(
                     model=model,
                     loader=val_loader,
-                    criterion=arcface_criterion,
+                    criterion=classifier_criterion,
                     device=device,
                     max_batches=args.max_eval_batches,
                     log_path=log_path,
                     log_every_eval_steps=args.log_eval_every_steps,
-                    stage="arcface",
+                    stage="classifier",
                     split="val",
                     eval_context={
                         "phase_index": phase_index,
@@ -2845,7 +2799,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                     log_path,
                     {
                         "event": "validation_finished",
-                        "stage": "arcface",
+                        "stage": "classifier",
                         "phase_index": phase_index,
                         "phase_name": phase.name,
                         "epoch_in_phase": epoch,
@@ -2872,10 +2826,10 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                     best_val_loss = val_loss
                     best_val_acc = val_acc
                     best_val_raw_acc = val_raw_acc
-                    best_arcface_state = cpu_state_dict(model)
+                    best_classifier_state = cpu_state_dict(model)
 
                 row = {
-                    "stage": "arcface",
+                    "stage": "classifier",
                     "phase_index": phase_index,
                     "phase_name": phase.name,
                     "epoch_in_phase": epoch,
@@ -2917,7 +2871,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                         "best_val_loss": best_val_loss,
                         "best_val_acc": best_val_acc,
                         "best_val_raw_acc": best_val_raw_acc,
-                        "best_arcface_state": best_arcface_state,
+                        "best_classifier_state": best_classifier_state,
                         "supcon_best_state": supcon_best_state,
                         "supcon_best_loss": supcon_best_loss,
                         "supcon_best_epoch": supcon_best_epoch,
@@ -2926,7 +2880,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                         "train_progress": train_progress,
                         "phase_best_state": phase_best_state,
                         "resume": {
-                            "stage": "arcface",
+                            "stage": "classifier",
                             "phase_index": phase_index,
                             "phase_name": phase.name,
                             "epoch": epoch,
@@ -2946,7 +2900,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
 
                 if phase_wait >= phase_patience:
                     event = {
-                        "stage": "arcface",
+                        "stage": "classifier",
                         "phase_index": phase_index,
                         "phase_name": phase.name,
                         "stopped_early": True,
@@ -2982,7 +2936,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                 "best_val_loss": best_val_loss,
                 "best_val_acc": best_val_acc,
                 "best_val_raw_acc": best_val_raw_acc,
-                "best_arcface_state": best_arcface_state,
+                "best_classifier_state": best_classifier_state,
                 "supcon_best_state": supcon_best_state,
                 "supcon_best_loss": supcon_best_loss,
                 "supcon_best_epoch": supcon_best_epoch,
@@ -2991,7 +2945,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                 "train_progress": train_progress,
                 "phase_best_state": phase_best_state,
                 "resume": {
-                    "stage": "arcface",
+                    "stage": "classifier",
                     "phase_index": phase_index + 1,
                     "epoch": 1,
                     "epoch_step_completed": 0,
@@ -3002,7 +2956,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         start_phase_epoch = 1
         resume_phase_index = phase_index + 1
 
-    model.load_state_dict(best_arcface_state)
+    model.load_state_dict(best_classifier_state)
     release_training_memory(device, train_loader, val_loader, supcon_train_loader, supcon_val_loader)
 
     log_json_event(log_path, {"event": "final_evaluation_started", "split": "val", "eval_batches": val_eval_batches})
@@ -3049,7 +3003,6 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
 
     metrics = {
         "model_name": model_name,
-        "classifier_head": args.classifier_head,
         "device": str(device),
         "output_dir": str(output_dir),
         "log_file": str(log_path),
@@ -3080,9 +3033,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             "best_epoch": supcon_best_epoch,
             "unfrozen_backbone_modules": args.supcon_unfreeze_backbone_modules,
         },
-        "arcface": {
-            "margin": args.arcface_margin,
-            "scale": args.arcface_scale,
+        "classifier": {
             "phase_plan": [asdict(phase) for phase in phases],
             "best_val_loss": best_val_loss,
             "best_val_acc": best_val_acc,

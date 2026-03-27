@@ -14,11 +14,19 @@ The current training pipeline uses:
 
 - pretrained `efficientnet_b0`
 - supervised contrastive pretraining (`SupCon`)
-- ArcFace classification
+- cross-entropy classification
 - SAM (`Sharpness-Aware Minimization`)
 - AdamW
 - warmup + cosine decay scheduling
 - progressive unfreezing with early stopping
+
+Loss-selection note:
+
+- cross-entropy is now the mandatory classifier loss everywhere in this repo
+- the removed margin-loss branch lost on both metrics that matter here
+- head-only comparison result:
+  - raw test accuracy: `0.852909` for cross-entropy vs `0.799546`
+  - average confidence on correct test predictions: `0.90157` for cross-entropy vs `0.51333`
 
 ## Current Dataset State
 
@@ -165,14 +173,14 @@ What `512` means in this repo:
 - the backbone pooled feature vector is projected into a `512`-dimensional embedding space
 - this embedding is used for:
   - SupCon pretraining
-  - ArcFace classification
+  - cross-entropy classification
 
 Current classification logic:
 
 - backbone output width: `1280`
 - embedding layer: `1280 -> 512`
 - SupCon projection head: `512 -> 256 -> 256`
-- ArcFace classification head: `512 -> num_classes`
+- cross-entropy classification head: `512 -> num_classes`
 
 Because the current dataset has 4 classes, the final classifier is effectively:
 
@@ -191,11 +199,11 @@ Current training flow:
 3. Replace the stock classifier with:
    - embedding head
    - projection head
-   - ArcFace head
+   - classifier head
 4. Optionally run supervised contrastive pretraining (`SupCon`)
 5. Early-stop SupCon on validation loss with patience `20`
 6. Restore best SupCon weights
-7. Switch to ArcFace classification
+7. Switch to cross-entropy classification
 8. Train head-only first
 9. Progressively unfreeze the backbone from the tail in chunks of `20` parameter-bearing modules
 10. Early-stop every phase with patience `20`
@@ -234,7 +242,7 @@ Practical note:
 
 - `200` is a hard cap, not a claim that learning is impossible beyond 200
 - early stopping can stop earlier if validation does not improve for 10 consecutive validation windows in the relevant stage
-- `--skip-supcon` skips the contrastive stage and starts directly with ArcFace fine-tuning
+- `--skip-supcon` skips the contrastive stage and starts directly with classifier fine-tuning
 - if a matching `Results/.../last.pt` exists, the trainer auto-resumes from that checkpoint
 
 ## Augmentation Strategy
@@ -350,7 +358,7 @@ Step-level logs include:
 - batch size
 - cumulative samples seen
 - running loss
-- running thresholded and raw accuracy for ArcFace training
+- running thresholded and raw accuracy for cross-entropy training
 - current learning rates
 
 Default log paths:
@@ -467,7 +475,7 @@ Augmentation:
 Embedding and projection:
 
 - `--embedding-dim`
-  - ArcFace embedding dimension
+  - cross-entropy embedding dimension
   - default: `512`
 - `--projection-dim`
   - SupCon projection head dimension
@@ -482,9 +490,9 @@ Training stages:
   - number of backbone leaf modules trainable during SupCon
   - default: `0`
 - `--skip-supcon`
-  - skip contrastive pretraining and start directly with ArcFace
+  - skip contrastive pretraining and start directly with cross-entropy
 - `--head-epochs`
-  - hard cap for head-only ArcFace training
+  - hard cap for head-only cross-entropy training
   - default: `200`
 - `--stage-epochs`
   - hard cap for each progressive unfreeze phase
@@ -493,7 +501,7 @@ Training stages:
   - how many backbone leaf modules are added per progressive phase
   - default: `20`
 - `--max-progressive-phases`
-  - optional limit on number of progressive ArcFace phases
+  - optional limit on number of progressive cross-entropy phases
   - default: `0` meaning no extra limit
 
 Loss and classifier settings:
@@ -501,17 +509,17 @@ Loss and classifier settings:
 - `--supcon-temperature`
   - SupCon temperature
   - default: `0.07`
-- `--arcface-margin`
-  - ArcFace angular margin
+- `--classifier-margin`
+  - cross-entropy angular margin
   - default: `0.35`
-- `--arcface-scale`
-  - ArcFace logit scale
+- `--classifier-scale`
+  - cross-entropy logit scale
   - default: `30.0`
 - `--label-smoothing`
-  - cross-entropy label smoothing for ArcFace
+  - cross-entropy label smoothing for cross-entropy
   - default: `0.0`
 - `--confidence-threshold`
-  - accuracy threshold; predictions below this confidence are counted as incorrect in ArcFace metrics and final classification metrics
+  - accuracy threshold; predictions below this confidence are counted as incorrect in cross-entropy metrics and final classification metrics
   - default: `0.80`
 
 Optimization:
@@ -523,10 +531,10 @@ Optimization:
   - SupCon backbone learning rate
   - default: `1e-4`
 - `--head-lr`
-  - ArcFace head learning rate
+  - classifier head learning rate
   - default: `1e-3`
 - `--backbone-lr`
-  - ArcFace backbone learning rate
+  - cross-entropy backbone learning rate
   - default: `1e-4`
 - `--weight-decay`
   - weight decay
@@ -580,10 +588,10 @@ Resume controls:
   - choices: `latest`, `global_best`, `phase_best`
   - default: `latest`
 - `--resume-phase-index`
-  - force restart from a specific ArcFace phase index
+  - force restart from a specific cross-entropy phase index
   - default: `0` meaning infer from checkpoint
 - `--resume-phase-name`
-  - force restart from a specific ArcFace phase name
+  - force restart from a specific cross-entropy phase name
   - default: empty
 
 Logging, evaluation cadence, and stopping:
@@ -607,10 +615,10 @@ Logging, evaluation cadence, and stopping:
   - SupCon-stage validation patience in validation windows
   - default: `10`
 - `--head-early-stopping-patience`
-  - head-only ArcFace validation patience in validation windows
+  - head-only cross-entropy validation patience in validation windows
   - default: `10`
 - `--stage-early-stopping-patience`
-  - progressive unfreeze ArcFace validation patience in validation windows
+  - progressive unfreeze cross-entropy validation patience in validation windows
   - default: `10`
 - `--early-stopping-min-delta`
   - minimum improvement threshold
@@ -665,7 +673,7 @@ This repo went through these major steps:
    - replaced with EfficientNet-based progressive fine-tuning
    - added matched Gabor ablation
    - added SupCon pretraining
-   - added ArcFace
+   - added cross-entropy
    - added SAM
    - added richer evaluation
    - then rewired from `efficientnet_v2_l` to `efficientnet_b0` for RTX 3050 practicality
@@ -689,14 +697,14 @@ The repo is Git-initialized, and the dataset archive is tracked using Git LFS:
 - The Gabor model may help on texture-sensitive distinctions, but it is not guaranteed to outperform the plain model.
 - The 16 augmentation variants are deterministic per source image, not freshly resampled every epoch.
 - Validation is clean and unaugmented, while test keeps the split-safe augmentation wrapper.
-- `efficientnet_b0` is much more practical than the previously attempted `efficientnet_v2_l`, but training can still be long because the pipeline includes SupCon, SAM, ArcFace, and progressive unfreezing.
+- `efficientnet_b0` is much more practical than the previously attempted `efficientnet_v2_l`, but training can still be long because the pipeline includes SupCon, SAM, cross-entropy, and progressive unfreezing.
 
 ## Recommended Mental Model
 
 Think of the current plain model as:
 
-`image -> EfficientNet-B0 backbone -> 1280 features -> 512 embedding -> ArcFace(4 classes)`
+`image -> EfficientNet-B0 backbone -> 1280 features -> 512 embedding -> cross-entropy(4 classes)`
 
 And the Gabor model as:
 
-`image -> Gabor front-end -> EfficientNet-B0 backbone -> 1280 features -> 512 embedding -> ArcFace(4 classes)`
+`image -> Gabor front-end -> EfficientNet-B0 backbone -> 1280 features -> 512 embedding -> cross-entropy(4 classes)`

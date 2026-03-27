@@ -20,6 +20,11 @@ In concrete terms, the project is trying to produce a strong 4-class waste/mater
 - resumable long-running training
 - compatibility with constrained local hardware
 
+Current classification-loss decision:
+
+- the repo is now CE-only for supervised classification
+- a direct head-only comparison showed CE outperforming the removed margin-loss branch on both raw accuracy and confidence-on-correct-predictions
+
 ## Problem Setting
 
 The current classification problem is a 4-class image classification task:
@@ -78,7 +83,7 @@ The sequence is:
 1. start from pretrained `efficientnet_b0`
 2. replace the stock classifier with a learned embedding stack
 3. optionally warm up with supervised contrastive learning (`SupCon`)
-4. switch to ArcFace-based supervised classification
+4. switch to cross-entropy supervised classification
 5. progressively unfreeze the backbone from the tail
 6. early-stop each stage on validation performance
 7. restore the best validation checkpoint before moving on
@@ -88,7 +93,7 @@ This is trying to combine:
 
 - compact pretrained CNN transfer learning
 - embedding-space structure from contrastive learning
-- stronger class separation from ArcFace
+- stronger class separation from cross-entropy
 - gradual feature adaptation rather than fully-unfrozen-from-step-1 fine-tuning
 
 ## Model Variants
@@ -135,7 +140,7 @@ That file owns:
 - deterministic augmentation
 - weighted sampling
 - SupCon logic
-- ArcFace logic
+- cross-entropy logic
 - optimizer and scheduler setup
 - progressive unfreezing plan
 - checkpointing and resume
@@ -158,7 +163,7 @@ So the learning structure is:
 - backbone feature extraction
 - `1280 -> 512` embedding projection
 - optional SupCon projection head
-- ArcFace classification head from the `512`-dimensional embedding
+- cross-entropy classification head from the `512`-dimensional embedding
 
 This is why `512` appears throughout the repo. It is the embedding width, not the number of classes.
 
@@ -184,7 +189,7 @@ By default, this means:
 - the backbone remains frozen during SupCon
 - only the metric-learning heads are adapted during this stage
 
-### Stage 2: ArcFace Head-Only
+### Stage 2: cross-entropy Head-Only
 
 This is the first supervised classification stage after SupCon or immediately if SupCon is skipped.
 
@@ -294,7 +299,7 @@ For non-mixed samples only:
 
 This is intended to push correct predictions to become more decisive, not merely correct.
 
-This is compatible with ArcFace in implementation terms, but it is also an additional optimization pressure, so it can help or hurt depending on weighting and regime.
+This is compatible with cross-entropy in implementation terms, but it is also an additional optimization pressure, so it can help or hurt depending on weighting and regime.
 
 ## Augmentation Strategy
 
@@ -476,7 +481,7 @@ There are two main usage modes.
 Use the default pipeline to test the complete design:
 
 - SupCon
-- ArcFace
+- cross-entropy
 - progressive unfreezing
 - mixed precision
 - SAM by default
@@ -498,7 +503,7 @@ From the code and its current shape, the real research questions are:
 
 1. Is a compact EfficientNet-B0 strong enough for this waste task on a 6 GB GPU?
 2. Does deterministic heavy augmentation improve robustness without wrecking clean validation behavior?
-3. Does SupCon help the final classifier, or is direct ArcFace fine-tuning enough?
+3. Does SupCon help the final classifier, or is direct classifier fine-tuning enough?
 4. Does SAM help generalization here, or only slow things down?
 5. Does the Gabor front-end add value beyond a plain CNN baseline?
 6. How much progressive unfreezing is actually helpful before validation saturates?
@@ -563,7 +568,7 @@ This repository is a compact but fairly sophisticated waste-classification exper
 - compact pretrained CNN transfer learning
 - deterministic heavy augmentation
 - optional contrastive warmup
-- ArcFace metric classification
+- cross-entropy metric classification
 - progressive fine-tuning
 - resume and checkpoint safety
 - local-hardware-aware stability fixes
