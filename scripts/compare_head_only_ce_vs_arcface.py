@@ -16,6 +16,25 @@ def load_json(path: Path) -> dict[str, Any]:
         return json.load(handle)
 
 
+def run_is_complete(run_output_dir: Path) -> bool:
+    required_outputs = (
+        run_output_dir / "metrics.json",
+        run_output_dir / "test_metrics.json",
+        run_output_dir / "test_correct_confidence_by_class.json",
+    )
+    return all(path.exists() for path in required_outputs)
+
+
+def resolve_resume_checkpoint(run_output_dir: Path) -> Path:
+    step_last = run_output_dir / "step_last.pt"
+    if step_last.exists():
+        return step_last
+    last = run_output_dir / "last.pt"
+    if last.exists():
+        return last
+    return run_output_dir / "__fresh_start__.pt"
+
+
 def configure_run(base_args, classifier_head: str, run_output_dir: Path, run_log_path: Path):
     args = copy.deepcopy(base_args)
     args.classifier_head = classifier_head
@@ -26,7 +45,7 @@ def configure_run(base_args, classifier_head: str, run_output_dir: Path, run_log
     args.max_progressive_phases = 0
     args.output_dir = str(run_output_dir)
     args.log_file = str(run_log_path)
-    args.resume_checkpoint = str(run_output_dir / "__fresh_start__.pt")
+    args.resume_checkpoint = str(resolve_resume_checkpoint(run_output_dir))
     args.resume_mode = "latest"
     args.resume_phase_index = 0
     args.resume_phase_name = ""
@@ -137,10 +156,12 @@ def main() -> int:
     ce_args = configure_run(args, "ce", ce_output_dir, ce_log_path)
     arcface_args = configure_run(args, "arcface", arcface_output_dir, arcface_log_path)
 
-    if run_experiment(ce_args, use_gabor=False) != 0:
-        return 1
-    if run_experiment(arcface_args, use_gabor=False) != 0:
-        return 1
+    if not run_is_complete(ce_output_dir):
+        if run_experiment(ce_args, use_gabor=False) != 0:
+            return 1
+    if not run_is_complete(arcface_output_dir):
+        if run_experiment(arcface_args, use_gabor=False) != 0:
+            return 1
 
     ce_exported_checkpoints = export_named_checkpoints(ce_output_dir, comparison_root, "ce")
     arcface_exported_checkpoints = export_named_checkpoints(arcface_output_dir, comparison_root, "arcface")
