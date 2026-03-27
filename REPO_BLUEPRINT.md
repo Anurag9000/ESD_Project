@@ -373,7 +373,7 @@ The repo now uses stage-specific patience settings:
 
 Validation cadence:
 
-- `eval_every_train_steps = 1024`
+- `eval_every_epochs = 0.5`
 
 So patience is measured in validation windows, not epochs.
 
@@ -519,7 +519,7 @@ As of the current code, the default training profile is aggressive:
 - `precision = mixed`
 - `optimizer = sam`
 - `augment_repeats = 16`
-- `eval_every_train_steps = 1024`
+- `eval_every_epochs = 0.5`
 - `confidence_threshold = 0.80`
 
 This means the repo currently prioritizes:

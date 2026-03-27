@@ -1193,6 +1193,18 @@ def steps_per_epoch_for_dataset(dataset: Dataset, batch_size: int, max_batches: 
     return min(steps, max_batches) if max_batches > 0 else steps
 
 
+def steps_until_next_validation(
+    phase_steps_completed: int,
+    steps_per_epoch: int,
+    eval_every_epochs: float,
+    steps_remaining_in_epoch: int,
+) -> int:
+    interval_steps = max(float(eval_every_epochs) * float(steps_per_epoch), 1.0)
+    next_threshold = (math.floor(phase_steps_completed / interval_steps) + 1) * interval_steps
+    steps_until_threshold = max(1, int(math.ceil(next_threshold - phase_steps_completed)))
+    return min(steps_until_threshold, steps_remaining_in_epoch)
+
+
 def limited_batches(loader: DataLoader, max_batches: int):
     if max_batches <= 0:
         yield from loader
@@ -2205,7 +2217,7 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--max-eval-batches", type=int, default=0)
     parser.add_argument("--log-every-steps", type=int, default=100)
     parser.add_argument("--log-eval-every-steps", type=int, default=1000)
-    parser.add_argument("--eval-every-train-steps", type=int, default=1024)
+    parser.add_argument("--eval-every-epochs", type=float, default=0.5)
     parser.add_argument("--confidence-threshold", type=float, default=0.80)
     parser.add_argument("--supcon-early-stopping-patience", type=int, default=10)
     parser.add_argument("--head-early-stopping-patience", type=int, default=10)
@@ -2237,8 +2249,8 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         raise ValueError("--log-every-steps must be >= 1")
     if args.log_eval_every_steps < 1:
         raise ValueError("--log-eval-every-steps must be >= 1")
-    if args.eval_every_train_steps < 1:
-        raise ValueError("--eval-every-train-steps must be >= 1")
+    if args.eval_every_epochs <= 0:
+        raise ValueError("--eval-every-epochs must be > 0")
     if args.confidence_threshold < 0.0 or args.confidence_threshold > 1.0:
         raise ValueError("--confidence-threshold must be between 0 and 1")
     if args.supcon_early_stopping_patience < 1:
@@ -2319,7 +2331,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             "supcon_steps_per_epoch": len(supcon_train_loader),
             "val_steps_per_eval": len(val_loader),
             "test_steps_per_eval": len(test_loader),
-            "eval_every_train_steps": args.eval_every_train_steps,
+            "eval_every_epochs": args.eval_every_epochs,
             "supcon_early_stopping_patience": args.supcon_early_stopping_patience,
             "head_early_stopping_patience": args.head_early_stopping_patience,
             "stage_early_stopping_patience": args.stage_early_stopping_patience,
@@ -2449,7 +2461,13 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             progress = tqdm(total=supcon_steps_per_epoch, leave=False)
 
             while epoch_steps_done < supcon_steps_full_epoch:
-                step_window = min(args.eval_every_train_steps, supcon_steps_full_epoch - epoch_steps_done)
+                phase_steps_completed = ((epoch - 1) * supcon_steps_full_epoch) + epoch_steps_done
+                step_window = steps_until_next_validation(
+                    phase_steps_completed=phase_steps_completed,
+                    steps_per_epoch=supcon_steps_full_epoch,
+                    eval_every_epochs=args.eval_every_epochs,
+                    steps_remaining_in_epoch=supcon_steps_full_epoch - epoch_steps_done,
+                )
                 step_start_index = epoch_steps_done * args.batch_size
                 supcon_sampler.set_epoch(augmentation_epoch_cursor)
                 supcon_sampler.set_start_index(step_start_index)
@@ -2550,7 +2568,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                     "best_val_loss": supcon_best_loss,
                     "checks_without_improvement": supcon_wait,
                     "patience_unit": "validation_window",
-                    "validation_window_steps": args.eval_every_train_steps,
+                    "validation_interval_epochs": args.eval_every_epochs,
                     "trainable_params": supcon_trainable_params,
                     "total_params": total_params,
                     "unfrozen_backbone_modules": args.supcon_unfreeze_backbone_modules,
@@ -2716,7 +2734,13 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             progress = tqdm(total=phase_steps_per_epoch, leave=False)
 
             while epoch_steps_done < phase_steps_full_epoch:
-                step_window = min(args.eval_every_train_steps, phase_steps_full_epoch - epoch_steps_done)
+                phase_steps_completed = ((epoch - 1) * phase_steps_full_epoch) + epoch_steps_done
+                step_window = steps_until_next_validation(
+                    phase_steps_completed=phase_steps_completed,
+                    steps_per_epoch=phase_steps_full_epoch,
+                    eval_every_epochs=args.eval_every_epochs,
+                    steps_remaining_in_epoch=phase_steps_full_epoch - epoch_steps_done,
+                )
                 step_start_index = epoch_steps_done * args.batch_size
                 train_sampler.set_epoch(augmentation_epoch_cursor)
                 train_sampler.set_start_index(step_start_index)
@@ -2856,7 +2880,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                     "checks_without_improvement": phase_wait,
                     "patience_limit": phase_patience,
                     "patience_unit": "validation_window",
-                    "validation_window_steps": args.eval_every_train_steps,
+                    "validation_interval_epochs": args.eval_every_epochs,
                 }
                 history.append(row)
                 log_json_event(log_path, row)
@@ -3060,7 +3084,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             "min_delta": args.early_stopping_min_delta,
             "monitor": "val_loss",
             "check_unit": "validation_window",
-            "eval_every_train_steps": args.eval_every_train_steps,
+            "eval_every_epochs": args.eval_every_epochs,
         },
         "embedding_dim": args.embedding_dim,
         "projection_dim": args.projection_dim,
