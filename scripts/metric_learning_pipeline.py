@@ -2151,6 +2151,58 @@ def load_resume_checkpoint(path: Path) -> tuple[dict[str, Any] | None, str | Non
         return None, f"{type(exc).__name__}: {exc}. Corrupted checkpoint moved to {corrupt_path.name}"
 
 
+def path_with_timestamp(path: Path, timestamp: str) -> Path:
+    suffixes = "".join(path.suffixes)
+    if suffixes:
+        base_name = path.name[: -len(suffixes)]
+        file_name = f"{base_name}_{timestamp}{suffixes}"
+    else:
+        file_name = f"{path.name}_{timestamp}"
+    return path.with_name(file_name)
+
+
+def unique_run_output_dir(base_dir: Path) -> Path:
+    timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
+    candidate = base_dir.with_name(f"{base_dir.name}_{timestamp}")
+    suffix_index = 1
+    while candidate.exists():
+        candidate = base_dir.with_name(f"{base_dir.name}_{timestamp}_{suffix_index}")
+        suffix_index += 1
+    return candidate
+
+
+def resolve_run_paths(
+    requested_output_dir: Path,
+    requested_log_path: Path,
+    requested_resume_path: Path,
+    resume_checkpoint: dict[str, Any] | None,
+    resume_warning: str | None,
+) -> tuple[Path, Path, Path, Path | None]:
+    output_dir = requested_output_dir
+    log_path = requested_log_path
+    checkpoint_path = output_dir / "last.pt"
+    step_checkpoint_path = output_dir / "step_last.pt"
+
+    output_dir_occupied = requested_output_dir.exists() and any(requested_output_dir.iterdir())
+    log_path_occupied = requested_log_path.exists() and requested_log_path.stat().st_size > 0
+    would_overwrite_existing_run = output_dir_occupied or log_path_occupied
+
+    if resume_checkpoint is not None or not would_overwrite_existing_run:
+        return output_dir, checkpoint_path, step_checkpoint_path, log_path
+
+    timestamped_output_dir = unique_run_output_dir(requested_output_dir)
+    timestamp = timestamped_output_dir.name.removeprefix(f"{requested_output_dir.name}_")
+    timestamped_log_path = path_with_timestamp(requested_log_path, timestamp)
+    timestamped_output_dir.mkdir(parents=True, exist_ok=True)
+    timestamped_log_path.parent.mkdir(parents=True, exist_ok=True)
+    return (
+        timestamped_output_dir,
+        timestamped_output_dir / "last.pt",
+        timestamped_output_dir / "step_last.pt",
+        timestamped_log_path,
+    )
+
+
 def checkpoint_state_for_mode(resume_checkpoint: dict[str, Any], resume_mode: str) -> dict[str, torch.Tensor]:
     if resume_mode == "global_best":
         return resume_checkpoint.get("best_classifier_state", resume_checkpoint["model_state_dict"])
@@ -2278,16 +2330,23 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         torch.set_float32_matmul_precision("high")
     model_name = "efficientnet_b0_metric_learning_gabor" if use_gabor else "efficientnet_b0_metric_learning"
 
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = output_dir / "last.pt"
-    step_checkpoint_path = output_dir / "step_last.pt"
-    resume_path = Path(args.resume_checkpoint) if args.resume_checkpoint else checkpoint_path
-    log_path = Path(args.log_file)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    requested_output_dir = Path(args.output_dir)
+    requested_log_path = Path(args.log_file)
+    requested_checkpoint_path = requested_output_dir / "last.pt"
+    resume_path = Path(args.resume_checkpoint) if args.resume_checkpoint else requested_checkpoint_path
     resume_checkpoint, resume_warning = load_resume_checkpoint(resume_path)
-    if resume_checkpoint is None:
-        log_path.write_text("", encoding="utf-8")
+    output_dir, checkpoint_path, step_checkpoint_path, log_path = resolve_run_paths(
+        requested_output_dir=requested_output_dir,
+        requested_log_path=requested_log_path,
+        requested_resume_path=resume_path,
+        resume_checkpoint=resume_checkpoint,
+        resume_warning=resume_warning,
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    auto_forked_run = output_dir != requested_output_dir or log_path != requested_log_path
+    args.output_dir = str(output_dir)
+    args.log_file = str(log_path)
     log_json_event(
         log_path,
         {
@@ -2299,6 +2358,19 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             "args": vars(args),
         },
     )
+    if auto_forked_run:
+        log_json_event(
+            log_path,
+            {
+                "event": "run_paths_forked",
+                "reason": "existing_outputs_preserved",
+                "requested_output_dir": str(requested_output_dir),
+                "actual_output_dir": str(output_dir),
+                "requested_log_file": str(requested_log_path),
+                "actual_log_file": str(log_path),
+                "requested_resume_path": str(resume_path),
+            },
+        )
     if resume_warning is not None:
         log_json_event(log_path, {"event": "resume_checkpoint_ignored", "message": resume_warning})
 
