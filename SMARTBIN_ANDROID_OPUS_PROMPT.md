@@ -366,6 +366,9 @@ Now begin by reading:
 Then inspect all relevant files inside:
 - `SmartBin_Android/`
 
+
+and inside this repo create its own thorough and complete detailed files architecture.md and spec.md elaborating on the respective for the repo 
+
 Only after that should you design and implement the app.
 ```
 

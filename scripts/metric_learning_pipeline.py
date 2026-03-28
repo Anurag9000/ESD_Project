@@ -1323,6 +1323,8 @@ def train_supcon_steps(
     class_names: list[str],
     class_to_idx: dict[str, int],
     args: argparse.Namespace,
+    step_checkpoint_payload: dict[str, Any] | None = None,
+    step_resume_payload: dict[str, Any] | None = None,
 ) -> tuple[float, int, int]:
     model.train()
     freeze_frozen_batchnorms(backbone_modules)
@@ -1392,6 +1394,8 @@ def train_supcon_steps(
             optimizer=optimizer,
             scheduler=scheduler,
             scaler=scaler,
+            extra_payload=step_checkpoint_payload,
+            extra_resume=step_resume_payload,
         )
 
         if train_progress["global_train_step"] % log_every_steps == 0:
@@ -1614,6 +1618,8 @@ def train_classifier_steps(
     class_names: list[str],
     class_to_idx: dict[str, int],
     args: argparse.Namespace,
+    step_checkpoint_payload: dict[str, Any] | None = None,
+    step_resume_payload: dict[str, Any] | None = None,
 ) -> tuple[float, float, float, int, int]:
     model.train()
     freeze_frozen_batchnorms(backbone_modules)
@@ -1687,6 +1693,8 @@ def train_classifier_steps(
             scaler=scaler,
             phase_index=phase_index,
             phase_name=phase_name,
+            extra_payload=step_checkpoint_payload,
+            extra_resume=step_resume_payload,
         )
 
         if train_progress["global_train_step"] % log_every_steps == 0:
@@ -2063,6 +2071,8 @@ def save_step_checkpoint(
     scaler: torch.amp.GradScaler,
     phase_index: int | None = None,
     phase_name: str | None = None,
+    extra_payload: dict[str, Any] | None = None,
+    extra_resume: dict[str, Any] | None = None,
 ) -> None:
     resume_payload: dict[str, Any] = {
         "stage": stage,
@@ -2076,17 +2086,19 @@ def save_step_checkpoint(
         resume_payload["phase_index"] = phase_index
     if phase_name is not None:
         resume_payload["phase_name"] = phase_name
-    torch.save(
-        {
-            "model_state_dict": cpu_state_dict(model),
-            "class_names": class_names,
-            "class_to_idx": class_to_idx,
-            "args": vars(args),
-            "train_progress": dict(train_progress),
-            "resume": resume_payload,
-        },
-        path,
-    )
+    if extra_resume:
+        resume_payload.update(extra_resume)
+    payload = {
+        "model_state_dict": cpu_state_dict(model),
+        "class_names": class_names,
+        "class_to_idx": class_to_idx,
+        "args": vars(args),
+        "train_progress": dict(train_progress),
+        "resume": resume_payload,
+    }
+    if extra_payload:
+        payload.update(extra_payload)
+    torch.save(payload, path)
 
 
 def shutdown_loader_workers(loader: DataLoader | None) -> None:
@@ -2491,6 +2503,20 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                     class_names=train_dataset.classes,
                     class_to_idx=train_dataset.class_to_idx,
                     args=args,
+                    step_checkpoint_payload={
+                        "history": history,
+                        "best_val_loss": best_val_loss,
+                        "best_val_acc": best_val_acc,
+                        "best_val_raw_acc": best_val_raw_acc,
+                        "supcon_best_state": supcon_best_state,
+                        "supcon_best_loss": supcon_best_loss,
+                        "supcon_best_epoch": supcon_best_epoch,
+                        "supcon_wait": supcon_wait,
+                        "augmentation_epoch_cursor": augmentation_epoch_cursor,
+                    },
+                    step_resume_payload={
+                        "validation_index": validation_index,
+                    },
                 )
                 del supcon_iterator
                 if steps_done == 0:
@@ -2766,6 +2792,27 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                     class_names=train_dataset.classes,
                     class_to_idx=train_dataset.class_to_idx,
                     args=args,
+                    step_checkpoint_payload={
+                        "history": history,
+                        "best_val_loss": best_val_loss,
+                        "best_val_acc": best_val_acc,
+                        "best_val_raw_acc": best_val_raw_acc,
+                        "best_classifier_state": best_classifier_state,
+                        "supcon_best_state": supcon_best_state,
+                        "supcon_best_loss": supcon_best_loss,
+                        "supcon_best_epoch": supcon_best_epoch,
+                        "supcon_wait": supcon_wait,
+                        "phase_best_state": phase_best_state,
+                        "augmentation_epoch_cursor": augmentation_epoch_cursor,
+                    },
+                    step_resume_payload={
+                        "validation_index": validation_index,
+                        "phase_best_loss": phase_best_loss,
+                        "phase_best_acc": phase_best_acc,
+                        "phase_best_raw_acc": phase_best_raw_acc,
+                        "phase_best_epoch": phase_best_epoch,
+                        "phase_wait": phase_wait,
+                    },
                 )
                 del phase_iterator
                 if steps_done == 0:
