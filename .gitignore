@@ -16,6 +16,8 @@ logs/smoke_*
 /post-commit
 /post-merge
 /pre-push
+/GEMINI.md
+/SMARTBIN_ANDROID_OPUS_PROMPT.md
 
 # Accidental Android Studio / Gradle project clutter at repo root
 /.gradle/
