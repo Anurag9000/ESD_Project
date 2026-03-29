@@ -2780,6 +2780,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         same_resume_phase = (
             resume_state.get("stage") == "classifier"
             and phase_index == resume_phase_index
+            and resume_state.get("phase_name") == phase.name
             and "optimizer_state_dict" in resume_state
             and "scheduler_state_dict" in resume_state
         )
@@ -2794,17 +2795,32 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                 },
             )
         if same_resume_phase:
-            optimizer.load_state_dict(resume_state["optimizer_state_dict"])
-            scheduler.load_state_dict(resume_state["scheduler_state_dict"])
-            if "scaler_state_dict" in resume_state:
-                scaler.load_state_dict(resume_state["scaler_state_dict"])
-            phase_best_loss = float(resume_state.get("phase_best_loss", float("inf")))
-            phase_best_acc = float(resume_state.get("phase_best_acc", -1.0))
-            phase_best_raw_acc = float(resume_state.get("phase_best_raw_acc", resume_state.get("phase_best_acc", -1.0)))
-            phase_best_epoch = int(resume_state.get("phase_best_epoch", 0))
-            phase_best_state = resume_checkpoint.get("phase_best_state", cpu_state_dict(model))
-            phase_wait = int(resume_state.get("phase_wait", 0))
-        else:
+            try:
+                optimizer.load_state_dict(resume_state["optimizer_state_dict"])
+                scheduler.load_state_dict(resume_state["scheduler_state_dict"])
+                if "scaler_state_dict" in resume_state:
+                    scaler.load_state_dict(resume_state["scaler_state_dict"])
+                phase_best_loss = float(resume_state.get("phase_best_loss", float("inf")))
+                phase_best_acc = float(resume_state.get("phase_best_acc", -1.0))
+                phase_best_raw_acc = float(
+                    resume_state.get("phase_best_raw_acc", resume_state.get("phase_best_acc", -1.0))
+                )
+                phase_best_epoch = int(resume_state.get("phase_best_epoch", 0))
+                phase_best_state = resume_checkpoint.get("phase_best_state", cpu_state_dict(model))
+                phase_wait = int(resume_state.get("phase_wait", 0))
+            except ValueError as exc:
+                same_resume_phase = False
+                log_json_event(
+                    log_path,
+                    {
+                        "event": "resume_fallback",
+                        "stage": "classifier",
+                        "phase_index": phase_index,
+                        "phase_name": phase.name,
+                        "reason": f"incompatible_optimizer_state: {exc}",
+                    },
+                )
+        if not same_resume_phase:
             phase_best_loss = float("inf")
             phase_best_acc = -1.0
             phase_best_raw_acc = -1.0
@@ -3090,6 +3106,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                 "resume": {
                     "stage": "classifier",
                     "phase_index": phase_index + 1,
+                    "phase_name": None,
                     "epoch": 1,
                     "epoch_step_completed": 0,
                     "validation_index": 0,
@@ -3097,7 +3114,17 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             },
         )
         start_phase_epoch = 1
+        start_phase_epoch_step = 0
+        start_phase_validation_index = 0
         resume_phase_index = phase_index + 1
+        resume_state = {
+            "stage": "classifier",
+            "phase_index": phase_index + 1,
+            "phase_name": None,
+            "epoch": 1,
+            "epoch_step_completed": 0,
+            "validation_index": 0,
+        }
 
     model.load_state_dict(best_classifier_state)
     release_training_memory(device, train_loader, val_loader, supcon_train_loader, supcon_val_loader)
