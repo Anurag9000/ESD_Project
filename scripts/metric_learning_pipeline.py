@@ -942,6 +942,10 @@ def build_datasets(
 
 def build_phase_plan(total_modules: int, args: argparse.Namespace) -> list[PhaseSpec]:
     phases: list[PhaseSpec] = []
+    if args.classifier_train_mode == "full_model":
+        if args.stage_epochs > 0:
+            phases.append(PhaseSpec(name="ce_full_model", unfrozen_backbone_modules=total_modules, max_epochs=args.stage_epochs))
+        return phases
     if args.head_epochs > 0:
         phases.append(PhaseSpec(name="ce_head_only", unfrozen_backbone_modules=0, max_epochs=args.head_epochs))
     count = 0
@@ -1221,7 +1225,16 @@ def limited_batches(loader: DataLoader, max_batches: int):
         yield batch
 
 
-def improved_metric(best_loss: float, val_loss: float, min_delta: float) -> bool:
+def improved_classifier_selection_metric(
+    selection_metric: str,
+    best_loss: float,
+    best_raw_acc: float,
+    val_loss: float,
+    val_raw_acc: float,
+    min_delta: float,
+) -> bool:
+    if selection_metric == "val_raw_acc":
+        return val_raw_acc > best_raw_acc + min_delta
     return val_loss < best_loss - min_delta
 
 
@@ -2263,6 +2276,8 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--stage-epochs", type=int, default=200)
     parser.add_argument("--unfreeze-chunk-size", type=int, default=20)
     parser.add_argument("--max-progressive-phases", type=int, default=0)
+    parser.add_argument("--classifier-train-mode", choices=("progressive", "full_model"), default="progressive")
+    parser.add_argument("--classifier-early-stopping-metric", choices=("val_loss", "val_raw_acc"), default="val_loss")
     parser.add_argument("--supcon-temperature", type=float, default=0.07)
     parser.add_argument("--supcon-head-lr", type=float, default=3e-4)
     parser.add_argument("--supcon-backbone-lr", type=float, default=1e-4)
@@ -2835,7 +2850,11 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             phase_best_epoch = 0
             phase_best_state = cpu_state_dict(model)
             phase_wait = 0
-        phase_patience = args.head_early_stopping_patience if phase_index == 1 else args.stage_early_stopping_patience
+        phase_patience = (
+            args.head_early_stopping_patience
+            if phase_index == 1 and args.classifier_train_mode == "progressive"
+            else args.stage_early_stopping_patience
+        )
 
         for epoch in range(start_phase_epoch if same_resume_phase else 1, phase.max_epochs + 1):
             train_dataset.set_epoch(augmentation_epoch_cursor)
@@ -2979,7 +2998,14 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                         "val_raw_acc": val_raw_acc,
                     },
                 )
-                if improved_metric(phase_best_loss, val_loss, args.early_stopping_min_delta):
+                if improved_classifier_selection_metric(
+                    args.classifier_early_stopping_metric,
+                    phase_best_loss,
+                    phase_best_raw_acc,
+                    val_loss,
+                    val_raw_acc,
+                    args.early_stopping_min_delta,
+                ):
                     phase_best_loss = val_loss
                     phase_best_acc = val_acc
                     phase_best_raw_acc = val_raw_acc
@@ -2989,7 +3015,14 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                 else:
                     phase_wait += 1
 
-                if improved_metric(best_val_loss, val_loss, args.early_stopping_min_delta):
+                if improved_classifier_selection_metric(
+                    args.classifier_early_stopping_metric,
+                    best_val_loss,
+                    best_val_raw_acc,
+                    val_loss,
+                    val_raw_acc,
+                    args.early_stopping_min_delta,
+                ):
                     best_val_loss = val_loss
                     best_val_acc = val_acc
                     best_val_raw_acc = val_raw_acc
@@ -3024,6 +3057,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                     "patience_limit": phase_patience,
                     "patience_unit": "validation_window",
                     "validation_interval_epochs": args.eval_every_epochs,
+                    "early_stopping_metric": args.classifier_early_stopping_metric,
                 }
                 history.append(row)
                 log_json_event(log_path, row)
