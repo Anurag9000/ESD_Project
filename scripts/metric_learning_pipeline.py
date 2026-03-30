@@ -20,6 +20,7 @@ import torch.nn.functional as F
 from PIL import Image, ImageFilter
 from torch import nn
 from torch.optim import AdamW, Optimizer
+from torch.utils.checkpoint import checkpoint_sequential
 from torch.utils.data import DataLoader, Dataset, Sampler
 from torchvision import datasets
 from torchvision.models import EfficientNet_B0_Weights, efficientnet_b0
@@ -668,6 +669,8 @@ class MetricLearningEfficientNetB0(nn.Module):
         self.backbone = backbone
         self.in_features = backbone.classifier[1].in_features
         self.dropout_p = backbone.classifier[0].p if isinstance(backbone.classifier[0], nn.Dropout) else 0.0
+        self.gradient_checkpointing = True
+        self.checkpoint_segments = 4
         self.embedding = nn.Linear(self.in_features, embedding_dim, bias=False)
         self.embedding_norm = nn.LayerNorm(embedding_dim)
         self.projection_head = nn.Sequential(
@@ -679,7 +682,10 @@ class MetricLearningEfficientNetB0(nn.Module):
 
     def forward_backbone(self, x: torch.Tensor) -> torch.Tensor:
         x = self.front_end(x)
-        x = self.backbone.features(x)
+        if self.training and self.gradient_checkpointing:
+            x = checkpoint_sequential(self.backbone.features, self.checkpoint_segments, x, use_reentrant=False)
+        else:
+            x = self.backbone.features(x)
         x = self.backbone.avgpool(x)
         x = torch.flatten(x, 1)
         x = F.dropout(x, p=self.dropout_p, training=self.training)
@@ -2731,6 +2737,11 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
 
     classifier_criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
     phases = build_phase_plan(len(backbone_modules), args)
+    resume_phase_index = resolve_phase_start_index(args, phases, resume_state)
+    start_phase_epoch = int(resume_state.get("epoch", 1)) if resume_state.get("stage") == "classifier" and not resume_from_best_phase else 1
+    start_phase_epoch_step = int(resume_state.get("epoch_step_completed", 0)) if resume_state.get("stage") == "classifier" and not resume_from_best_phase else 0
+    start_phase_validation_index = int(resume_state.get("validation_index", 0)) if resume_state.get("stage") == "classifier" and not resume_from_best_phase else 0
+    checkpoint_phase_name = phases[resume_phase_index - 1].name if 1 <= resume_phase_index <= len(phases) else None
     save_training_checkpoint(
         checkpoint_path,
         {
@@ -2751,17 +2762,14 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             "train_progress": train_progress,
             "resume": {
                 "stage": "classifier",
-                "phase_index": 1,
-                "epoch": 1,
-                "epoch_step_completed": 0,
-                "validation_index": 0,
+                "phase_index": resume_phase_index,
+                "phase_name": checkpoint_phase_name,
+                "epoch": start_phase_epoch,
+                "epoch_step_completed": start_phase_epoch_step,
+                "validation_index": start_phase_validation_index,
             },
         },
     )
-    resume_phase_index = resolve_phase_start_index(args, phases, resume_state)
-    start_phase_epoch = int(resume_state.get("epoch", 1)) if resume_state.get("stage") == "classifier" and not resume_from_best_phase else 1
-    start_phase_epoch_step = int(resume_state.get("epoch_step_completed", 0)) if resume_state.get("stage") == "classifier" and not resume_from_best_phase else 0
-    start_phase_validation_index = int(resume_state.get("validation_index", 0)) if resume_state.get("stage") == "classifier" and not resume_from_best_phase else 0
 
     for phase_index, phase in enumerate(phases, start=1):
         if phase_index < resume_phase_index:

@@ -6,6 +6,8 @@ cd "$REPO_ROOT"
 
 source .venv/bin/activate
 
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+
 python scripts/train_efficientnet_b0_progressive.py \
   --dataset-root Dataset_Final \
   --weighted-sampling \
