@@ -2278,6 +2278,15 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--max-progressive-phases", type=int, default=0)
     parser.add_argument("--classifier-train-mode", choices=("progressive", "full_model"), default="progressive")
     parser.add_argument("--classifier-early-stopping-metric", choices=("val_loss", "val_raw_acc"), default="val_loss")
+    parser.add_argument(
+        "--progressive-phase-global-gating",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Stop opening more backbone layers when a completed progressive phase fails to beat the "
+            "global best checkpoint on the selected classifier early-stopping metric."
+        ),
+    )
     parser.add_argument("--supcon-temperature", type=float, default=0.07)
     parser.add_argument("--supcon-head-lr", type=float, default=3e-4)
     parser.add_argument("--supcon-backbone-lr", type=float, default=1e-4)
@@ -2789,6 +2798,8 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
     for phase_index, phase in enumerate(phases, start=1):
         if phase_index < resume_phase_index:
             continue
+        global_best_loss_before_phase = best_val_loss
+        global_best_raw_acc_before_phase = best_val_raw_acc
         thawed = set_trainability_for_classifier(model, backbone_modules, phase.unfrozen_backbone_modules)
         optimizer = build_classifier_optimizer(model, args)
         scaler = build_grad_scaler(device, args)
@@ -3167,6 +3178,36 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             "epoch_step_completed": 0,
             "validation_index": 0,
         }
+        phase_improved_global_best = improved_classifier_selection_metric(
+            args.classifier_early_stopping_metric,
+            global_best_loss_before_phase,
+            global_best_raw_acc_before_phase,
+            phase_best_loss,
+            phase_best_raw_acc,
+            args.early_stopping_min_delta,
+        )
+        if (
+            args.classifier_train_mode == "progressive"
+            and args.progressive_phase_global_gating
+            and phase_index < len(phases)
+            and not phase_improved_global_best
+        ):
+            log_json_event(
+                log_path,
+                {
+                    "event": "progressive_unfreezing_stopped",
+                    "reason": "phase_failed_to_beat_global_best",
+                    "phase_index": phase_index,
+                    "phase_name": phase.name,
+                    "classifier_metric": args.classifier_early_stopping_metric,
+                    "phase_best_val_loss": phase_best_loss,
+                    "phase_best_val_raw_acc": phase_best_raw_acc,
+                    "global_best_val_loss_before_phase": global_best_loss_before_phase,
+                    "global_best_val_raw_acc_before_phase": global_best_raw_acc_before_phase,
+                    "min_delta": args.early_stopping_min_delta,
+                },
+            )
+            break
 
     model.load_state_dict(best_classifier_state)
     release_training_memory(device, train_loader, val_loader, supcon_train_loader, supcon_val_loader)

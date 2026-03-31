@@ -2,94 +2,184 @@ package com.example.smartbin.presentation.analytics
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.smartbin.domain.model.WasteType
+import com.example.smartbin.domain.model.TimeRange
+import com.example.smartbin.domain.usecase.AnalyticsBucket
 import com.example.smartbin.domain.usecase.AnalyticsResult
 import com.example.smartbin.domain.usecase.GetAggregatedAnalyticsUseCase
+import com.example.smartbin.domain.usecase.StreamWasteEventsUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.launch
+import java.time.Instant
 import java.time.LocalDate
-import java.time.format.DateTimeFormatter
+import java.time.ZoneId
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-enum class TimeFilter {
-    WEEK, MONTH, SEASON, YEAR, CUSTOM
+enum class TimeFilter(val label: String) {
+    TODAY("Today"),
+    WEEK("Week"),
+    MONTH("Month"),
+    SEASON("Season"),
+    YEAR("Year"),
+    CUSTOM("Custom"),
 }
 
 data class AnalyticsState(
-    val selectedBinIds: List<String> = emptyList(),
+    val selectedBinIds: Set<String> = emptySet(),
+    val selectedLocalities: Set<String> = emptySet(),
     val timeFilter: TimeFilter = TimeFilter.WEEK,
+    val customStartDate: LocalDate = LocalDate.now().minusDays(30),
+    val customEndDate: LocalDate = LocalDate.now(),
     val analyticsResult: AnalyticsResult? = null,
     val isLoading: Boolean = false,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val isCustomDateDialogVisible: Boolean = false,
 )
 
 @HiltViewModel
 class AnalyticsViewModel @Inject constructor(
-    private val getAggregatedAnalyticsUseCase: GetAggregatedAnalyticsUseCase
+    private val getAggregatedAnalyticsUseCase: GetAggregatedAnalyticsUseCase,
+    private val streamWasteEventsUseCase: StreamWasteEventsUseCase,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(AnalyticsState())
     val state: StateFlow<AnalyticsState> = _state.asStateFlow()
 
-    fun onBinsSelected(binIds: List<String>) {
-        _state.update { it.copy(selectedBinIds = binIds) }
+    private var analyticsJob: Job? = null
+
+    init {
+        observeLiveUpdates()
+    }
+
+    fun onSelectionChanged(binIds: Set<String>, localities: Set<String>) {
+        _state.update {
+            it.copy(
+                selectedBinIds = binIds,
+                selectedLocalities = localities,
+            )
+        }
         refreshAnalytics()
     }
 
     fun onTimeFilterChanged(filter: TimeFilter) {
         _state.update { it.copy(timeFilter = filter) }
+        if (filter == TimeFilter.CUSTOM) {
+            _state.update { it.copy(isCustomDateDialogVisible = true) }
+        } else {
+            refreshAnalytics()
+        }
+    }
+
+    fun showCustomDateDialog() {
+        _state.update { it.copy(isCustomDateDialogVisible = true) }
+    }
+
+    fun dismissCustomDateDialog() {
+        _state.update { it.copy(isCustomDateDialogVisible = false) }
+    }
+
+    fun onCustomDateRangeChanged(start: LocalDate, end: LocalDate) {
+        val normalizedStart = minOf(start, end)
+        val normalizedEnd = maxOf(start, end)
+        _state.update {
+            it.copy(
+                timeFilter = TimeFilter.CUSTOM,
+                customStartDate = normalizedStart,
+                customEndDate = normalizedEnd,
+                isCustomDateDialogVisible = false,
+            )
+        }
         refreshAnalytics()
     }
 
-    private fun refreshAnalytics() {
-        val currentState = _state.value
-        if (currentState.selectedBinIds.isEmpty()) return
+    fun refreshAnalytics() {
+        val current = _state.value
+        if (current.selectedBinIds.isEmpty() && current.selectedLocalities.isEmpty()) {
+            _state.update { it.copy(analyticsResult = null, isLoading = false, errorMessage = null) }
+            return
+        }
 
-        val (startTime, endTime) = calculateTimeRange(currentState.timeFilter)
-
+        val timeRange = calculateTimeRange(current)
+        analyticsJob?.cancel()
         _state.update { it.copy(isLoading = true, errorMessage = null) }
-
-        viewModelScope.launch {
+        analyticsJob = viewModelScope.launch {
             getAggregatedAnalyticsUseCase(
-                binIds = currentState.selectedBinIds,
-                startTime = startTime,
-                endTime = endTime
-            ).catch { e ->
-                _state.update { it.copy(isLoading = false, errorMessage = e.message) }
+                binIds = current.selectedBinIds,
+                localities = current.selectedLocalities,
+                startTime = timeRange.start,
+                endTime = timeRange.end,
+                bucket = bucketFor(current.timeFilter),
+            ).catch { error ->
+                _state.update { it.copy(isLoading = false, errorMessage = error.message) }
             }.collect { result ->
-                _state.update { it.copy(analyticsResult = result, isLoading = false) }
+                _state.update {
+                    it.copy(
+                        analyticsResult = result,
+                        isLoading = false,
+                        errorMessage = null,
+                    )
+                }
             }
         }
     }
 
-    private fun calculateTimeRange(filter: TimeFilter): Pair<String, String> {
-        val now = LocalDate.now()
-        val formatter = DateTimeFormatter.ISO_DATE
-        val start = when (filter) {
-            TimeFilter.WEEK -> now.minusWeeks(1)
-            TimeFilter.MONTH -> now.minusMonths(1)
-            TimeFilter.SEASON -> getStartOfCurrentSeason(now)
-            TimeFilter.YEAR -> now.withDayOfYear(1)
-            TimeFilter.CUSTOM -> now.minusDays(30) // Default for custom
+    private fun observeLiveUpdates() {
+        viewModelScope.launch {
+            streamWasteEventsUseCase()
+                .catch { error ->
+                    _state.update { it.copy(errorMessage = error.message ?: "Realtime analytics updates failed") }
+                }
+                .collect {
+                    val current = _state.value
+                    if (current.selectedBinIds.isNotEmpty() || current.selectedLocalities.isNotEmpty()) {
+                        refreshAnalytics()
+                    }
+                }
         }
-        return Pair(start.format(formatter), now.format(formatter))
     }
 
-    /**
-     * Requested Seasonal Logic:
-     * Q1: Feb-Apr | Q2: May-Jul | Q3: Aug-Oct | Q4: Nov-Jan
-     */
-    private fun getStartOfCurrentSeason(date: LocalDate): LocalDate {
-        val month = date.monthValue
-        return when (month) {
+    private fun calculateTimeRange(state: AnalyticsState): TimeRange {
+        val zoneId = ZoneId.systemDefault()
+        val now = LocalDate.now(zoneId)
+        val startDate = when (state.timeFilter) {
+            TimeFilter.TODAY -> now
+            TimeFilter.WEEK -> now.minusDays((now.dayOfWeek.value - 1).toLong())
+            TimeFilter.MONTH -> now.withDayOfMonth(1)
+            TimeFilter.SEASON -> seasonStart(now)
+            TimeFilter.YEAR -> now.withDayOfYear(1)
+            TimeFilter.CUSTOM -> state.customStartDate
+        }
+        val endDate = when (state.timeFilter) {
+            TimeFilter.CUSTOM -> state.customEndDate
+            else -> now
+        }
+        return TimeRange(
+            start = startDate.atStartOfDay(zoneId).toInstant(),
+            end = endDate.plusDays(1).atStartOfDay(zoneId).minusNanos(1).toInstant(),
+        )
+    }
+
+    private fun bucketFor(filter: TimeFilter): AnalyticsBucket = when (filter) {
+        TimeFilter.TODAY -> AnalyticsBucket.DAY
+        TimeFilter.WEEK -> AnalyticsBucket.DAY
+        TimeFilter.MONTH -> AnalyticsBucket.WEEK
+        TimeFilter.SEASON -> AnalyticsBucket.WEEK
+        TimeFilter.YEAR -> AnalyticsBucket.MONTH
+        TimeFilter.CUSTOM -> AnalyticsBucket.DAY
+    }
+
+    private fun seasonStart(date: LocalDate): LocalDate {
+        return when (date.monthValue) {
             2, 3, 4 -> date.withMonth(2).withDayOfMonth(1)
             5, 6, 7 -> date.withMonth(5).withDayOfMonth(1)
             8, 9, 10 -> date.withMonth(8).withDayOfMonth(1)
-            else -> { // Nov, Dec, Jan
-                if (month == 1) date.minusYears(1).withMonth(11).withDayOfMonth(1)
-                else date.withMonth(11).withDayOfMonth(1)
-            }
+            11, 12 -> date.withMonth(11).withDayOfMonth(1)
+            else -> date.minusYears(1).withMonth(11).withDayOfMonth(1)
         }
     }
 }

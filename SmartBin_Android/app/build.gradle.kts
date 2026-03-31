@@ -7,6 +7,13 @@ plugins {
     id("kotlin-kapt")
 }
 
+val defaultApiBaseUrl = providers.gradleProperty("SMARTBIN_API_BASE_URL")
+    .orElse("http://10.0.2.2:8000/")
+    .get()
+val defaultWsEventsUrl = providers.gradleProperty("SMARTBIN_WS_EVENTS_URL")
+    .orElse("ws://10.0.2.2:8000/events/stream")
+    .get()
+
 android {
     namespace = "com.example.smartbin"
     compileSdk = 35
@@ -22,8 +29,16 @@ android {
     }
 
     buildTypes {
+        debug {
+            buildConfigField("boolean", "DEFAULT_DEMO_MODE", "true")
+            buildConfigField("String", "API_BASE_URL", "\"$defaultApiBaseUrl\"")
+            buildConfigField("String", "WS_EVENTS_URL", "\"$defaultWsEventsUrl\"")
+        }
         release {
             isMinifyEnabled = false
+            buildConfigField("boolean", "DEFAULT_DEMO_MODE", "false")
+            buildConfigField("String", "API_BASE_URL", "\"$defaultApiBaseUrl\"")
+            buildConfigField("String", "WS_EVENTS_URL", "\"$defaultWsEventsUrl\"")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -33,11 +48,13 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+        isCoreLibraryDesugaringEnabled = true
     }
     kotlinOptions {
         jvmTarget = "11"
     }
     buildFeatures {
+        buildConfig = true
         compose = true
     }
 }
@@ -46,6 +63,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.navigation.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
@@ -74,6 +92,7 @@ dependencies {
 
     // Utils
     implementation(libs.timber)
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

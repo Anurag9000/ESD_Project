@@ -1,20 +1,20 @@
 package com.example.smartbin.di
 
-import com.example.smartbin.data.repository.MockBinRepository
+import com.example.smartbin.data.repository.HybridBinRepository
 import com.example.smartbin.domain.repository.BinRepository
-import dagger.Binds
 import dagger.Module
+import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
 
 @Module
 @InstallIn(SingletonComponent::class)
-abstract class RepositoryModule {
+object RepositoryModule {
 
-    @Binds
+    @Provides
     @Singleton
-    abstract fun bindBinRepository(
-        mockBinRepository: MockBinRepository
-    ): BinRepository
+    fun provideBinRepository(
+        hybridBinRepository: HybridBinRepository,
+    ): BinRepository = hybridBinRepository
 }
