@@ -10,8 +10,10 @@ Results/smoke_*/
 logs/smoke_*
 /Results/
 /logs/
+!/Results/
 !/Results/efficientnet_b0_*/
 !/Results/efficientnet_b0_*/**
+!/logs/
 !/logs/efficientnet_b0_*.log.jsonl
 
 .DS_Store
