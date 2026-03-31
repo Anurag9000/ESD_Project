@@ -503,6 +503,10 @@ Training stages:
 - `--max-progressive-phases`
   - optional limit on number of progressive cross-entropy phases
   - default: `0` meaning no extra limit
+- `--progressive-phase-global-gating`
+  - optional hard stop that prevents opening more backbone layers when a completed progressive phase fails to beat the global best checkpoint on the selected classifier early-stopping metric
+  - default: disabled
+  - use this only as an explicit experiment flag, not as the standard training behavior
 
 Loss and classifier settings:
 

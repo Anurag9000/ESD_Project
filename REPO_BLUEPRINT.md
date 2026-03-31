@@ -206,11 +206,13 @@ Current defaults:
 
 - `unfreeze_chunk_size = 20`
 - `max_progressive_phases = 0`
+- `progressive_phase_global_gating = False`
 
 Meaning:
 
 - unfreeze the last `20` parameter-bearing backbone modules, then `40`, then `60`, etc.
 - `0` means no artificial cap; progression continues until the whole planned backbone span is covered
+- global phase gating is opt-in only; by default, a weak intermediate phase does not block later phases from trying deeper unfreezing
 
 This is designed to make fine-tuning more stable on limited hardware and on a dataset that can still overfit despite augmentation.
 
