@@ -1098,7 +1098,34 @@ def build_supcon_optimizer(model: MetricLearningEfficientNetB0, args: argparse.N
     return build_optimizer_from_groups(param_groups, args)
 
 
-def build_classifier_optimizer(model: MetricLearningEfficientNetB0, args: argparse.Namespace) -> Optimizer:
+def classifier_phase_learning_rates(
+    args: argparse.Namespace,
+    *,
+    unfrozen_backbone_modules: int,
+    total_backbone_modules: int,
+) -> tuple[float, float]:
+    backbone_lr = float(args.backbone_lr)
+    head_lr = float(args.head_lr)
+    if args.classifier_train_mode != "progressive" or total_backbone_modules <= 0 or unfrozen_backbone_modules <= 0:
+        return head_lr, backbone_lr
+
+    # As progressively more of the backbone is opened, reduce the head LR
+    # toward the backbone LR so late phases do not over-update an already
+    # adapted classifier head.
+    progress = min(1.0, max(0.0, float(unfrozen_backbone_modules) / float(total_backbone_modules)))
+    effective_head_lr = head_lr - (head_lr - backbone_lr) * progress
+    return max(backbone_lr, effective_head_lr), backbone_lr
+
+
+def build_classifier_optimizer(
+    model: MetricLearningEfficientNetB0,
+    args: argparse.Namespace,
+    *,
+    head_lr: float | None = None,
+    backbone_lr: float | None = None,
+) -> Optimizer:
+    head_group_lr = float(args.head_lr if head_lr is None else head_lr)
+    backbone_group_lr = float(args.backbone_lr if backbone_lr is None else backbone_lr)
     head_params = []
     if not isinstance(model.front_end, IdentityFrontEnd):
         head_params.extend(parameter for parameter in model.front_end.parameters() if parameter.requires_grad)
@@ -1113,9 +1140,9 @@ def build_classifier_optimizer(model: MetricLearningEfficientNetB0, args: argpar
     ]
     param_groups = []
     if head_params:
-        param_groups.append({"params": head_params, "lr": args.head_lr, "rho": args.sam_rho})
+        param_groups.append({"params": head_params, "lr": head_group_lr, "rho": args.sam_rho})
     if backbone_params:
-        param_groups.append({"params": backbone_params, "lr": args.backbone_lr, "rho": args.sam_rho})
+        param_groups.append({"params": backbone_params, "lr": backbone_group_lr, "rho": args.sam_rho})
     return build_optimizer_from_groups(param_groups, args)
 
 
@@ -1180,6 +1207,16 @@ class WarmupCosineScheduler:
         self.warmup_steps = int(state_dict["warmup_steps"])
         self.base_lrs = [float(value) for value in state_dict["base_lrs"]]
         self.step_index = int(state_dict["step_index"])
+
+
+def set_scheduler_base_lrs(scheduler: WarmupCosineScheduler, base_lrs: list[float]) -> None:
+    scheduler.base_lrs = [float(value) for value in base_lrs]
+    if scheduler.step_index <= 0:
+        current_factor = 1.0
+    else:
+        current_factor = scheduler._factor(scheduler.step_index - 1)
+    for group, base_lr in zip(scheduler.optimizer.param_groups, scheduler.base_lrs):
+        group["lr"] = base_lr * current_factor
 
 
 def build_scheduler(
@@ -2894,7 +2931,12 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         global_best_loss_before_phase = best_val_loss
         global_best_raw_acc_before_phase = best_val_raw_acc
         thawed = set_trainability_for_classifier(model, backbone_modules, phase.unfrozen_backbone_modules)
-        optimizer = build_classifier_optimizer(model, args)
+        phase_head_lr, phase_backbone_lr = classifier_phase_learning_rates(
+            args,
+            unfrozen_backbone_modules=phase.unfrozen_backbone_modules,
+            total_backbone_modules=len(backbone_modules),
+        )
+        optimizer = build_classifier_optimizer(model, args, head_lr=phase_head_lr, backbone_lr=phase_backbone_lr)
         scaler = build_grad_scaler(device, args)
         scheduler = build_scheduler(
             base_optimizer_for_scheduler(optimizer),
@@ -2925,6 +2967,13 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             try:
                 optimizer.load_state_dict(resume_state["optimizer_state_dict"])
                 scheduler.load_state_dict(resume_state["scheduler_state_dict"])
+                set_scheduler_base_lrs(
+                    scheduler,
+                    [
+                        phase_head_lr,
+                        *([phase_backbone_lr] if len(scheduler.optimizer.param_groups) > 1 else []),
+                    ],
+                )
                 if "scaler_state_dict" in resume_state:
                     scaler.load_state_dict(resume_state["scaler_state_dict"])
                 phase_best_loss = float(resume_state.get("phase_best_loss", float("inf")))
@@ -3162,6 +3211,8 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                     "patience_unit": "validation_window",
                     "validation_interval_epochs": args.eval_every_epochs,
                     "early_stopping_metric": args.classifier_early_stopping_metric,
+                    "phase_head_lr": phase_head_lr,
+                    "phase_backbone_lr": phase_backbone_lr,
                 }
                 history.append(row)
                 log_json_event(log_path, row)
