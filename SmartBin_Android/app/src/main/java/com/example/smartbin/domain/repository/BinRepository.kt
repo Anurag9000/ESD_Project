@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.Flow
 interface BinRepository {
     fun observeBins(): Flow<List<Bin>>
     fun observeBin(binId: String): Flow<Bin?>
+    fun observeBinsLoading(): Flow<Boolean>
+    fun observeRepositoryErrors(): Flow<String?>
     fun observeStreamStatus(): Flow<Boolean>
     fun getEvents(
         binIds: Set<String>,

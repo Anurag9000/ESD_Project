@@ -40,10 +40,14 @@ class RemoteBinRepository @Inject constructor(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val binsState = MutableStateFlow<List<Bin>>(emptyList())
+    private val binsLoading = MutableStateFlow(true)
+    private val repositoryErrors = MutableStateFlow<String?>(null)
     private val streamStatus = MutableStateFlow(false)
     private val liveEvents = MutableSharedFlow<WasteEvent>(extraBufferCapacity = 64)
+    private val recentlyEmittedEventIds = LinkedHashSet<String>()
     private var webSocket: WebSocket? = null
     private var reconnectJob: Job? = null
+    private var refreshBinsJob: Job? = null
     @Volatile
     private var closedByApp = false
     @Volatile
@@ -59,6 +63,16 @@ class RemoteBinRepository @Inject constructor(
         return binsState.map { bins ->
             bins.find { it.id == binId }
         }
+    }
+
+    override fun observeBinsLoading(): Flow<Boolean> {
+        ensureStarted()
+        return binsLoading
+    }
+
+    override fun observeRepositoryErrors(): Flow<String?> {
+        ensureStarted()
+        return repositoryErrors
     }
 
     override fun observeStreamStatus(): Flow<Boolean> {
@@ -103,17 +117,41 @@ class RemoteBinRepository @Inject constructor(
         runCatching {
             binApi.postEvent(request).toDomain()
         }.onSuccess { event ->
-            liveEvents.tryEmit(event)
-            refreshBins()
+            repositoryErrors.value = null
+            emitIfNew(event)
+            applyLiveEventToBins(event)
+            scheduleBinsRefresh()
         }.onFailure { error ->
+            repositoryErrors.value = error.message ?: "Failed to post live demo event"
             Timber.w(error, "Failed to post demo event to backend")
         }
+    }
+
+    fun setActive(isActive: Boolean) {
+        if (isActive) {
+            if (started && webSocket == null) {
+                binsLoading.value = true
+                scope.launch { refreshBins() }
+                connectStream()
+            }
+            return
+        }
+        closedByApp = true
+        reconnectJob?.cancel()
+        reconnectJob = null
+        refreshBinsJob?.cancel()
+        refreshBinsJob = null
+        webSocket?.close(1000, "Switched away from live mode")
+        webSocket = null
+        streamStatus.value = false
+        repositoryErrors.value = null
     }
 
     @Synchronized
     private fun ensureStarted() {
         if (started) return
         started = true
+        binsLoading.value = true
         scope.launch { refreshBins() }
         connectStream()
     }
@@ -127,8 +165,9 @@ class RemoteBinRepository @Inject constructor(
         webSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 streamStatus.value = true
+                repositoryErrors.value = null
                 reconnectJob?.cancel()
-                scope.launch { refreshBins() }
+                scheduleBinsRefresh(immediate = true)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -136,9 +175,12 @@ class RemoteBinRepository @Inject constructor(
                     runCatching {
                         json.decodeFromString<com.example.smartbin.data.remote.WasteEventDto>(text).toDomain()
                     }.onSuccess { event ->
-                        liveEvents.emit(event)
-                        refreshBins()
+                        emitIfNew(event)
+                        repositoryErrors.value = null
+                        applyLiveEventToBins(event)
+                        scheduleBinsRefresh()
                     }.onFailure { error ->
+                        repositoryErrors.value = error.message ?: "Failed to decode live event"
                         Timber.w(error, "Failed to decode waste event message")
                     }
                 }
@@ -156,6 +198,7 @@ class RemoteBinRepository @Inject constructor(
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 streamStatus.value = false
+                repositoryErrors.value = t.message ?: "Live event stream failed"
                 Timber.w(t, "Waste event stream failed")
                 scheduleReconnect()
             }
@@ -171,13 +214,59 @@ class RemoteBinRepository @Inject constructor(
         }
     }
 
+    private fun scheduleBinsRefresh(immediate: Boolean = false) {
+        refreshBinsJob?.cancel()
+        refreshBinsJob = scope.launch {
+            if (!immediate) {
+                delay(350)
+            }
+            refreshBins()
+        }
+    }
+
     private suspend fun refreshBins() {
+        binsLoading.value = true
         runCatching {
             binApi.getBins().map { it.toDomain() }
         }.onSuccess { bins ->
             binsState.value = bins
+            binsLoading.value = false
+            repositoryErrors.value = null
         }.onFailure { error ->
+            binsLoading.value = false
+            repositoryErrors.value = error.message ?: "Unable to load bins from server"
             Timber.w(error, "Failed to refresh bins from backend")
+        }
+    }
+
+    private fun applyLiveEventToBins(event: WasteEvent) {
+        binsState.update { bins ->
+            bins.map { bin ->
+                if (bin.id != event.binId) return@map bin
+                bin.copy(
+                    status = BinStatus.ONLINE,
+                    lastSeenAt = event.timestamp,
+                    lastWasteType = event.wasteType,
+                    totalEventsToday = bin.totalEventsToday + 1,
+                )
+            }
+        }
+    }
+
+    private suspend fun emitIfNew(event: WasteEvent) {
+        val wasAdded = synchronized(recentlyEmittedEventIds) {
+            if (!recentlyEmittedEventIds.add(event.id)) {
+                false
+            } else {
+                while (recentlyEmittedEventIds.size > 128) {
+                    val oldest = recentlyEmittedEventIds.firstOrNull() ?: break
+                    recentlyEmittedEventIds.remove(oldest)
+                }
+                true
+            }
+        }
+        if (wasAdded) {
+            liveEvents.emit(event)
         }
     }
 }

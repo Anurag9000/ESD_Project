@@ -5,9 +5,12 @@ import androidx.lifecycle.viewModelScope
 import com.example.smartbin.data.repository.AppMode
 import com.example.smartbin.data.repository.DemoModeStore
 import com.example.smartbin.domain.model.Bin
+import com.example.smartbin.domain.model.WasteType
 import com.example.smartbin.domain.repository.BinRepository
 import com.example.smartbin.domain.usecase.StreamWasteEventsUseCase
+import com.example.smartbin.notifications.BinAlertNotifier
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.time.Instant
 import javax.inject.Inject
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
@@ -19,14 +22,24 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+data class WatchedBinAlert(
+    val binId: String,
+    val binName: String,
+    val wasteType: WasteType,
+    val confidence: Float,
+    val timestamp: Instant,
+)
+
 data class MapState(
     val bins: List<Bin> = emptyList(),
-    val isLoading: Boolean = false,
+    val isLoading: Boolean = true,
     val selectedBinIds: Set<String> = emptySet(),
-    val selectedLocality: String? = null,
+    val selectedLocalities: Set<String> = emptySet(),
     val detailBinId: String? = null,
-    val recentlyActiveBinId: String? = null,
-    val streamConnected: Boolean = true,
+    val watchedBinId: String? = null,
+    val recentlyActiveBinIds: Set<String> = emptySet(),
+    val latestWatchedAlert: WatchedBinAlert? = null,
+    val streamConnected: Boolean = false,
     val errorMessage: String? = null,
     val appMode: AppMode = AppMode.MOCK,
 ) {
@@ -34,13 +47,19 @@ data class MapState(
         get() = bins.map { it.locality }.distinct().sorted()
 
     val visibleBins: List<Bin>
-        get() = bins.filter { selectedLocality == null || it.locality == selectedLocality }
+        get() = bins.filter { selectedLocalities.isEmpty() || it.locality in selectedLocalities }
 
     val selectedBins: List<Bin>
         get() = bins.filter { it.id in selectedBinIds }
 
     val detailBin: Bin?
         get() = bins.find { it.id == detailBinId }
+
+    val watchedBin: Bin?
+        get() = bins.find { it.id == watchedBinId }
+
+    val explicitTriggerTargetBinId: String?
+        get() = detailBinId ?: watchedBinId ?: selectedBins.singleOrNull()?.id
 }
 
 @HiltViewModel
@@ -48,21 +67,53 @@ class MapViewModel @Inject constructor(
     private val binRepository: BinRepository,
     private val demoModeStore: DemoModeStore,
     private val streamWasteEventsUseCase: StreamWasteEventsUseCase,
+    private val binAlertNotifier: BinAlertNotifier,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(MapState())
     val state: StateFlow<MapState> = _state.asStateFlow()
-    private var recentActivityResetJob: Job? = null
+    private val recentActivityResetJobs = linkedMapOf<String, Job>()
 
     init {
-        loadBins()
         observeAppMode()
+        observeWatchedBin()
+        observeLoadingState()
+        observeRepositoryErrors()
+        loadBins()
         observeStreamStatus()
         observeLiveEvents()
     }
 
+    private fun observeLoadingState() {
+        viewModelScope.launch {
+            binRepository.observeBinsLoading().collect { loading ->
+                _state.update { it.copy(isLoading = loading) }
+            }
+        }
+    }
+
+    private fun observeRepositoryErrors() {
+        viewModelScope.launch {
+            binRepository.observeRepositoryErrors().collect { message ->
+                _state.update { it.copy(errorMessage = message) }
+            }
+        }
+    }
+
+    private fun observeWatchedBin() {
+        viewModelScope.launch {
+            demoModeStore.watchedBinId.collect { watchedBinId ->
+                _state.update {
+                    it.copy(
+                        watchedBinId = watchedBinId,
+                        latestWatchedAlert = if (watchedBinId == null) null else it.latestWatchedAlert,
+                    )
+                }
+            }
+        }
+    }
+
     private fun loadBins() {
-        _state.update { it.copy(isLoading = true) }
         viewModelScope.launch {
             binRepository.observeBins()
                 .catch { error ->
@@ -74,15 +125,36 @@ class MapViewModel @Inject constructor(
                     }
                 }
                 .collect { bins ->
-                _state.update { current ->
-                    val retainedSelection = current.selectedBinIds.filterTo(linkedSetOf()) { selectedId ->
+                val current = state.value
+                val retainedLocalities = current.selectedLocalities.filterTo(linkedSetOf()) { selectedLocality ->
+                    bins.any { it.locality == selectedLocality }
+                }
+                val retainedSelection = if (current.selectedLocalities.isNotEmpty()) {
+                    bins.filter { it.locality in retainedLocalities }.mapTo(linkedSetOf()) { it.id }
+                } else {
+                    current.selectedBinIds.filterTo(linkedSetOf()) { selectedId ->
                         bins.any { it.id == selectedId }
                     }
+                }
+                val retainedWatchedBinId = current.watchedBinId?.takeIf { watchedBinId ->
+                    bins.any { it.id == watchedBinId }
+                }
+                val retainedDetailBinId = current.detailBinId?.takeIf { detailBinId ->
+                    bins.any { bin ->
+                        bin.id == detailBinId && (retainedLocalities.isEmpty() || bin.locality in retainedLocalities)
+                    }
+                }
+                if (current.watchedBinId != null && retainedWatchedBinId == null) {
+                    demoModeStore.setWatchedBinId(null)
+                }
+                _state.update { current ->
                     current.copy(
                         bins = bins,
-                        isLoading = false,
                         selectedBinIds = retainedSelection,
-                        errorMessage = null,
+                        selectedLocalities = retainedLocalities,
+                        detailBinId = retainedDetailBinId,
+                        watchedBinId = retainedWatchedBinId,
+                        latestWatchedAlert = current.latestWatchedAlert?.takeIf { alert -> alert.binId == retainedWatchedBinId },
                     )
                 }
             }
@@ -101,23 +173,20 @@ class MapViewModel @Inject constructor(
                     }
                 }
                 .collect { event ->
-                _state.update {
-                    it.copy(
-                        recentlyActiveBinId = event.binId,
-                        detailBinId = it.detailBinId ?: event.binId,
-                        errorMessage = null,
+                val currentState = state.value
+                trackRecentActivity(event.binId)
+                if (currentState.watchedBinId == event.binId) {
+                    val watchedBin = currentState.bins.find { it.id == event.binId }
+                    val watchedBinName = watchedBin?.name ?: "Watched bin ${event.binId}"
+                    val alert = WatchedBinAlert(
+                        binId = event.binId,
+                        binName = watchedBinName,
+                        wasteType = event.wasteType,
+                        confidence = event.confidence,
+                        timestamp = event.timestamp,
                     )
-                }
-                recentActivityResetJob?.cancel()
-                recentActivityResetJob = viewModelScope.launch {
-                    delay(3500)
-                    _state.update { state ->
-                        if (state.recentlyActiveBinId == event.binId) {
-                            state.copy(recentlyActiveBinId = null)
-                        } else {
-                            state
-                        }
-                    }
+                    _state.update { it.copy(latestWatchedAlert = alert) }
+                    binAlertNotifier.showWasteDetectedNotification(event.binId, watchedBinName, event)
                 }
             }
         }
@@ -143,9 +212,43 @@ class MapViewModel @Inject constructor(
                     }
                 }
                 .collect { isConnected ->
-                _state.update { it.copy(streamConnected = isConnected) }
-            }
+                    _state.update { it.copy(streamConnected = isConnected) }
+                }
         }
+    }
+
+    private fun trackRecentActivity(binId: String) {
+        _state.update { it.copy(recentlyActiveBinIds = it.recentlyActiveBinIds + binId) }
+        recentActivityResetJobs.remove(binId)?.cancel()
+        recentActivityResetJobs[binId] = viewModelScope.launch {
+            delay(3500)
+            _state.update { state ->
+                state.copy(recentlyActiveBinIds = state.recentlyActiveBinIds - binId)
+            }
+            recentActivityResetJobs.remove(binId)
+        }
+    }
+
+    fun dismissWatchedAlert() {
+        _state.update { it.copy(latestWatchedAlert = null) }
+    }
+
+    fun toggleWatchedBin(binId: String) {
+        val current = state.value
+        val nextWatchedBinId = if (current.watchedBinId == binId) null else binId
+        demoModeStore.setWatchedBinId(nextWatchedBinId)
+        _state.update { state ->
+            state.copy(
+                watchedBinId = nextWatchedBinId,
+                latestWatchedAlert = if (nextWatchedBinId == null || nextWatchedBinId != state.latestWatchedAlert?.binId) null else state.latestWatchedAlert,
+            )
+        }
+    }
+
+    private fun observedLocalityBinIds(state: MapState, localities: Set<String>): Set<String> {
+        return state.bins
+            .filter { it.locality in localities }
+            .mapTo(linkedSetOf()) { it.id }
     }
 
     fun onMarkerTapped(binId: String) {
@@ -158,46 +261,79 @@ class MapViewModel @Inject constructor(
 
     fun toggleBinSelection(binId: String) {
         _state.update { state ->
-            val updated = state.selectedBinIds.toMutableSet().apply {
+            val baseSelection = state.selectedBinIds.toMutableSet()
+            val updated = baseSelection.apply {
                 if (!add(binId)) remove(binId)
             }
-            state.copy(selectedBinIds = updated)
+            state.copy(
+                selectedBinIds = updated,
+                selectedLocalities = emptySet(),
+            )
         }
     }
 
     fun selectLocality(locality: String?) {
         _state.update { state ->
-            val visibleIds = state.bins
-                .filter { locality == null || it.locality == locality }
-                .mapTo(linkedSetOf()) { it.id }
+            if (locality == null) {
+                return@update state.copy(selectedLocalities = emptySet(), selectedBinIds = emptySet())
+            }
+            val updatedLocalities = state.selectedLocalities.toMutableSet().apply {
+                if (!add(locality)) remove(locality)
+            }
+            val localityBinIds = observedLocalityBinIds(state, updatedLocalities)
+            val retainedDetailBinId = state.detailBinId?.takeIf { detailBinId ->
+                state.bins.any { bin ->
+                    bin.id == detailBinId && (updatedLocalities.isEmpty() || bin.locality in updatedLocalities)
+                }
+            }
             state.copy(
-                selectedLocality = locality,
-                selectedBinIds = if (locality == null) state.selectedBinIds else visibleIds,
+                selectedLocalities = updatedLocalities,
+                selectedBinIds = localityBinIds,
+                detailBinId = retainedDetailBinId,
             )
         }
     }
 
     fun selectVisibleBins() {
         _state.update { state ->
-            state.copy(selectedBinIds = state.visibleBins.mapTo(linkedSetOf()) { it.id })
+            state.copy(
+                selectedBinIds = state.visibleBins.mapTo(linkedSetOf()) { it.id },
+                selectedLocalities = emptySet(),
+            )
         }
     }
 
     fun clearSelection() {
-        _state.update { it.copy(selectedBinIds = emptySet(), selectedLocality = null, detailBinId = null) }
+        _state.update {
+            it.copy(
+                selectedBinIds = emptySet(),
+                selectedLocalities = emptySet(),
+                detailBinId = null,
+            )
+        }
     }
 
     fun triggerDemoEvent(binId: String? = null) {
         viewModelScope.launch {
             val targetBinId = binId
                 ?: state.value.detailBinId
-                ?: state.value.selectedBins.firstOrNull()?.id
-                ?: state.value.visibleBins.firstOrNull()?.id
+                ?: state.value.watchedBinId
+                ?: state.value.selectedBins.singleOrNull()?.id
             binRepository.triggerDemoEvent(targetBinId)
         }
     }
 
     fun toggleAppMode() {
         demoModeStore.toggleMode()
+    }
+
+    fun openBinFromNotification(binId: String) {
+        _state.update { state ->
+            state.copy(
+                detailBinId = binId,
+                selectedBinIds = linkedSetOf(binId),
+                selectedLocalities = emptySet(),
+            )
+        }
     }
 }

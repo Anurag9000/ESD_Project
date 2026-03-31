@@ -17,7 +17,7 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn.functional as F
-from PIL import Image, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from torch import nn
 from torch.optim import AdamW, Optimizer
 from torch.utils.checkpoint import checkpoint_sequential
@@ -2054,6 +2054,95 @@ def save_json(path: Path, payload: object) -> None:
         handle.write("\n")
 
 
+def save_confusion_matrix_plot(
+    path: Path,
+    confusion_matrix: np.ndarray,
+    class_names: list[str],
+    title: str,
+) -> None:
+    matrix = np.asarray(confusion_matrix, dtype=np.int64)
+    num_classes = len(class_names)
+    cell_size = 108
+    left_margin = 190
+    top_margin = 140
+    right_margin = 40
+    bottom_margin = 70
+    width = left_margin + num_classes * cell_size + right_margin
+    height = top_margin + num_classes * cell_size + bottom_margin
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.load_default()
+    title_font = font
+    max_count = int(matrix.max()) if matrix.size > 0 else 0
+
+    def cell_fill(value: int) -> tuple[int, int, int]:
+        if max_count <= 0:
+            return (245, 247, 250)
+        intensity = value / max_count
+        light = np.array([245, 247, 250], dtype=np.float64)
+        dark = np.array([27, 94, 154], dtype=np.float64)
+        blended = light + (dark - light) * intensity
+        return tuple(int(round(channel)) for channel in blended)
+
+    def text_size(text: str) -> tuple[int, int]:
+        box = draw.textbbox((0, 0), text, font=font)
+        return box[2] - box[0], box[3] - box[1]
+
+    title_box = draw.textbbox((0, 0), title, font=title_font)
+    title_width = title_box[2] - title_box[0]
+    draw.text(((width - title_width) / 2, 24), title, fill="black", font=title_font)
+    draw.text((left_margin + (num_classes * cell_size) / 2 - 48, 64), "Predicted", fill="black", font=font)
+    draw.text((26, top_margin + (num_classes * cell_size) / 2 - 6), "True", fill="black", font=font)
+
+    for class_index, class_name in enumerate(class_names):
+        x0 = left_margin + class_index * cell_size
+        y0 = top_margin + class_index * cell_size
+        label_width, label_height = text_size(class_name)
+        draw.text(
+            (x0 + (cell_size - label_width) / 2, top_margin - label_height - 18),
+            class_name,
+            fill="black",
+            font=font,
+        )
+        draw.text(
+            (left_margin - label_width - 16, y0 + (cell_size - label_height) / 2),
+            class_name,
+            fill="black",
+            font=font,
+        )
+
+    for row_index in range(num_classes):
+        row_sum = int(matrix[row_index].sum())
+        for col_index in range(num_classes):
+            value = int(matrix[row_index, col_index])
+            x0 = left_margin + col_index * cell_size
+            y0 = top_margin + row_index * cell_size
+            x1 = x0 + cell_size
+            y1 = y0 + cell_size
+            fill = cell_fill(value)
+            draw.rectangle([x0, y0, x1, y1], fill=fill, outline=(190, 196, 204), width=1)
+            percent = (100.0 * value / row_sum) if row_sum > 0 else 0.0
+            count_text = str(value)
+            pct_text = f"{percent:.1f}%"
+            count_width, count_height = text_size(count_text)
+            pct_width, pct_height = text_size(pct_text)
+            text_color = "white" if value > 0.55 * max(max_count, 1) else "black"
+            draw.text(
+                (x0 + (cell_size - count_width) / 2, y0 + cell_size / 2 - count_height - 6),
+                count_text,
+                fill=text_color,
+                font=font,
+            )
+            draw.text(
+                (x0 + (cell_size - pct_width) / 2, y0 + cell_size / 2 + 4),
+                pct_text,
+                fill=text_color,
+                font=font,
+            )
+
+    image.save(path)
+
+
 def append_jsonl(path: Path, payload: object) -> None:
     with path.open("a", encoding="utf-8") as handle:
         json.dump(payload, handle)
@@ -3258,6 +3347,18 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
     val_metrics = compute_classification_metrics(val_logits, val_targets, train_dataset.classes, args.confidence_threshold)
     test_metrics = compute_classification_metrics(test_logits, test_targets, train_dataset.classes, args.confidence_threshold)
     test_correct_confidence = compute_correct_confidence_by_class(test_logits, test_targets, train_dataset.classes)
+    save_confusion_matrix_plot(
+        output_dir / "validation_confusion_matrix.png",
+        np.asarray(val_metrics["confusion_matrix"], dtype=np.int64),
+        train_dataset.classes,
+        "Validation Confusion Matrix",
+    )
+    save_confusion_matrix_plot(
+        output_dir / "test_confusion_matrix.png",
+        np.asarray(test_metrics["confusion_matrix"], dtype=np.int64),
+        train_dataset.classes,
+        "Test Confusion Matrix",
+    )
 
     final_checkpoint = {
         "model_state_dict": model.state_dict(),

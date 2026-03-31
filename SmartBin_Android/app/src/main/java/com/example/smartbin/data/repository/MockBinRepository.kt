@@ -90,6 +90,8 @@ class MockBinRepository @Inject constructor() : BinRepository {
     private val binsState = MutableStateFlow(baseBins)
     private val eventsState = MutableStateFlow(seedEvents())
     private val liveEvents = MutableSharedFlow<WasteEvent>(extraBufferCapacity = 32)
+    private val binsLoading = MutableStateFlow(false)
+    private val repositoryErrors = MutableStateFlow<String?>(null)
     private val streamStatus = MutableStateFlow(true)
 
     init {
@@ -102,6 +104,10 @@ class MockBinRepository @Inject constructor() : BinRepository {
     override fun observeBin(binId: String): Flow<Bin?> = binsState.map { bins ->
         bins.find { it.id == binId }
     }
+
+    override fun observeBinsLoading(): Flow<Boolean> = binsLoading
+
+    override fun observeRepositoryErrors(): Flow<String?> = repositoryErrors
 
     override fun observeStreamStatus(): Flow<Boolean> = streamStatus
 

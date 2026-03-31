@@ -39,6 +39,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -56,6 +57,7 @@ import com.example.smartbin.domain.model.WasteType
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import org.maplibre.android.annotations.IconFactory
+import org.maplibre.android.annotations.Marker
 import org.maplibre.android.annotations.MarkerOptions
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.geometry.LatLng
@@ -73,7 +75,9 @@ fun BinMapScreen(
     onSelectVisibleBins: () -> Unit,
     onClearSelection: () -> Unit,
     onDismissDetails: () -> Unit,
+    onDismissWatchedAlert: () -> Unit,
     onTriggerDemoEvent: (String?) -> Unit,
+    onToggleWatchedBin: (String) -> Unit,
     onToggleAppMode: () -> Unit,
 ) {
     val detailBin = state.detailBin
@@ -103,11 +107,20 @@ fun BinMapScreen(
                     )
                 }
             }
+            if (state.latestWatchedAlert != null) {
+                WatchedBinAlertBanner(
+                    alert = state.latestWatchedAlert,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    onDismiss = onDismissWatchedAlert,
+                )
+            }
             BinMap(
                 bins = state.visibleBins,
                 selectedBinIds = state.selectedBinIds,
-                activeBinId = state.recentlyActiveBinId,
-                selectedLocality = state.selectedLocality,
+                activeBinIds = state.recentlyActiveBinIds,
+                selectedLocalities = state.selectedLocalities,
                 onMarkerTapped = onMarkerTapped,
                 modifier = Modifier.weight(1f),
             )
@@ -131,9 +144,49 @@ fun BinMapScreen(
             BinDetailSheet(
                 bin = detailBin,
                 isSelected = detailBin.id in state.selectedBinIds,
+                isWatched = detailBin.id == state.watchedBinId,
                 onToggleSelection = { onToggleBinSelection(detailBin.id) },
                 onTriggerDemoEvent = { onTriggerDemoEvent(detailBin.id) },
+                onToggleWatchedBin = { onToggleWatchedBin(detailBin.id) },
             )
+        }
+    }
+}
+
+@Composable
+private fun WatchedBinAlertBanner(
+    alert: WatchedBinAlert,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(containerColor = SmartGreen.copy(alpha = 0.14f)),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = "Watched bin alert",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = "${alert.binName} detected ${alert.wasteType.label.lowercase()} at ${(alert.confidence * 100).toInt()}% confidence",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            TextButton(onClick = onDismiss) {
+                Text("Dismiss")
+            }
         }
     }
 }
@@ -203,13 +256,13 @@ private fun FleetMapHeader(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             FilterChip(
-                selected = state.selectedLocality == null,
+                selected = state.selectedLocalities.isEmpty(),
                 onClick = { onSelectLocality(null) },
                 label = { Text("All localities") },
             )
             state.localities.forEach { locality ->
                 FilterChip(
-                    selected = state.selectedLocality == locality,
+                    selected = locality in state.selectedLocalities,
                     onClick = { onSelectLocality(locality) },
                     label = { Text(locality) },
                     colors = FilterChipDefaults.filterChipColors(
@@ -250,6 +303,9 @@ private fun SelectionSummaryCard(
     onTriggerDemoEvent: (String?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val hasExplicitTarget = state.explicitTriggerTargetBinId != null
+    val watchedBin = state.watchedBin
+    val selectionMetricLabel = if (state.selectedLocalities.isNotEmpty()) "Bins in scope" else "Selected"
     ElevatedCard(
         modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -269,20 +325,36 @@ private fun SelectionSummaryCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 SummaryMetric("Visible bins", state.visibleBins.size.toString())
-                SummaryMetric("Selected", state.selectedBinIds.size.toString())
-                SummaryMetric("Recent event", state.recentlyActiveBinId ?: "None")
+                SummaryMetric(selectionMetricLabel, state.selectedBinIds.size.toString())
+                SummaryMetric("Recent events", state.recentlyActiveBinIds.size.toString())
             }
             Text(
                 text = if (state.selectedBins.isEmpty()) {
-                    "Tap map pins to build a custom analytics group."
+                    if (state.selectedLocalities.isEmpty()) {
+                        "Tap map pins or locality chips to build a custom analytics group."
+                    } else {
+                        "Localities selected: ${state.selectedLocalities.joinToString()}. Tap an individual bin to switch back to custom bin mode."
+                    }
                 } else {
                     state.selectedBins.joinToString(separator = " • ") { it.name }
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            TextButton(onClick = { onTriggerDemoEvent(null) }, modifier = Modifier.align(Alignment.End)) {
-                Text("Trigger live demo event")
+            if (watchedBin != null) {
+                Text(
+                    text = "Phone alerts enabled for ${watchedBin.name}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = SmartGreen,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+            TextButton(
+                enabled = hasExplicitTarget,
+                onClick = { onTriggerDemoEvent(null) },
+                modifier = Modifier.align(Alignment.End),
+            ) {
+                Text(if (hasExplicitTarget) "Trigger live demo event" else "Open or watch one bin to trigger an event")
             }
         }
     }
@@ -308,8 +380,10 @@ private fun SummaryMetric(label: String, value: String) {
 private fun BinDetailSheet(
     bin: Bin,
     isSelected: Boolean,
+    isWatched: Boolean,
     onToggleSelection: () -> Unit,
     onTriggerDemoEvent: () -> Unit,
+    onToggleWatchedBin: () -> Unit,
 ) {
     val formatter = remember { DateTimeFormatter.ofPattern("dd MMM, HH:mm") }
     val zoneId = remember { ZoneId.systemDefault() }
@@ -359,6 +433,15 @@ private fun BinDetailSheet(
             TextButton(onClick = onToggleSelection) {
                 Text(if (isSelected) "Remove from analytics" else "Add to analytics")
             }
+            TextButton(onClick = onToggleWatchedBin) {
+                Text(if (isWatched) "Disable phone alerts" else "Enable phone alerts")
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+        ) {
             TextButton(onClick = onTriggerDemoEvent) {
                 Text("Simulate event")
             }
@@ -382,8 +465,8 @@ private fun DetailRow(label: String, value: String) {
 fun BinMap(
     bins: List<Bin>,
     selectedBinIds: Set<String>,
-    activeBinId: String?,
-    selectedLocality: String?,
+    activeBinIds: Set<String>,
+    selectedLocalities: Set<String>,
     onMarkerTapped: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -391,7 +474,9 @@ fun BinMap(
     val mapView = remember { MapView(context) }
     var mapInstance by remember { mutableStateOf<MapLibreMap?>(null) }
     var styleLoaded by remember { mutableStateOf(false) }
-    var lastCameraLocality by remember { mutableStateOf<String?>(null) }
+    var lastCameraKey by remember { mutableStateOf<String?>(null) }
+    val markerByBinId = remember { mutableStateMapOf<String, Marker>() }
+    val markerVisualStateByBinId = remember { mutableStateMapOf<String, String>() }
 
     DisposableEffect(mapView) {
         mapView.onStart()
@@ -416,13 +501,30 @@ fun BinMap(
         }
     }
 
-    LaunchedEffect(styleLoaded, bins, selectedBinIds, activeBinId) {
+    LaunchedEffect(styleLoaded, bins, selectedBinIds, activeBinIds) {
         if (!styleLoaded) return@LaunchedEffect
         val map = mapInstance ?: return@LaunchedEffect
-        map.clear()
         val iconFactory = IconFactory.getInstance(context)
+        val currentBinIds = bins.mapTo(linkedSetOf()) { it.id }
+        val staleBinIds = markerByBinId.keys.toSet() - currentBinIds
+        staleBinIds.forEach { staleBinId ->
+            markerByBinId.remove(staleBinId)?.let(map::removeMarker)
+            markerVisualStateByBinId.remove(staleBinId)
+        }
         bins.forEach { bin ->
-            map.addMarker(
+            val visualKey = listOf(
+                bin.latitude.toString(),
+                bin.longitude.toString(),
+                bin.status.name,
+                bin.lastWasteType?.name.orEmpty(),
+                (bin.id in selectedBinIds).toString(),
+                (bin.id in activeBinIds).toString(),
+            ).joinToString("|")
+            if (markerVisualStateByBinId[bin.id] == visualKey) {
+                return@forEach
+            }
+            markerByBinId.remove(bin.id)?.let(map::removeMarker)
+            val marker = map.addMarker(
                 MarkerOptions()
                     .position(LatLng(bin.latitude, bin.longitude))
                     .title(bin.name)
@@ -432,13 +534,20 @@ fun BinMap(
                             createMarkerBitmap(
                                 bin = bin,
                                 isSelected = bin.id in selectedBinIds,
-                                isActive = bin.id == activeBinId,
+                                isActive = bin.id in activeBinIds,
                             ),
                         ),
                     ),
             )
+            markerByBinId[bin.id] = marker
+            markerVisualStateByBinId[bin.id] = visualKey
         }
-        if (bins.isNotEmpty() && (lastCameraLocality != selectedLocality || lastCameraLocality == null)) {
+        val cameraKey = buildString {
+            append(selectedLocalities.sorted().joinToString("|"))
+            append('#')
+            append(bins.map { it.id }.sorted().joinToString("|"))
+        }
+        if (bins.isNotEmpty() && lastCameraKey != cameraKey) {
             if (bins.size == 1) {
                 val firstBin = bins.first()
                 map.animateCamera(
@@ -459,7 +568,7 @@ fun BinMap(
                     ),
                 )
             }
-            lastCameraLocality = selectedLocality
+            lastCameraKey = cameraKey
         }
     }
 

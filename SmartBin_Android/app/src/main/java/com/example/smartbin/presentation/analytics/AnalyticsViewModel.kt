@@ -3,6 +3,7 @@ package com.example.smartbin.presentation.analytics
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.smartbin.domain.model.TimeRange
+import com.example.smartbin.domain.repository.BinRepository
 import com.example.smartbin.domain.usecase.AnalyticsBucket
 import com.example.smartbin.domain.usecase.AnalyticsResult
 import com.example.smartbin.domain.usecase.GetAggregatedAnalyticsUseCase
@@ -11,11 +12,13 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -43,6 +46,7 @@ data class AnalyticsState(
 
 @HiltViewModel
 class AnalyticsViewModel @Inject constructor(
+    private val binRepository: BinRepository,
     private val getAggregatedAnalyticsUseCase: GetAggregatedAnalyticsUseCase,
     private val streamWasteEventsUseCase: StreamWasteEventsUseCase,
 ) : ViewModel() {
@@ -51,8 +55,11 @@ class AnalyticsViewModel @Inject constructor(
     val state: StateFlow<AnalyticsState> = _state.asStateFlow()
 
     private var analyticsJob: Job? = null
+    private var liveRefreshDebounceJob: Job? = null
+    private var binLocalitiesById: Map<String, String> = emptyMap()
 
     init {
+        observeBins()
         observeLiveUpdates()
     }
 
@@ -100,6 +107,10 @@ class AnalyticsViewModel @Inject constructor(
     fun refreshAnalytics() {
         val current = _state.value
         if (current.selectedBinIds.isEmpty() && current.selectedLocalities.isEmpty()) {
+            analyticsJob?.cancel()
+            analyticsJob = null
+            liveRefreshDebounceJob?.cancel()
+            liveRefreshDebounceJob = null
             _state.update { it.copy(analyticsResult = null, isLoading = false, errorMessage = null) }
             return
         }
@@ -134,11 +145,33 @@ class AnalyticsViewModel @Inject constructor(
                 .catch { error ->
                     _state.update { it.copy(errorMessage = error.message ?: "Realtime analytics updates failed") }
                 }
-                .collect {
+                .collect { event ->
                     val current = _state.value
-                    if (current.selectedBinIds.isNotEmpty() || current.selectedLocalities.isNotEmpty()) {
-                        refreshAnalytics()
+                    val matchesSelection = when {
+                        current.selectedBinIds.isNotEmpty() -> event.binId in current.selectedBinIds
+                        current.selectedLocalities.isNotEmpty() -> {
+                            val eventLocality = binLocalitiesById[event.binId]
+                            eventLocality != null && eventLocality in current.selectedLocalities
+                        }
+                        else -> false
                     }
+                    if (matchesSelection) {
+                        liveRefreshDebounceJob?.cancel()
+                        liveRefreshDebounceJob = viewModelScope.launch {
+                            delay(450)
+                            refreshAnalytics()
+                        }
+                    }
+                }
+        }
+    }
+
+    private fun observeBins() {
+        viewModelScope.launch {
+            binRepository.observeBins()
+                .catch { }
+                .collect { bins ->
+                    binLocalitiesById = bins.associate { it.id to it.locality }
                 }
         }
     }

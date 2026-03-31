@@ -6,9 +6,14 @@ import com.example.smartbin.domain.repository.BinRepository
 import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.launch
 
 @Singleton
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -18,12 +23,30 @@ class HybridBinRepository @Inject constructor(
     private val demoModeStore: DemoModeStore,
 ) : BinRepository {
 
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    init {
+        scope.launch {
+            demoModeStore.mode.collectLatest { mode ->
+                remoteRepository.setActive(mode == AppMode.LIVE)
+            }
+        }
+    }
+
     override fun observeBins(): Flow<List<Bin>> = demoModeStore.mode.flatMapLatest { mode ->
         active(mode).observeBins()
     }
 
     override fun observeBin(binId: String): Flow<Bin?> = demoModeStore.mode.flatMapLatest { mode ->
         active(mode).observeBin(binId)
+    }
+
+    override fun observeBinsLoading(): Flow<Boolean> = demoModeStore.mode.flatMapLatest { mode ->
+        active(mode).observeBinsLoading()
+    }
+
+    override fun observeRepositoryErrors(): Flow<String?> = demoModeStore.mode.flatMapLatest { mode ->
+        active(mode).observeRepositoryErrors()
     }
 
     override fun observeStreamStatus(): Flow<Boolean> = demoModeStore.mode.flatMapLatest { mode ->

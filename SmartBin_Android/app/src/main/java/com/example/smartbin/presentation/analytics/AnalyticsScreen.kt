@@ -55,7 +55,7 @@ import java.time.ZoneId
 fun AnalyticsScreen(
     state: AnalyticsState,
     selectedBins: List<Bin>,
-    selectedLocality: String?,
+    selectedLocalities: Set<String>,
     onTimeFilterChanged: (TimeFilter) -> Unit,
     onShowCustomDateDialog: () -> Unit,
     onDismissCustomDateDialog: () -> Unit,
@@ -69,7 +69,7 @@ fun AnalyticsScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        AnalyticsHeader(selectedBins = selectedBins, selectedLocality = selectedLocality)
+        AnalyticsHeader(selectedBins = selectedBins, selectedLocalities = selectedLocalities)
         TimeFilterRow(
             selectedFilter = state.timeFilter,
             onFilterSelected = { filter ->
@@ -113,7 +113,7 @@ fun AnalyticsScreen(
 }
 
 @Composable
-private fun AnalyticsHeader(selectedBins: List<Bin>, selectedLocality: String?) {
+private fun AnalyticsHeader(selectedBins: List<Bin>, selectedLocalities: Set<String>) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(
             text = "Waste Analytics",
@@ -122,12 +122,12 @@ private fun AnalyticsHeader(selectedBins: List<Bin>, selectedLocality: String?) 
         )
         Text(
             text = when {
-                selectedBins.isNotEmpty() && selectedLocality != null ->
-                    "${selectedBins.size} bins selected in $selectedLocality"
+                selectedBins.isNotEmpty() && selectedLocalities.isNotEmpty() ->
+                    "${selectedBins.size} bins selected in ${selectedLocalities.joinToString()}"
                 selectedBins.isNotEmpty() ->
                     "${selectedBins.size} bins selected for aggregate analysis"
-                selectedLocality != null ->
-                    "Viewing locality analytics for $selectedLocality"
+                selectedLocalities.isNotEmpty() ->
+                    "Viewing locality analytics for ${selectedLocalities.joinToString()}"
                 else ->
                     "Select bins on the map to build an analytics group"
             },
@@ -318,8 +318,16 @@ private fun TrendSection(result: AnalyticsResult) {
             if (result.trend.isEmpty()) {
                 Text("No trend data for the selected period.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
-                val maxEvents = remember(result.trend) { result.trend.maxOf { it.totalEvents }.coerceAtLeast(1) }
-                result.trend.takeLast(8).forEach { point ->
+                val trendPoints = result.trend.takeLast(8)
+                val maxEvents = remember(trendPoints) { trendPoints.maxOf { it.totalEvents }.coerceAtLeast(1) }
+                if (result.trend.size > trendPoints.size) {
+                    Text(
+                        "Showing the most recent ${trendPoints.size} time buckets from the selected period.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                trendPoints.forEach { point ->
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),

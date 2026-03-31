@@ -1,5 +1,10 @@
 package com.example.smartbin.presentation
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
@@ -15,6 +20,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -33,7 +40,11 @@ sealed class Screen(val route: String, val label: String, val icon: @Composable 
 }
 
 @Composable
-fun MainScreen() {
+fun MainScreen(
+    notificationOpenBinId: String? = null,
+    onNotificationBinConsumed: () -> Unit = {},
+) {
+    val context = LocalContext.current
     val navController = rememberNavController()
     val mapViewModel: MapViewModel = hiltViewModel()
     val analyticsViewModel: AnalyticsViewModel = hiltViewModel()
@@ -42,12 +53,34 @@ fun MainScreen() {
     val analyticsState by analyticsViewModel.state.collectAsState()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
+    val liveFabTargetBinId = mapState.explicitTriggerTargetBinId
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = {},
+    )
 
-    LaunchedEffect(mapState.selectedBinIds, mapState.selectedLocality) {
+    LaunchedEffect(mapState.selectedBinIds, mapState.selectedLocalities) {
         analyticsViewModel.onSelectionChanged(
-            binIds = mapState.selectedBinIds,
-            localities = mapState.selectedLocality?.let { setOf(it) } ?: emptySet(),
+            binIds = if (mapState.selectedLocalities.isNotEmpty()) emptySet() else mapState.selectedBinIds,
+            localities = mapState.selectedLocalities,
         )
+    }
+    LaunchedEffect(notificationOpenBinId) {
+        val binId = notificationOpenBinId ?: return@LaunchedEffect
+        navController.navigate(Screen.Map.route) {
+            launchSingleTop = true
+        }
+        mapViewModel.openBinFromNotification(binId)
+        onNotificationBinConsumed()
+    }
+    LaunchedEffect(mapState.watchedBinId) {
+        if (
+            mapState.watchedBinId != null &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     Scaffold(
@@ -71,11 +104,14 @@ fun MainScreen() {
                 }
             }
         },
-        floatingActionButton = if (currentDestination?.hierarchy?.any { it.route == Screen.Map.route } == true) {
+        floatingActionButton = if (
+            currentDestination?.hierarchy?.any { it.route == Screen.Map.route } == true &&
+            liveFabTargetBinId != null
+        ) {
             {
-            FloatingActionButton(onClick = { mapViewModel.triggerDemoEvent() }) {
-                Text("Live")
-            }
+                FloatingActionButton(onClick = { mapViewModel.triggerDemoEvent(liveFabTargetBinId) }) {
+                    Text("Live")
+                }
             }
         } else {
             {}
@@ -95,7 +131,9 @@ fun MainScreen() {
                     onSelectVisibleBins = mapViewModel::selectVisibleBins,
                     onClearSelection = mapViewModel::clearSelection,
                     onDismissDetails = mapViewModel::dismissBinDetails,
+                    onDismissWatchedAlert = mapViewModel::dismissWatchedAlert,
                     onTriggerDemoEvent = mapViewModel::triggerDemoEvent,
+                    onToggleWatchedBin = mapViewModel::toggleWatchedBin,
                     onToggleAppMode = mapViewModel::toggleAppMode,
                 )
             }
@@ -103,7 +141,7 @@ fun MainScreen() {
                 AnalyticsScreen(
                     state = analyticsState,
                     selectedBins = mapState.selectedBins,
-                    selectedLocality = mapState.selectedLocality,
+                    selectedLocalities = mapState.selectedLocalities,
                     onTimeFilterChanged = analyticsViewModel::onTimeFilterChanged,
                     onShowCustomDateDialog = analyticsViewModel::showCustomDateDialog,
                     onDismissCustomDateDialog = analyticsViewModel::dismissCustomDateDialog,
