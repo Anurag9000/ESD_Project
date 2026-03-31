@@ -8,6 +8,20 @@ source .venv/bin/activate
 
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
+OUTPUT_DIR="Results/efficientnet_b0_full_model_loss_cleanup_adamw"
+LOG_FILE="logs/efficientnet_b0_full_model_loss_cleanup_adamw.log.jsonl"
+BASE_CHECKPOINT="Results/efficientnet_b0_ce_progressive_adamw_final_best/efficientnet_b0_ce_progressive_adamw_best_loss.pt"
+RESUME_CHECKPOINT="$BASE_CHECKPOINT"
+RESUME_MODE="global_best"
+
+if [[ -f "$OUTPUT_DIR/step_last.pt" ]]; then
+  RESUME_CHECKPOINT="$OUTPUT_DIR/step_last.pt"
+  RESUME_MODE="latest"
+elif [[ -f "$OUTPUT_DIR/last.pt" ]]; then
+  RESUME_CHECKPOINT="$OUTPUT_DIR/last.pt"
+  RESUME_MODE="latest"
+fi
+
 python scripts/train_efficientnet_b0_progressive.py \
   --dataset-root Dataset_Final \
   --weighted-sampling \
@@ -21,9 +35,9 @@ python scripts/train_efficientnet_b0_progressive.py \
   --classifier-early-stopping-metric val_loss \
   --head-lr 1e-4 \
   --backbone-lr 5e-5 \
-  --output-dir Results/efficientnet_b0_full_model_loss_cleanup_adamw \
-  --log-file logs/efficientnet_b0_full_model_loss_cleanup_adamw.log.jsonl \
-  --resume-checkpoint Results/efficientnet_b0_ce_progressive_adamw_final_best/efficientnet_b0_ce_progressive_adamw_best_loss.pt \
-  --resume-mode global_best \
+  --output-dir "$OUTPUT_DIR" \
+  --log-file "$LOG_FILE" \
+  --resume-checkpoint "$RESUME_CHECKPOINT" \
+  --resume-mode "$RESUME_MODE" \
   --resume-phase-index 1 \
   "$@"
