@@ -370,9 +370,9 @@ This matters because the dataset is imbalanced, especially with `other` dominati
 
 The repo now uses stage-specific patience settings:
 
-- `supcon_early_stopping_patience = 10`
-- `head_early_stopping_patience = 10`
-- `stage_early_stopping_patience = 10`
+- `supcon_early_stopping_patience = 5`
+- `head_early_stopping_patience = 5`
+- `stage_early_stopping_patience = 5`
 - `early_stopping_min_delta = 1e-4`
 
 Validation cadence:

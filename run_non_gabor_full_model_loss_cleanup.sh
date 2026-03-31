@@ -16,14 +16,14 @@ python scripts/train_efficientnet_b0_progressive.py \
   --batch-size 224 \
   --head-epochs 0 \
   --stage-epochs 30 \
-  --stage-early-stopping-patience 8 \
+  --stage-early-stopping-patience 5 \
   --classifier-train-mode full_model \
   --classifier-early-stopping-metric val_loss \
   --head-lr 1e-4 \
   --backbone-lr 5e-5 \
-  --output-dir Results/ce_full_model_loss_cleanup \
-  --log-file logs/ce_full_model_loss_cleanup.log.jsonl \
-  --resume-checkpoint Results/ce_progressive_no_supcon_no_sam/last.pt \
+  --output-dir Results/efficientnet_b0_full_model_loss_cleanup_adamw \
+  --log-file logs/efficientnet_b0_full_model_loss_cleanup_adamw.log.jsonl \
+  --resume-checkpoint Results/efficientnet_b0_ce_progressive_adamw_final_best/efficientnet_b0_ce_progressive_adamw_best_loss.pt \
   --resume-mode global_best \
   --resume-phase-index 1 \
   "$@"

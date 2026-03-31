@@ -231,9 +231,9 @@ Current defaults:
 - `head-epochs = 200`
 - `stage-epochs = 200`
 - `unfreeze-chunk-size = 20`
-- `supcon-early-stopping-patience = 10`
-- `head-early-stopping-patience = 10`
-- `stage-early-stopping-patience = 10`
+- `supcon-early-stopping-patience = 5`
+- `head-early-stopping-patience = 5`
+- `stage-early-stopping-patience = 5`
 - `eval-every-train-steps = 1024`
 - `warmup-steps = 1024`
 - `log-every-steps = 100`
