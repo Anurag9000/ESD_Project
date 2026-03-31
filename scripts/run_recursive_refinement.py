@@ -101,6 +101,8 @@ def init_state(args: argparse.Namespace, base_output_dir: Path, base_log_file: P
         "metric": args.metric,
         "threshold": args.threshold,
         "initial_checkpoint": str(initial_checkpoint),
+        "initial_head_lr": args.initial_head_lr,
+        "initial_backbone_lr": args.initial_backbone_lr,
         "accepted_checkpoint": str(initial_checkpoint),
         "accepted_metric": initial_metric,
         "next_head_lr": args.initial_head_lr,
