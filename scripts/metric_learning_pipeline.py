@@ -2281,10 +2281,11 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument(
         "--progressive-phase-global-gating",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help=(
             "Stop opening more backbone layers when a completed progressive phase fails to beat the "
-            "global best checkpoint on the selected classifier early-stopping metric."
+            "global best checkpoint on the selected classifier early-stopping metric. Disabled by "
+            "default because later unfreeze phases can still improve even if an intermediate phase does not."
         ),
     )
     parser.add_argument("--supcon-temperature", type=float, default=0.07)
@@ -3185,6 +3186,21 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
             phase_best_loss,
             phase_best_raw_acc,
             args.early_stopping_min_delta,
+        )
+        log_json_event(
+            log_path,
+            {
+                "event": "phase_global_best_comparison",
+                "phase_index": phase_index,
+                "phase_name": phase.name,
+                "classifier_metric": args.classifier_early_stopping_metric,
+                "phase_improved_global_best": phase_improved_global_best,
+                "phase_best_val_loss": phase_best_loss,
+                "phase_best_val_raw_acc": phase_best_raw_acc,
+                "global_best_val_loss_before_phase": global_best_loss_before_phase,
+                "global_best_val_raw_acc_before_phase": global_best_raw_acc_before_phase,
+                "min_delta": args.early_stopping_min_delta,
+            },
         )
         if (
             args.classifier_train_mode == "progressive"
