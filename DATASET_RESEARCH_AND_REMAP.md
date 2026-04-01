@@ -577,6 +577,21 @@ These are the strongest non-Kaggle primary sources or well-known public sources 
 - Best overlap:
   - strong recyclable-side overlap for `paper`, `plastic`, `metal`, `glass`
 
+### Baidu-214
+
+- Source: https://www.mdpi.com/2071-1050/14/5/3099
+- Class structure:
+  - `214` classes
+  - `58,063` images
+  - `106` recyclable classes
+  - `53` food-waste classes
+  - `36` other-garbage classes
+  - `19` hazardous-garbage classes
+- Best overlap:
+  - very broad fine-grained supervision for `organic`, `paper`, `plastic`, `metal`, `glass`, `battery`, and `trash`
+- Note:
+  - this is one of the largest publicly described fine-grained garbage datasets surfaced in the search
+
 ### BR-124
 
 - Source: https://www.mdpi.com/2071-1050/14/5/3099
@@ -605,6 +620,30 @@ These are the strongest non-Kaggle primary sources or well-known public sources 
 - Note:
   - this appears repeatedly in later waste-classification papers as a broader fine-grained source
 
+### Garbage Collection Dataset
+
+- Sources:
+  - https://pmc.ncbi.nlm.nih.gov/articles/PMC11889143/
+  - corroborating survey summary: https://www.journalofbabylon.com/index.php/JUBPAS/article/download/6161/4561/10759
+- Classes and counts:
+  - `Battery`: `945`
+  - `Biological`: `985`
+  - `Brown Glass`: `607`
+  - `Cardboards`: `891`
+  - `Clothes`: `5325`
+  - `Green Glass`: `629`
+  - `Metal`: `769`
+  - `Paper`: `1050`
+  - `Plastic`: `865`
+  - `Shoes`: `1977`
+  - `Trash`: `697`
+  - `White Glass`: `775`
+- Total images:
+  - `15,150`
+- Best overlap:
+  - direct: `battery`, `clothes`, `metal`, `paper`, `plastic`, `shoes`, `trash`
+  - close: `Biological -> organic`, glass color variants -> `glass`, `Cardboards -> paper`
+
 ### Custom Bangladeshi E-Waste Image Dataset for Object Detection and Recognition
 
 - Source: https://data.mendeley.com/datasets/77383kmdnw
@@ -628,6 +667,20 @@ These are the strongest non-Kaggle primary sources or well-known public sources 
   - close: `keyboard`, `mobile`, `mouse`, `PCB` -> `ewaste`
 - Note:
   - this is distinct from the earlier Bangladeshi e-waste dataset entry and has broader cross-material coverage
+
+### NWNU-TRASH
+
+- Sources:
+  - https://www.sciencedirect.com/science/article/abs/pii/S0956053X21004815
+  - corroborating review snippets: https://www.scribd.com/document/894844151/A-Systematic-Review-of-AI-Based-Techniques-for-Aut
+- Scope:
+  - waste-image dataset created to address the limitations of earlier small, clean-background waste sets
+- Publicly surfaced size:
+  - approximately `18,911` images in one review snippet
+- Best overlap:
+  - broad household-waste classification benchmark overlap
+- Note:
+  - public snippets in this pass did not expose the full class list cleanly, so I am not inventing it here
 
 ### WaRP / WaRP-C / WaRP-D
 
@@ -667,6 +720,61 @@ These are the strongest non-Kaggle primary sources or well-known public sources 
   - indirectly useful for `plastic`, `metal`, `paper`, `glass`, and `trash` via its attribute system
 - Note:
   - not a plain multiclass folder dataset, but a useful litter detection / material-tagging resource
+
+### EcoDetect-YOLO surveillance waste dataset
+
+- Source: https://www.mdpi.com/1424-8220/24/14/4666
+- Scope:
+  - surveillance camera domestic-waste exposure detection dataset
+- Publicly surfaced size:
+  - `3,995` images
+- Publicly surfaced targets:
+  - `9` detection target types
+  - search snippet explicitly mentions `paper trash` and `plastic trash`
+- Best overlap:
+  - useful for real-world `trash` / public-environment scene understanding
+- Note:
+  - detection-oriented and scene-heavy rather than clean single-object classification
+
+### BePLi Dataset v2
+
+- Source: https://www.sciencedirect.com/science/article/pii/S235234092500592X
+- Scope:
+  - beach plastic litter instance-segmentation dataset
+- Publicly surfaced size:
+  - `3,722` original images
+- Classes:
+  - `pet_bottle`
+  - `other_bottle`
+  - `plastic_bag`
+  - `box_shaped_case`
+  - `other_container`
+  - `rope`
+  - `other_string`
+  - `fishing_net`
+  - `buoy`
+  - `other_fishing_gear`
+  - `styrene_foam`
+  - `others`
+  - `fragment`
+- Best overlap:
+  - strong plastic-litter auxiliary source
+- Note:
+  - plastic-only, but unusually fine-grained and real-world
+
+### CleanSea
+
+- Source: https://www.dlsi.ua.es/~jgallego/datasets/cleansea/
+- Scope:
+  - underwater debris detection and recognition benchmark
+- Publicly surfaced labels include:
+  - `Plastic waste`
+  - `Metal waste`
+  - additional underwater debris object categories
+- Best overlap:
+  - direct or close: `metal`, `plastic`
+- Note:
+  - underwater domain, so not a direct household classifier source, but still a distinct debris dataset
 
 ### StreetView-Waste
 
