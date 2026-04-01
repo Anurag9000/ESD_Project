@@ -729,6 +729,123 @@ These are the strongest non-Kaggle primary sources or well-known public sources 
 - Note:
   - public snippets in this pass did not expose the full class list cleanly, so I am not inventing it here
 
+### classify-waste
+
+- Sources:
+  - https://mostwiedzy.pl/pl/publication/download/1/deep-learning-based-waste-detection-in-natural-and-urban-environments_64668.pdf
+  - project page: https://agnieszka.ai/project/detect-waste-dataset/
+- Classes and publicly surfaced image counts:
+  - `background`: `1,017`
+  - `bio`: `161`
+  - `glass`: `2,304`
+  - `metals and plastic`: `9,661`
+  - `paper`: `1,605`
+  - `non-recyclable`: `2,802`
+  - `other`: `520`
+  - `unknown`: `3,258`
+- Total images:
+  - `21,328` by the class-count table above
+- Best overlap:
+  - direct: `glass`, `paper`
+  - close: `bio -> organic`, `metals and plastic` partially useful for `metal` and `plastic`, `non-recyclable -> trash`
+- Note:
+  - built by cropping and normalizing images from several public waste-detection datasets plus additional search images
+
+### detect-waste
+
+- Source: https://agnieszka.ai/project/detect-waste-dataset/
+- Scope:
+  - merged litter-detection benchmark built from several public detection datasets
+- Publicly surfaced composition:
+  - `Extended TACO`
+  - `Wade-AI`
+  - `UAVVaste`
+  - `TrashCan`
+  - `Trash-ICRA19`
+  - `Drinking-Waste`
+  - `MJU-Waste`
+- Publicly surfaced scale in a thesis summary:
+  - over `28,000` images and around `40,000` objects
+- Best overlap:
+  - strong scene-level waste and litter detection benchmark
+- Note:
+  - this is more useful for detection / scene generalization than for plain folder classification
+
+### Wade-AI
+
+- Sources:
+  - https://agnieszka.ai/project/detect-waste-dataset/
+  - https://github.com/letsdoitworld/wade-ai
+- Publicly surfaced structure:
+  - `1` class
+  - about `1,400` images
+- Domain:
+  - waste in the wild from Google Street View
+- Best overlap:
+  - useful as an outdoor `trash/litter` detection auxiliary source
+
+### UAVVaste
+
+- Sources:
+  - https://paperswithcode.com/dataset/uavvaste
+  - https://www.kaggle.com/datasets/federicominutoli/uavvaste
+- Publicly surfaced structure:
+  - `772` images
+  - `3,716` annotations
+  - single waste-detection class
+- Domain:
+  - aerial / drone waste detection
+- Best overlap:
+  - useful for scene-level litter / trash detection
+
+### Trash-ICRA19
+
+- Sources:
+  - https://agnieszka.ai/project/detect-waste-dataset/
+  - review snippet in https://github.com/AgaMiko/waste-datasets-review
+- Publicly surfaced structure:
+  - `7` classes
+  - `5,700` images
+- Domain:
+  - underwater selected trash categories
+- Best overlap:
+  - auxiliary litter / debris detection source
+
+### OpenLitterMap
+
+- Sources:
+  - https://opengeospatialdata.springeropen.com/articles/10.1186/s40965-018-0050-y
+  - dataset review summary: https://github.com/AgaMiko/waste-datasets-review
+- Publicly surfaced structure:
+  - over `100,000` images in total
+  - `11` main categories
+  - `187` subcategories
+- Publicly surfaced examples:
+  - `Dogshit`
+  - `Unidentified Plastic`
+  - `Large/Random Dump`
+  - `Metal Object`
+  - `Plastic Bags`
+  - `Books`
+  - `Magazines`
+  - `Paper`
+  - `Washing-up Bottle`
+- Best overlap:
+  - very broad litter / trash / plastic / paper / metal open-data source
+- Note:
+  - one of the largest publicly described crowdsourced litter datasets
+
+### Refined Household Garbage Dataset
+
+- Source:
+  - https://arxiv.org/abs/2510.21833
+- Publicly surfaced note:
+  - `43` corrected mislabels relative to the earlier household-garbage benchmark version used in that study
+- Best overlap:
+  - same practical overlap as the underlying household-garbage family
+- Note:
+  - not a distinct raw dataset lineage, but a useful corrected benchmark variant worth being aware of
+
 ### VN-trash
 
 - Sources:
