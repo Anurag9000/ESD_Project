@@ -682,6 +682,88 @@ These are the strongest non-Kaggle primary sources or well-known public sources 
 - Note:
   - public snippets in this pass did not expose the full class list cleanly, so I am not inventing it here
 
+### VN-trash
+
+- Sources:
+  - https://www.mdpi.com/2412-3811/7/4/47
+  - https://doaj.org/article/8ae02704e25d4c66967c4ae42ead8fcf
+- Classes:
+  - `organic`
+  - `inorganic`
+  - `medical`
+- Publicly surfaced size:
+  - `5,904` images in the commonly cited original version
+  - later review snippets mention a larger `13,000+` image variant/family
+- Best overlap:
+  - direct: `organic`
+  - weak partial: `inorganic` mixes `glass`, `metal`, `paper`, `plastic`, and `trash`
+- Note:
+  - this is one of the standard Southeast Asian trash benchmarks and remains useful despite its coarse taxonomy
+
+### TriCascade WasteImage
+
+- Sources:
+  - main paper snippet: https://e-space.mmu.ac.uk/638258/1/1-s2.0-S0950705125000760-main.pdf
+  - additional citation snippet: https://www.scribd.com/document/948781789/1-s2-0-S0950705125000760-main
+- Structure:
+  - `35,264` images
+  - three-stage hierarchical taxonomy
+  - stage 1: `2` classes
+  - stage 2: `9` classes
+  - stage 3: `36` classes
+- Publicly surfaced stage-2 classes:
+  - `green waste`
+  - `recyclable waste`
+  - `glass`
+  - `metal`
+  - `polymer`
+  - `leather and fabric`
+  - `medical waste`
+  - `e-waste`
+  - `hazardous waste`
+- Publicly surfaced fine-grained examples from the 36-class stage:
+  - `Foods`
+  - `Animal Dead Body`
+  - `Cardboard`
+  - `Newspaper`
+  - `Paper Cups`
+  - `Paper`
+  - `Brown Glass`
+  - `Bowls and Dishes (Porcelain)`
+  - `Green Glass`
+  - `White Glass`
+  - `Beverage Cans`
+  - `Construction Scrap`
+  - `Metal Containers`
+  - `Plastic Bag`
+  - `Plastic Bottle`
+  - `Plastic Container`
+  - `Plastic Cup`
+  - `Tetra Pak`
+  - `Cloths (Synthetic Fabric)`
+  - `Shoes`
+  - `Gloves`
+  - `Masks`
+  - `Bandage`
+- Best overlap:
+  - direct: `ewaste`, `glass`, `metal`
+  - close: `green waste -> organic`, `Cardboard/Newspaper/Paper Cups/Paper/Tetra Pak -> paper`, `polymer` and plastic subclasses -> plastic, `Cloths` -> clothes, `Shoes` -> shoes, `hazardous waste` partly overlaps `battery` and `trash`
+- Note:
+  - one of the strongest many-class hierarchical waste benchmarks surfaced so far
+
+### Recycleye WasteNet
+
+- Source: https://recycleye.com/wastenet/
+- Scope:
+  - proprietary industrial waste dataset
+  - publicly claimed to exceed `3 million` training images
+  - later public marketing material mentions `1 billion+` analyzed images across production usage
+- Best overlap:
+  - broad industrial waste-stream coverage
+- Note:
+  - not a public download dataset, so it is not directly usable like the open sources above
+  - still worth tracking because it is one of the largest waste-image resources publicly described
+
 ### WaRP / WaRP-C / WaRP-D
 
 - Source:
