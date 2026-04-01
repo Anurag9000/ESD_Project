@@ -132,6 +132,7 @@ fun MainScreen(
                     classConfiguration = classConfigurationState.savedConfiguration,
                     onMarkerTapped = mapViewModel::onMarkerTapped,
                     onToggleBinSelection = mapViewModel::toggleBinSelection,
+                    onRemoveSelectedBin = mapViewModel::toggleBinSelection,
                     onSelectLocality = mapViewModel::selectLocality,
                     onSelectVisibleBins = mapViewModel::selectVisibleBins,
                     onClearSelection = mapViewModel::clearSelection,

@@ -21,6 +21,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Card
@@ -29,6 +32,7 @@ import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
@@ -73,6 +77,7 @@ fun BinMapScreen(
     classConfiguration: ResolvedWasteClassConfiguration,
     onMarkerTapped: (String) -> Unit,
     onToggleBinSelection: (String) -> Unit,
+    onRemoveSelectedBin: (String) -> Unit,
     onSelectLocality: (String?) -> Unit,
     onSelectVisibleBins: () -> Unit,
     onClearSelection: () -> Unit,
@@ -132,6 +137,7 @@ fun BinMapScreen(
 
         SelectionSummaryCard(
             state = state,
+            onRemoveSelectedBin = onRemoveSelectedBin,
             onTriggerDemoEvent = onTriggerDemoEvent,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -307,6 +313,7 @@ private fun FleetMapHeader(
 @Composable
 private fun SelectionSummaryCard(
     state: MapState,
+    onRemoveSelectedBin: (String) -> Unit,
     onTriggerDemoEvent: (String?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -349,6 +356,28 @@ private fun SelectionSummaryCard(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (state.selectedBins.isNotEmpty()) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    state.selectedBins.forEach { bin ->
+                        AssistChip(
+                            onClick = { onRemoveSelectedBin(bin.id) },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = null,
+                                )
+                            },
+                            label = { Text(bin.name) },
+                            colors = AssistChipDefaults.assistChipColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            ),
+                        )
+                    }
+                }
+            }
             if (watchedBin != null) {
                 Text(
                     text = "Phone alerts enabled for ${watchedBin.name}",
@@ -449,6 +478,19 @@ private fun BinDetailSheet(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             TextButton(onClick = onToggleSelection) {
+                if (isSelected) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = null,
+                        modifier = Modifier.padding(end = 6.dp),
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = null,
+                        modifier = Modifier.padding(end = 6.dp),
+                    )
+                }
                 Text(if (isSelected) "Remove from analytics" else "Add to analytics")
             }
             TextButton(onClick = onToggleWatchedBin) {
