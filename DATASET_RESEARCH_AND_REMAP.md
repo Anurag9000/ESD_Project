@@ -577,6 +577,19 @@ These are the strongest non-Kaggle primary sources or well-known public sources 
 - Best overlap:
   - strong recyclable-side overlap for `paper`, `plastic`, `metal`, `glass`
 
+### Baidu Garbage Classification Dataset
+
+- Source:
+  - summarized in review snippet: https://pmc.ncbi.nlm.nih.gov/articles/PMC12115937/
+- Publicly surfaced structure:
+  - `17,690` images
+  - `158` detailed sub-categories
+  - multilingual labeling noted in the review summary
+- Best overlap:
+  - broad fine-grained recyclable / household-waste supervision
+- Note:
+  - this appears to be a distinct Baidu garbage-taxonomy family beyond the coarser `Baidu-RC` / `Baidu-214` references
+
 ### Baidu-214
 
 - Source: https://www.mdpi.com/2071-1050/14/5/3099
@@ -620,6 +633,23 @@ These are the strongest non-Kaggle primary sources or well-known public sources 
 - Note:
   - this appears repeatedly in later waste-classification papers as a broader fine-grained source
 
+### Waste-mart Dataset
+
+- Source:
+  - class table exposed in: https://journal.gnest.org/sites/default/files/Submissions/gnest_04501/gnest_04501_draft.pdf
+- Classes and counts:
+  - `Glass`: `501`
+  - `Cardboard`: `403`
+  - `Metal`: `410`
+  - `Plastic`: `482`
+  - `Paper`: `592`
+  - `Trash`: `137`
+- Best overlap:
+  - direct: `glass`, `metal`, `paper`, `plastic`, `trash`
+  - close: `cardboard -> paper`
+- Note:
+  - small, but distinct and explicitly sourced from local waste marts rather than web scraping
+
 ### Garbage Collection Dataset
 
 - Sources:
@@ -643,6 +673,23 @@ These are the strongest non-Kaggle primary sources or well-known public sources 
 - Best overlap:
   - direct: `battery`, `clothes`, `metal`, `paper`, `plastic`, `shoes`, `trash`
   - close: `Biological -> organic`, glass color variants -> `glass`, `Cardboards -> paper`
+
+### GIGO Dataset
+
+- Sources:
+  - review summary: https://pmc.ncbi.nlm.nih.gov/articles/PMC12115937/
+  - thesis snippet: https://norma.ncirl.ie/7361/1/rashisunildabhane.pdf
+- Publicly surfaced size:
+  - `25,000` images in the review summary
+  - `27,603` images in the thesis snippet
+- Scope:
+  - common household and commercial waste
+  - binary `organic` vs `recyclable` setup in the surfaced thesis summary
+- Best overlap:
+  - direct: `organic`
+  - weak partial: `recyclable` mixes `paper`, `plastic`, `glass`, and `metal`
+- Note:
+  - the public snippets disagree on the exact image count, but they consistently describe it as one of the larger binary waste datasets
 
 ### Custom Bangladeshi E-Waste Image Dataset for Object Detection and Recognition
 
@@ -997,10 +1044,15 @@ These are Kaggle-hosted datasets or dataset families with substantial overlap wi
 ### Recyclable And Household Waste Classification
 
 - Source: https://www.kaggle.com/datasets/alistairking/recyclable-and-household-waste-classification
+- Publicly surfaced size and structure:
+  - `15,000` images
+  - `30` distinct categories
+  - `500` images per category
 - Indexed categories explicitly surfaced:
   - `Organic Waste`
   - `Textile Waste`
-- The page snippet describes broader household-waste coverage.
+- Notes:
+  - later papers also reference a related household-waste subset with `18` categories and `7,361` images for recyclable / hazardous / kitchen / other waste tasks
 - Best overlap:
   - direct: `organic`
   - close: `Textile Waste -> clothes`
@@ -1088,6 +1140,20 @@ These are Kaggle-hosted datasets or dataset families with substantial overlap wi
 - Best overlap:
   - direct: `organic`
   - close: `nonrecyclable -> trash`
+
+### Waste Classification Dataset (Mendeley clean-up)
+
+- Source: https://data.mendeley.com/datasets/n3gtgm9jxj/2
+- Classes and counts:
+  - `organic`: `13,880`
+  - `recyclable`: `10,825`
+- Total images:
+  - `24,705`
+- Notes:
+  - cleaned and restructured version of the original Kaggle binary waste-classification dataset
+- Best overlap:
+  - direct: `organic`
+  - weak partial: `recyclable` mixes `paper`, `plastic`, `glass`, and `metal`
 
 ### Waste Classification Dataset by phenomsg
 
