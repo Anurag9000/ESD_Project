@@ -283,7 +283,7 @@ def finalize_iteration(
     return decision
 
 
-def evaluate_iteration(iteration_dir: Path) -> None:
+def evaluate_iteration(iteration_dir: Path, dataset_root: str, batch_size: int) -> None:
     subprocess.run(
         [
             sys.executable,
@@ -292,6 +292,10 @@ def evaluate_iteration(iteration_dir: Path) -> None:
             str(best_eval_checkpoint(iteration_dir)),
             "--output-dir",
             str(iteration_dir / "evaluation_suite"),
+            "--dataset-root",
+            dataset_root,
+            "--batch-size",
+            str(batch_size),
         ],
         check=True,
     )
@@ -395,7 +399,7 @@ def main() -> int:
                 backbone_lr=float(config["backbone_lr"]),
             )
 
-        evaluate_iteration(iteration_dir)
+        evaluate_iteration(iteration_dir, args.dataset_root, args.batch_size)
         decision = finalize_iteration(
             iteration_dir=iteration_dir,
             config=config,

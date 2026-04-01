@@ -1,0 +1,20 @@
+{
+  "available_raw_classes": [
+    "battery",
+    "clothes",
+    "ewaste",
+    "glass",
+    "metal",
+    "organic",
+    "paper",
+    "plastic",
+    "shoes",
+    "trash"
+  ],
+  "recommended_primary_classes": [
+    "metal",
+    "organic",
+    "paper"
+  ],
+  "other_label": "Other"
+}

@@ -1,16 +1,15 @@
 package com.example.smartbin.domain.usecase
 
+import com.example.smartbin.data.repository.WasteClassConfigStore
 import com.example.smartbin.domain.model.WasteEvent
-import com.example.smartbin.domain.model.WasteType
 import com.example.smartbin.domain.repository.BinRepository
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import javax.inject.Inject
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.map
-import javax.inject.Inject
 
 enum class AnalyticsBucket {
     DAY,
@@ -21,15 +20,16 @@ enum class AnalyticsBucket {
 data class AnalyticsTrendPoint(
     val label: String,
     val totalEvents: Int,
-    val countsByType: Map<WasteType, Int>,
+    val countsByLabel: Map<String, Int>,
 )
 
 data class AnalyticsResult(
     val totalEvents: Int,
-    val countsByType: Map<WasteType, Int>,
-    val percentagesByType: Map<WasteType, Float>,
+    val displayClasses: List<String>,
+    val countsByLabel: Map<String, Int>,
+    val percentagesByLabel: Map<String, Float>,
     val averageConfidence: Float,
-    val averageConfidenceByType: Map<WasteType, Float>,
+    val averageConfidenceByLabel: Map<String, Float>,
     val trend: List<AnalyticsTrendPoint>,
     val selectedBinCount: Int,
     val selectedLocalityCount: Int,
@@ -37,6 +37,7 @@ data class AnalyticsResult(
 
 class GetAggregatedAnalyticsUseCase @Inject constructor(
     private val binRepository: BinRepository,
+    private val wasteClassConfigStore: WasteClassConfigStore,
 ) {
     operator fun invoke(
         binIds: Set<String>,
@@ -53,14 +54,19 @@ class GetAggregatedAnalyticsUseCase @Inject constructor(
                 startTime = startTime,
                 endTime = endTime,
             ),
-        ) { bins, events ->
+            wasteClassConfigStore.resolvedConfiguration,
+        ) { bins, events, resolvedConfiguration ->
             val selectedBinCount = when {
                 binIds.isNotEmpty() -> bins.count { it.id in binIds }
                 localities.isNotEmpty() -> bins.count { it.locality in localities }
                 else -> 0
             }
+            val displayClasses = resolvedConfiguration.runtimeDisplayLabels
             val total = events.size
-            val counts = WasteType.entries.associateWith { type -> events.count { it.wasteType == type } }
+            val groupedByDisplay = events.groupBy { event ->
+                resolvedConfiguration.toRuntimeDisplayLabel(event.predictedClass)
+            }
+            val counts = displayClasses.associateWith { label -> groupedByDisplay[label].orEmpty().size }
             val percentages = counts.mapValues { (_, count) ->
                 if (total > 0) count.toFloat() / total else 0f
             }
@@ -69,25 +75,31 @@ class GetAggregatedAnalyticsUseCase @Inject constructor(
             } else {
                 0f
             }
-            val averageConfidenceByType = WasteType.entries.associateWith { type ->
-                val typeEvents = events.filter { it.wasteType == type }
-                if (typeEvents.isNotEmpty()) typeEvents.map { it.confidence }.average().toFloat() else 0f
+            val averageConfidenceByLabel = displayClasses.associateWith { label ->
+                val labelEvents = groupedByDisplay[label].orEmpty()
+                if (labelEvents.isNotEmpty()) labelEvents.map { it.confidence }.average().toFloat() else 0f
             }
 
             AnalyticsResult(
                 totalEvents = total,
-                countsByType = counts,
-                percentagesByType = percentages,
+                displayClasses = displayClasses,
+                countsByLabel = counts,
+                percentagesByLabel = percentages,
                 averageConfidence = averageConfidence,
-                averageConfidenceByType = averageConfidenceByType,
-                trend = buildTrend(events, bucket),
+                averageConfidenceByLabel = averageConfidenceByLabel,
+                trend = buildTrend(events, displayClasses, resolvedConfiguration::toRuntimeDisplayLabel, bucket),
                 selectedBinCount = selectedBinCount,
                 selectedLocalityCount = localities.size,
             )
         }
     }
 
-    private fun buildTrend(events: List<WasteEvent>, bucket: AnalyticsBucket): List<AnalyticsTrendPoint> {
+    private fun buildTrend(
+        events: List<WasteEvent>,
+        displayClasses: List<String>,
+        displayMapper: (String?) -> String,
+        bucket: AnalyticsBucket,
+    ): List<AnalyticsTrendPoint> {
         if (events.isEmpty()) return emptyList()
         val zoneId = ZoneId.systemDefault()
         val formatter = when (bucket) {
@@ -107,12 +119,11 @@ class GetAggregatedAnalyticsUseCase @Inject constructor(
             }
             .toSortedMap()
             .map { (bucketDate, bucketEvents) ->
+                val grouped = bucketEvents.groupBy { displayMapper(it.predictedClass) }
                 AnalyticsTrendPoint(
                     label = formatter.format(bucketDate),
                     totalEvents = bucketEvents.size,
-                    countsByType = WasteType.entries.associateWith { type ->
-                        bucketEvents.count { it.wasteType == type }
-                    },
+                    countsByLabel = displayClasses.associateWith { label -> grouped[label].orEmpty().size },
                 )
             }
     }

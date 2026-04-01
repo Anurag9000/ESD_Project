@@ -14,6 +14,7 @@ import androidx.core.content.ContextCompat
 import com.example.smartbin.MainActivity
 import com.example.smartbin.R
 import com.example.smartbin.domain.model.WasteEvent
+import com.example.smartbin.data.repository.WasteClassConfigStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -21,6 +22,7 @@ import javax.inject.Singleton
 @Singleton
 class BinAlertNotifier @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val wasteClassConfigStore: WasteClassConfigStore,
 ) {
 
     fun createNotificationChannel() {
@@ -52,7 +54,8 @@ class BinAlertNotifier @Inject constructor(
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val contentText = "$binName detected ${event.wasteType.label.lowercase()} at ${(event.confidence * 100).toInt()}% confidence"
+        val displayLabel = wasteClassConfigStore.resolvedConfiguration.value.toRuntimeDisplayLabel(event.predictedClass)
+        val contentText = "$binName detected ${displayLabel.lowercase()} at ${(event.confidence * 100).toInt()}% confidence"
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher_round)
             .setContentTitle("Waste detected in watched bin")

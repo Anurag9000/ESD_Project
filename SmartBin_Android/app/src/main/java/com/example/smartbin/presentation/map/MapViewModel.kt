@@ -5,7 +5,6 @@ import androidx.lifecycle.viewModelScope
 import com.example.smartbin.data.repository.AppMode
 import com.example.smartbin.data.repository.DemoModeStore
 import com.example.smartbin.domain.model.Bin
-import com.example.smartbin.domain.model.WasteType
 import com.example.smartbin.domain.repository.BinRepository
 import com.example.smartbin.domain.usecase.StreamWasteEventsUseCase
 import com.example.smartbin.notifications.BinAlertNotifier
@@ -25,7 +24,7 @@ import kotlinx.coroutines.launch
 data class WatchedBinAlert(
     val binId: String,
     val binName: String,
-    val wasteType: WasteType,
+    val predictedClass: String,
     val confidence: Float,
     val timestamp: Instant,
 )
@@ -178,13 +177,13 @@ class MapViewModel @Inject constructor(
                 if (currentState.watchedBinId == event.binId) {
                     val watchedBin = currentState.bins.find { it.id == event.binId }
                     val watchedBinName = watchedBin?.name ?: "Watched bin ${event.binId}"
-                    val alert = WatchedBinAlert(
-                        binId = event.binId,
-                        binName = watchedBinName,
-                        wasteType = event.wasteType,
-                        confidence = event.confidence,
-                        timestamp = event.timestamp,
-                    )
+                        val alert = WatchedBinAlert(
+                            binId = event.binId,
+                            binName = watchedBinName,
+                            predictedClass = event.predictedClass,
+                            confidence = event.confidence,
+                            timestamp = event.timestamp,
+                        )
                     _state.update { it.copy(latestWatchedAlert = alert) }
                     binAlertNotifier.showWasteDetectedNotification(event.binId, watchedBinName, event)
                 }

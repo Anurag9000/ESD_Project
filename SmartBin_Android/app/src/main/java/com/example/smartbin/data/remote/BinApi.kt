@@ -3,7 +3,6 @@ package com.example.smartbin.data.remote
 import com.example.smartbin.domain.model.Bin
 import com.example.smartbin.domain.model.BinStatus
 import com.example.smartbin.domain.model.WasteEvent
-import com.example.smartbin.domain.model.WasteType
 import java.time.Instant
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -81,14 +80,14 @@ fun BinDto.toDomain(): Bin = Bin(
     },
     lastSeenAt = lastSeenAt?.let(Instant::parse),
     installedAt = installedAt?.let(Instant::parse),
-    lastWasteType = lastWasteType?.let(WasteType::fromString),
+    lastPredictedClass = lastWasteType,
     totalEventsToday = totalEventsToday,
 )
 
 fun WasteEventDto.toDomain(): WasteEvent = WasteEvent(
     id = eventId ?: "${binId}_${eventTime}",
     binId = binId,
-    wasteType = WasteType.fromString(predictedClass),
+    predictedClass = predictedClass,
     confidence = confidence,
     timestamp = Instant.parse(eventTime),
     uploadedAt = uploadedAt?.let(Instant::parse) ?: Instant.parse(eventTime),

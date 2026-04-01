@@ -8,9 +8,45 @@ source .venv/bin/activate
 
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
-LOSS_OUTPUT_DIR="Results/efficientnet_b0_full_model_loss_cleanup_adamw"
-LOSS_LOG_FILE="logs/efficientnet_b0_full_model_loss_cleanup_adamw.log.jsonl"
-LOSS_BASE_CHECKPOINT="Results/efficientnet_b0_cleaned_dataset_loss_cleanup_iter003_final/efficientnet_b0_cleaned_dataset_loss_cleanup_iter003_final_best_val_loss.pt"
+INITIAL_CHECKPOINT="${INITIAL_CHECKPOINT:-}"
+RUN_ROOT="${RUN_ROOT:-Results/efficientnet_b0_non_gabor_master_run}"
+LOG_ROOT="${LOG_ROOT:-logs/efficientnet_b0_non_gabor_master_run}"
+DATASET_ROOT="${DATASET_ROOT:-Dataset_Final}"
+
+if [[ -z "$INITIAL_CHECKPOINT" ]]; then
+  echo "INITIAL_CHECKPOINT must point to the progressive best checkpoint." >&2
+  exit 1
+fi
+
+if [[ ! -f "$INITIAL_CHECKPOINT" ]]; then
+  echo "INITIAL_CHECKPOINT does not exist: $INITIAL_CHECKPOINT" >&2
+  exit 1
+fi
+
+mkdir -p "$RUN_ROOT" "$LOG_ROOT"
+
+FILTERED_ARGS=()
+SKIP_NEXT=0
+for ARG in "$@"; do
+  if [[ "$SKIP_NEXT" -eq 1 ]]; then
+    SKIP_NEXT=0
+    continue
+  fi
+  case "$ARG" in
+    --dataset-root|--batch-size|--output-dir|--log-file|--resume-checkpoint|--resume-mode|--resume-phase-index|--classifier-train-mode|--classifier-early-stopping-metric|--head-lr|--backbone-lr|--head-epochs|--stage-epochs|--stage-early-stopping-patience|--optimizer)
+      SKIP_NEXT=1
+      ;;
+    --dataset-root=*|--batch-size=*|--output-dir=*|--log-file=*|--resume-checkpoint=*|--resume-mode=*|--resume-phase-index=*|--classifier-train-mode=*|--classifier-early-stopping-metric=*|--head-lr=*|--backbone-lr=*|--head-epochs=*|--stage-epochs=*|--stage-early-stopping-patience=*|--optimizer=*)
+      ;;
+    *)
+      FILTERED_ARGS+=("$ARG")
+      ;;
+  esac
+done
+
+LOSS_OUTPUT_DIR="$RUN_ROOT/loss_cleanup"
+LOSS_LOG_FILE="$LOG_ROOT/loss_cleanup.log.jsonl"
+LOSS_BASE_CHECKPOINT="$INITIAL_CHECKPOINT"
 
 python scripts/run_recursive_refinement.py \
   --base-output-dir "$LOSS_OUTPUT_DIR" \
@@ -20,7 +56,7 @@ python scripts/run_recursive_refinement.py \
   --threshold 0.0001 \
   --initial-head-lr 1e-4 \
   --initial-backbone-lr 5e-5 \
-  --dataset-root Dataset_Final \
+  --dataset-root "$DATASET_ROOT" \
   --weighted-sampling \
   --skip-supcon \
   --optimizer adamw \
@@ -29,10 +65,10 @@ python scripts/run_recursive_refinement.py \
   --patience 5 \
   --head-epochs 0 \
   --resume-phase-index 1 \
-  "$@"
+  "${FILTERED_ARGS[@]}"
 
-RAWACC_OUTPUT_DIR="Results/efficientnet_b0_full_model_rawacc_refine_adamw"
-RAWACC_LOG_FILE="logs/efficientnet_b0_full_model_rawacc_refine_adamw.log.jsonl"
+RAWACC_OUTPUT_DIR="$RUN_ROOT/rawacc_refine"
+RAWACC_LOG_FILE="$LOG_ROOT/rawacc_refine.log.jsonl"
 LOSS_STATE_JSON="$LOSS_OUTPUT_DIR/recursive_state.json"
 RAWACC_BASE_CHECKPOINT="$LOSS_OUTPUT_DIR/accepted_best.pt"
 RAWACC_HEAD_LR="5e-5"
@@ -65,7 +101,7 @@ python scripts/run_recursive_refinement.py \
   --threshold 0.0005 \
   --initial-head-lr "$RAWACC_HEAD_LR" \
   --initial-backbone-lr "$RAWACC_BACKBONE_LR" \
-  --dataset-root Dataset_Final \
+  --dataset-root "$DATASET_ROOT" \
   --weighted-sampling \
   --skip-supcon \
   --optimizer adamw \
@@ -74,4 +110,4 @@ python scripts/run_recursive_refinement.py \
   --patience 5 \
   --head-epochs 0 \
   --resume-phase-index 1 \
-  "$@"
+  "${FILTERED_ARGS[@]}"

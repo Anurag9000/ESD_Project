@@ -3,6 +3,7 @@ package com.example.smartbin.di
 import com.example.smartbin.BuildConfig
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import com.example.smartbin.data.remote.BinApi
+import com.example.smartbin.data.remote.resolvedApiBaseUrl
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -46,7 +47,7 @@ object NetworkModule {
         okHttpClient: OkHttpClient,
         json: Json,
     ): Retrofit = Retrofit.Builder()
-        .baseUrl(BuildConfig.API_BASE_URL)
+        .baseUrl(resolvedApiBaseUrl())
         .client(okHttpClient)
         .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
         .build()

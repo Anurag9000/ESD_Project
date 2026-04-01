@@ -2616,7 +2616,7 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--dataset-root", default="Dataset_Final")
     parser.add_argument("--auto-split-ratios", default="0.7,0.2,0.1")
     parser.add_argument("--image-size", type=int, default=224)
-    parser.add_argument("--batch-size", type=int, default=512)
+    parser.add_argument("--batch-size", type=int, default=224)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--prefetch-factor", type=int, default=None)
     parser.add_argument("--augment-repeats", type=int, default=16)
@@ -2689,6 +2689,83 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
         parser.add_argument("--gabor-sigma", type=float, default=4.5)
         parser.add_argument("--gabor-gamma", type=float, default=0.6)
     return parser
+
+
+def resolve_runtime_selected_classes(
+    class_names: list[str],
+    selected_classes: list[str] | None,
+) -> list[str]:
+    if not selected_classes:
+        return list(class_names)
+    selected: list[str] = []
+    seen: set[str] = set()
+    unknown: list[str] = []
+    available = set(class_names)
+    for class_name in selected_classes:
+        if class_name in seen:
+            continue
+        if class_name not in available:
+            unknown.append(class_name)
+            continue
+        selected.append(class_name)
+        seen.add(class_name)
+    if unknown:
+        raise ValueError(f"Unknown runtime-selected classes: {unknown}")
+    if not selected:
+        raise ValueError("At least one runtime-selected class must match the trained class names.")
+    return selected
+
+
+def collapse_logits_and_targets_to_runtime_classes(
+    logits: np.ndarray,
+    targets: np.ndarray,
+    class_names: list[str],
+    selected_classes: list[str] | None = None,
+    other_label: str = "other",
+) -> tuple[np.ndarray, np.ndarray, list[str], dict[str, Any]]:
+    resolved_selected = resolve_runtime_selected_classes(class_names, selected_classes)
+    if not selected_classes:
+        return (
+            logits,
+            targets,
+            list(class_names),
+            {
+                "selected_classes": list(class_names),
+                "merged_other_source_classes": [],
+                "other_label": other_label,
+                "collapse_applied": False,
+            },
+        )
+
+    selected_indices = [class_names.index(name) for name in resolved_selected]
+    merged_indices = [index for index, name in enumerate(class_names) if name not in resolved_selected]
+    collapsed_class_names = list(resolved_selected)
+    collapsed_columns = [logits[:, index : index + 1] for index in selected_indices]
+
+    target_map = {original_index: new_index for new_index, original_index in enumerate(selected_indices)}
+    if merged_indices:
+        merged_logits = logits[:, merged_indices]
+        merged_max = np.max(merged_logits, axis=1, keepdims=True)
+        merged_logsumexp = merged_max + np.log(np.exp(merged_logits - merged_max).sum(axis=1, keepdims=True))
+        collapsed_columns.append(merged_logsumexp)
+        other_index = len(collapsed_class_names)
+        collapsed_class_names.append(other_label)
+        for original_index in merged_indices:
+            target_map[original_index] = other_index
+
+    collapsed_logits = np.concatenate(collapsed_columns, axis=1)
+    collapsed_targets = np.asarray([target_map[int(target)] for target in targets], dtype=np.int64)
+    return (
+        collapsed_logits,
+        collapsed_targets,
+        collapsed_class_names,
+        {
+            "selected_classes": list(resolved_selected),
+            "merged_other_source_classes": [class_names[index] for index in merged_indices],
+            "other_label": other_label,
+            "collapse_applied": True,
+        },
+    )
 
 
 def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:

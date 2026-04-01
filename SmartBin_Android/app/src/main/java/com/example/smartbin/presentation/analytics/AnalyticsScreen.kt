@@ -45,8 +45,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.smartbin.domain.model.Bin
-import com.example.smartbin.domain.model.WasteType
+import com.example.smartbin.domain.model.ResolvedWasteClassConfiguration
 import com.example.smartbin.domain.usecase.AnalyticsResult
+import com.example.smartbin.presentation.wasteClassColor
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -54,6 +55,7 @@ import java.time.ZoneId
 @Composable
 fun AnalyticsScreen(
     state: AnalyticsState,
+    classConfiguration: ResolvedWasteClassConfiguration,
     selectedBins: List<Bin>,
     selectedLocalities: Set<String>,
     onTimeFilterChanged: (TimeFilter) -> Unit,
@@ -218,17 +220,16 @@ private fun WasteCompositionSection(result: AnalyticsResult) {
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         DonutChart(
-                            values = WasteType.entries.map { result.percentagesByType[it] ?: 0f },
-                            colors = WasteType.entries.map(::wasteColor),
+                            values = result.displayClasses.map { result.percentagesByLabel[it] ?: 0f },
+                            colors = result.displayClasses.map(::wasteClassColor),
                             modifier = Modifier.size(220.dp),
                         )
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            WasteType.entries.forEach { type ->
-                                val count = result.countsByType[type] ?: 0
-                                val percentage = (result.percentagesByType[type] ?: 0f) * 100f
+                            result.displayClasses.forEach { label ->
+                                val count = result.countsByLabel[label] ?: 0
+                                val percentage = (result.percentagesByLabel[label] ?: 0f) * 100f
                                 LegendRow(
-                                    type = type,
-                                    label = "${type.label} · $count items",
+                                    label = "${label} · $count items",
                                     value = "${percentage.toInt()}%",
                                 )
                             }
@@ -241,17 +242,16 @@ private fun WasteCompositionSection(result: AnalyticsResult) {
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         DonutChart(
-                            values = WasteType.entries.map { result.percentagesByType[it] ?: 0f },
-                            colors = WasteType.entries.map(::wasteColor),
+                            values = result.displayClasses.map { result.percentagesByLabel[it] ?: 0f },
+                            colors = result.displayClasses.map(::wasteClassColor),
                             modifier = Modifier.size(220.dp),
                         )
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            WasteType.entries.forEach { type ->
-                                val count = result.countsByType[type] ?: 0
-                                val percentage = (result.percentagesByType[type] ?: 0f) * 100f
+                            result.displayClasses.forEach { label ->
+                                val count = result.countsByLabel[label] ?: 0
+                                val percentage = (result.percentagesByLabel[label] ?: 0f) * 100f
                                 LegendRow(
-                                    type = type,
-                                    label = "${type.label} · $count items",
+                                    label = "${label} · $count items",
                                     value = "${percentage.toInt()}%",
                                 )
                             }
@@ -274,15 +274,15 @@ private fun ConfidenceSection(result: AnalyticsResult) {
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Text("Average confidence by waste type", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-            WasteType.entries.forEach { type ->
-                val confidence = result.averageConfidenceByType[type] ?: 0f
+            result.displayClasses.forEach { label ->
+                val confidence = result.averageConfidenceByLabel[label] ?: 0f
                 val percentage = (confidence * 100f).toInt()
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
-                        Text(type.label, style = MaterialTheme.typography.bodyLarge)
+                        Text(label, style = MaterialTheme.typography.bodyLarge)
                         Text("$percentage%", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
                     }
                     Box(
@@ -295,7 +295,7 @@ private fun ConfidenceSection(result: AnalyticsResult) {
                             modifier = Modifier
                                 .fillMaxWidth(confidence.coerceIn(0f, 1f))
                                 .height(12.dp)
-                                .background(wasteColor(type), RoundedCornerShape(999.dp)),
+                                .background(wasteClassColor(label), RoundedCornerShape(999.dp)),
                         )
                     }
                 }
@@ -341,8 +341,8 @@ private fun TrendSection(result: AnalyticsResult) {
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            WasteType.entries.forEach { type ->
-                                val widthFraction = (point.countsByType[type] ?: 0).toFloat() / maxEvents.toFloat()
+                            result.displayClasses.forEach { label ->
+                                val widthFraction = (point.countsByLabel[label] ?: 0).toFloat() / maxEvents.toFloat()
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
@@ -353,7 +353,7 @@ private fun TrendSection(result: AnalyticsResult) {
                                         modifier = Modifier
                                             .fillMaxWidth(widthFraction.coerceIn(0f, 1f))
                                             .height(14.dp)
-                                            .background(wasteColor(type), RoundedCornerShape(999.dp)),
+                                            .background(wasteClassColor(label), RoundedCornerShape(999.dp)),
                                     )
                                 }
                             }
@@ -364,8 +364,8 @@ private fun TrendSection(result: AnalyticsResult) {
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    WasteType.entries.forEach { type ->
-                        LegendRow(type = type, label = type.label, value = "")
+                    result.displayClasses.forEach { label ->
+                        LegendRow(label = label, value = "")
                     }
                 }
             }
@@ -374,12 +374,12 @@ private fun TrendSection(result: AnalyticsResult) {
 }
 
 @Composable
-private fun LegendRow(type: WasteType, label: String, value: String) {
+private fun LegendRow(label: String, value: String) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(
             modifier = Modifier
                 .size(12.dp)
-                .background(wasteColor(type), CircleShape),
+                .background(wasteClassColor(label), CircleShape),
         )
         Text(label, style = MaterialTheme.typography.bodyMedium)
         if (value.isNotBlank()) {
@@ -476,11 +476,4 @@ private fun CustomDateRangeDialog(
     ) {
         DateRangePicker(state = state, modifier = Modifier.padding(8.dp))
     }
-}
-
-private fun wasteColor(type: WasteType): Color = when (type) {
-    WasteType.METAL -> Color(0xFF7C8799)
-    WasteType.ORGANIC -> Color(0xFF25875A)
-    WasteType.PAPER -> Color(0xFF4F7DF3)
-    WasteType.OTHER -> Color(0xFFD9932F)
 }

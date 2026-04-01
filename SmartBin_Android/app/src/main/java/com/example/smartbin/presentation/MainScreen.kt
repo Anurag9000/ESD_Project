@@ -9,7 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Place
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -31,12 +31,15 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.smartbin.presentation.analytics.AnalyticsScreen
 import com.example.smartbin.presentation.analytics.AnalyticsViewModel
+import com.example.smartbin.presentation.config.ClassConfigurationScreen
+import com.example.smartbin.presentation.config.ClassConfigurationViewModel
 import com.example.smartbin.presentation.map.BinMapScreen
 import com.example.smartbin.presentation.map.MapViewModel
 
 sealed class Screen(val route: String, val label: String, val icon: @Composable () -> Unit) {
     data object Map : Screen("map", "Fleet Map", { Icon(Icons.Default.Place, contentDescription = null) })
     data object Analytics : Screen("analytics", "Analytics", { Icon(Icons.Default.Info, contentDescription = null) })
+    data object Classes : Screen("classes", "Classes", { Icon(Icons.Default.Settings, contentDescription = null) })
 }
 
 @Composable
@@ -48,12 +51,13 @@ fun MainScreen(
     val navController = rememberNavController()
     val mapViewModel: MapViewModel = hiltViewModel()
     val analyticsViewModel: AnalyticsViewModel = hiltViewModel()
+    val classConfigurationViewModel: ClassConfigurationViewModel = hiltViewModel()
 
     val mapState by mapViewModel.state.collectAsState()
     val analyticsState by analyticsViewModel.state.collectAsState()
+    val classConfigurationState by classConfigurationViewModel.state.collectAsState()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
-    val liveFabTargetBinId = mapState.explicitTriggerTargetBinId
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
         onResult = {},
@@ -83,10 +87,22 @@ fun MainScreen(
         }
     }
 
+    if (classConfigurationState.requiresInitialConfirmation) {
+        ClassConfigurationScreen(
+            state = classConfigurationState,
+            onClassCountChanged = classConfigurationViewModel::onClassCountChanged,
+            onPrimaryClassSelected = classConfigurationViewModel::onPrimaryClassSelected,
+            onReset = classConfigurationViewModel::resetDraft,
+            onSave = classConfigurationViewModel::saveDraft,
+            mandatory = true,
+        )
+        return
+    }
+
     Scaffold(
         bottomBar = {
             NavigationBar {
-                listOf(Screen.Map, Screen.Analytics).forEach { screen ->
+                listOf(Screen.Map, Screen.Analytics, Screen.Classes).forEach { screen ->
                     NavigationBarItem(
                         icon = screen.icon,
                         label = { Text(screen.label) },
@@ -104,18 +120,6 @@ fun MainScreen(
                 }
             }
         },
-        floatingActionButton = if (
-            currentDestination?.hierarchy?.any { it.route == Screen.Map.route } == true &&
-            liveFabTargetBinId != null
-        ) {
-            {
-                FloatingActionButton(onClick = { mapViewModel.triggerDemoEvent(liveFabTargetBinId) }) {
-                    Text("Live")
-                }
-            }
-        } else {
-            {}
-        },
     ) { innerPadding ->
         NavHost(
             navController = navController,
@@ -125,6 +129,7 @@ fun MainScreen(
             composable(Screen.Map.route) {
                 BinMapScreen(
                     state = mapState,
+                    classConfiguration = classConfigurationState.savedConfiguration,
                     onMarkerTapped = mapViewModel::onMarkerTapped,
                     onToggleBinSelection = mapViewModel::toggleBinSelection,
                     onSelectLocality = mapViewModel::selectLocality,
@@ -140,12 +145,22 @@ fun MainScreen(
             composable(Screen.Analytics.route) {
                 AnalyticsScreen(
                     state = analyticsState,
+                    classConfiguration = classConfigurationState.savedConfiguration,
                     selectedBins = mapState.selectedBins,
                     selectedLocalities = mapState.selectedLocalities,
                     onTimeFilterChanged = analyticsViewModel::onTimeFilterChanged,
                     onShowCustomDateDialog = analyticsViewModel::showCustomDateDialog,
                     onDismissCustomDateDialog = analyticsViewModel::dismissCustomDateDialog,
                     onCustomDateRangeSelected = analyticsViewModel::onCustomDateRangeChanged,
+                )
+            }
+            composable(Screen.Classes.route) {
+                ClassConfigurationScreen(
+                    state = classConfigurationState,
+                    onClassCountChanged = classConfigurationViewModel::onClassCountChanged,
+                    onPrimaryClassSelected = classConfigurationViewModel::onPrimaryClassSelected,
+                    onReset = classConfigurationViewModel::resetDraft,
+                    onSave = classConfigurationViewModel::saveDraft,
                 )
             }
         }

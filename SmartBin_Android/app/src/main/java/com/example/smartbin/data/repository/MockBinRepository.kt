@@ -3,7 +3,6 @@ package com.example.smartbin.data.repository
 import com.example.smartbin.domain.model.Bin
 import com.example.smartbin.domain.model.BinStatus
 import com.example.smartbin.domain.model.WasteEvent
-import com.example.smartbin.domain.model.WasteType
 import com.example.smartbin.domain.repository.BinRepository
 import java.time.Instant
 import java.time.LocalDate
@@ -24,7 +23,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 @Singleton
-class MockBinRepository @Inject constructor() : BinRepository {
+class MockBinRepository @Inject constructor(
+    private val wasteClassConfigStore: WasteClassConfigStore,
+) : BinRepository {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val random = Random(42)
@@ -139,9 +140,11 @@ class MockBinRepository @Inject constructor() : BinRepository {
     override fun streamEvents(): Flow<WasteEvent> = liveEvents
 
     override suspend fun triggerDemoEvent(binId: String?) {
+        val availableClasses = wasteClassConfigStore.catalog.value.availableRawClasses
+        if (availableClasses.isEmpty()) return
         emitNewEvent(
             binId = binId ?: binsState.value.filter { it.status != BinStatus.OFFLINE }.random(random).id,
-            type = WasteType.entries.random(random),
+            predictedClass = availableClasses.random(random),
             confidence = random.nextDouble(0.82, 0.99).toFloat(),
         )
     }
@@ -153,21 +156,23 @@ class MockBinRepository @Inject constructor() : BinRepository {
                 val candidateBins = binsState.value.filter { it.status != BinStatus.OFFLINE }
                 if (candidateBins.isEmpty()) continue
                 val bin = candidateBins.random(random)
+                val availableClasses = wasteClassConfigStore.catalog.value.availableRawClasses
+                if (availableClasses.isEmpty()) continue
                 emitNewEvent(
                     binId = bin.id,
-                    type = weightedWasteTypeFor(bin.locality),
+                    predictedClass = weightedRawClassFor(bin.locality, availableClasses),
                     confidence = random.nextDouble(0.72, 0.98).toFloat(),
                 )
             }
         }
     }
 
-    private suspend fun emitNewEvent(binId: String, type: WasteType, confidence: Float) {
+    private suspend fun emitNewEvent(binId: String, predictedClass: String, confidence: Float) {
         val now = Instant.now()
         val event = WasteEvent(
             id = "EVT-${now.toEpochMilli()}-$binId",
             binId = binId,
-            wasteType = type,
+            predictedClass = predictedClass,
             confidence = confidence,
             timestamp = now,
         )
@@ -195,7 +200,7 @@ class MockBinRepository @Inject constructor() : BinRepository {
                 bin.copy(
                     status = liveStatus,
                     lastSeenAt = lastEvent?.timestamp,
-                    lastWasteType = lastEvent?.wasteType,
+                    lastPredictedClass = lastEvent?.predictedClass,
                     totalEventsToday = todayCount,
                 )
             }
@@ -224,7 +229,7 @@ class MockBinRepository @Inject constructor() : BinRepository {
                     events += WasteEvent(
                         id = "EVT-${eventCounter++}",
                         binId = bin.id,
-                        wasteType = weightedWasteTypeFor(bin.locality),
+                        predictedClass = weightedRawClassFor(bin.locality, wasteClassConfigStore.catalog.value.availableRawClasses),
                         confidence = random.nextDouble(0.61, 0.98).toFloat(),
                         timestamp = timestamp,
                     )
@@ -235,36 +240,18 @@ class MockBinRepository @Inject constructor() : BinRepository {
         return events.sortedBy { it.timestamp }
     }
 
-    private fun weightedWasteTypeFor(locality: String): WasteType {
-        val roll = random.nextInt(100)
-        return when (locality) {
-            "Food Court" -> when {
-                roll < 58 -> WasteType.ORGANIC
-                roll < 73 -> WasteType.PAPER
-                roll < 88 -> WasteType.OTHER
-                else -> WasteType.METAL
-            }
-
-            "Market Street" -> when {
-                roll < 18 -> WasteType.ORGANIC
-                roll < 42 -> WasteType.PAPER
-                roll < 75 -> WasteType.OTHER
-                else -> WasteType.METAL
-            }
-
-            "Residential Zone" -> when {
-                roll < 33 -> WasteType.ORGANIC
-                roll < 55 -> WasteType.PAPER
-                roll < 83 -> WasteType.OTHER
-                else -> WasteType.METAL
-            }
-
-            else -> when {
-                roll < 22 -> WasteType.ORGANIC
-                roll < 43 -> WasteType.PAPER
-                roll < 76 -> WasteType.OTHER
-                else -> WasteType.METAL
-            }
-        }
+    private fun weightedRawClassFor(locality: String, availableClasses: List<String>): String {
+        if (availableClasses.isEmpty()) return ""
+        val favored = when (locality) {
+            "Food Court" -> listOf("organic", "paper", "plastic")
+            "Market Street" -> listOf("plastic", "glass", "trash")
+            "Residential Zone" -> listOf("paper", "plastic", "clothes")
+            else -> listOf("metal", "paper", "trash")
+        }.filter { it in availableClasses }
+        val pool = buildList {
+            repeat(3) { addAll(favored) }
+            addAll(availableClasses)
+        }.ifEmpty { availableClasses }
+        return pool.random(random)
     }
 }

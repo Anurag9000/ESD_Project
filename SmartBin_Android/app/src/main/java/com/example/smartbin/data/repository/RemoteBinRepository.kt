@@ -1,13 +1,13 @@
 package com.example.smartbin.data.repository
 
-import com.example.smartbin.BuildConfig
 import com.example.smartbin.data.remote.BinApi
 import com.example.smartbin.data.remote.CreateWasteEventRequest
+import com.example.smartbin.data.remote.liveServerHint
+import com.example.smartbin.data.remote.resolvedWsEventsUrl
 import com.example.smartbin.data.remote.toDomain
 import com.example.smartbin.domain.model.Bin
 import com.example.smartbin.domain.model.BinStatus
 import com.example.smartbin.domain.model.WasteEvent
-import com.example.smartbin.domain.model.WasteType
 import com.example.smartbin.domain.repository.BinRepository
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -36,6 +36,7 @@ class RemoteBinRepository @Inject constructor(
     private val binApi: BinApi,
     private val okHttpClient: OkHttpClient,
     private val json: kotlinx.serialization.json.Json,
+    private val wasteClassConfigStore: WasteClassConfigStore,
 ) : BinRepository {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -105,10 +106,12 @@ class RemoteBinRepository @Inject constructor(
 
     override suspend fun triggerDemoEvent(binId: String?) {
         ensureStarted()
+        val availableClasses = wasteClassConfigStore.catalog.value.availableRawClasses
+        if (availableClasses.isEmpty()) return
         val chosenBin = binId ?: binsState.value.firstOrNull { it.status != BinStatus.OFFLINE }?.id ?: return
         val request = CreateWasteEventRequest(
             binId = chosenBin,
-            predictedClass = WasteType.entries.random(Random.Default).name.lowercase(),
+            predictedClass = availableClasses.random(Random.Default),
             confidence = Random.Default.nextDouble(0.82, 0.99).toFloat(),
             eventTime = java.time.Instant.now().toString(),
             sourceDeviceId = "android-demo-client",
@@ -159,7 +162,7 @@ class RemoteBinRepository @Inject constructor(
     private fun connectStream() {
         closedByApp = false
         val request = Request.Builder()
-            .url(BuildConfig.WS_EVENTS_URL)
+            .url(resolvedWsEventsUrl())
             .build()
         webSocket?.cancel()
         webSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
@@ -198,7 +201,7 @@ class RemoteBinRepository @Inject constructor(
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 streamStatus.value = false
-                repositoryErrors.value = t.message ?: "Live event stream failed"
+                repositoryErrors.value = userFriendlyLiveError(t)
                 Timber.w(t, "Waste event stream failed")
                 scheduleReconnect()
             }
@@ -234,8 +237,20 @@ class RemoteBinRepository @Inject constructor(
             repositoryErrors.value = null
         }.onFailure { error ->
             binsLoading.value = false
-            repositoryErrors.value = error.message ?: "Unable to load bins from server"
+            repositoryErrors.value = userFriendlyLiveError(error)
             Timber.w(error, "Failed to refresh bins from backend")
+        }
+    }
+
+    private fun userFriendlyLiveError(error: Throwable): String {
+        val message = error.message.orEmpty()
+        return when {
+            message.contains("CLEARTEXT communication", ignoreCase = true) ->
+                "Live server blocked by Android network policy. ${liveServerHint()}"
+            message.contains("Failed to connect", ignoreCase = true) ||
+                message.contains("Connection refused", ignoreCase = true) ->
+                "Live server unavailable. ${liveServerHint()}"
+            else -> message.ifBlank { "Live server unavailable. ${liveServerHint()}" }
         }
     }
 
@@ -246,7 +261,7 @@ class RemoteBinRepository @Inject constructor(
                 bin.copy(
                     status = BinStatus.ONLINE,
                     lastSeenAt = event.timestamp,
-                    lastWasteType = event.wasteType,
+                    lastPredictedClass = event.predictedClass,
                     totalEventsToday = bin.totalEventsToday + 1,
                 )
             }

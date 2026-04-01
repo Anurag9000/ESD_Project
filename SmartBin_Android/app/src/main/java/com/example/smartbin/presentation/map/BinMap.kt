@@ -50,10 +50,11 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.smartbin.domain.model.ResolvedWasteClassConfiguration
 import com.example.smartbin.data.repository.AppMode
 import com.example.smartbin.domain.model.Bin
 import com.example.smartbin.domain.model.BinStatus
-import com.example.smartbin.domain.model.WasteType
+import com.example.smartbin.presentation.wasteClassColor
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import org.maplibre.android.annotations.IconFactory
@@ -69,6 +70,7 @@ import org.maplibre.android.maps.Style
 @Composable
 fun BinMapScreen(
     state: MapState,
+    classConfiguration: ResolvedWasteClassConfiguration,
     onMarkerTapped: (String) -> Unit,
     onToggleBinSelection: (String) -> Unit,
     onSelectLocality: (String?) -> Unit,
@@ -110,15 +112,17 @@ fun BinMapScreen(
             if (state.latestWatchedAlert != null) {
                 WatchedBinAlertBanner(
                     alert = state.latestWatchedAlert,
+                    classConfiguration = classConfiguration,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 4.dp),
                     onDismiss = onDismissWatchedAlert,
                 )
             }
-            BinMap(
-                bins = state.visibleBins,
-                selectedBinIds = state.selectedBinIds,
+                BinMap(
+                    bins = state.visibleBins,
+                    classConfiguration = classConfiguration,
+                    selectedBinIds = state.selectedBinIds,
                 activeBinIds = state.recentlyActiveBinIds,
                 selectedLocalities = state.selectedLocalities,
                 onMarkerTapped = onMarkerTapped,
@@ -143,6 +147,7 @@ fun BinMapScreen(
         ) {
             BinDetailSheet(
                 bin = detailBin,
+                classConfiguration = classConfiguration,
                 isSelected = detailBin.id in state.selectedBinIds,
                 isWatched = detailBin.id == state.watchedBinId,
                 onToggleSelection = { onToggleBinSelection(detailBin.id) },
@@ -156,9 +161,11 @@ fun BinMapScreen(
 @Composable
 private fun WatchedBinAlertBanner(
     alert: WatchedBinAlert,
+    classConfiguration: ResolvedWasteClassConfiguration,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val displayLabel = classConfiguration.toRuntimeDisplayLabel(alert.predictedClass)
     Card(
         modifier = modifier,
         colors = CardDefaults.cardColors(containerColor = SmartGreen.copy(alpha = 0.14f)),
@@ -180,7 +187,7 @@ private fun WatchedBinAlertBanner(
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    text = "${alert.binName} detected ${alert.wasteType.label.lowercase()} at ${(alert.confidence * 100).toInt()}% confidence",
+                    text = "${alert.binName} detected ${displayLabel.lowercase()} at ${(alert.confidence * 100).toInt()}% confidence",
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
@@ -304,6 +311,7 @@ private fun SelectionSummaryCard(
     modifier: Modifier = Modifier,
 ) {
     val hasExplicitTarget = state.explicitTriggerTargetBinId != null
+    val explicitTargetName = state.bins.firstOrNull { it.id == state.explicitTriggerTargetBinId }?.name
     val watchedBin = state.watchedBin
     val selectionMetricLabel = if (state.selectedLocalities.isNotEmpty()) "Bins in scope" else "Selected"
     ElevatedCard(
@@ -354,7 +362,13 @@ private fun SelectionSummaryCard(
                 onClick = { onTriggerDemoEvent(null) },
                 modifier = Modifier.align(Alignment.End),
             ) {
-                Text(if (hasExplicitTarget) "Trigger live demo event" else "Open or watch one bin to trigger an event")
+                Text(
+                    if (hasExplicitTarget) {
+                        "Trigger live demo event${explicitTargetName?.let { " for $it" }.orEmpty()}"
+                    } else {
+                        "Open or watch one bin to trigger an event"
+                    },
+                )
             }
         }
     }
@@ -379,6 +393,7 @@ private fun SummaryMetric(label: String, value: String) {
 @Composable
 private fun BinDetailSheet(
     bin: Bin,
+    classConfiguration: ResolvedWasteClassConfiguration,
     isSelected: Boolean,
     isWatched: Boolean,
     onToggleSelection: () -> Unit,
@@ -417,7 +432,10 @@ private fun BinDetailSheet(
             )
         }
 
-        DetailRow("Last event", bin.lastWasteType?.label ?: "No recent event")
+        DetailRow(
+            "Last event",
+            bin.lastPredictedClass?.let(classConfiguration::toRuntimeDisplayLabel) ?: "No recent event",
+        )
         DetailRow(
             "Last seen",
             bin.lastSeenAt?.atZone(zoneId)?.format(formatter) ?: "No data yet",
@@ -464,6 +482,7 @@ private fun DetailRow(label: String, value: String) {
 @Composable
 fun BinMap(
     bins: List<Bin>,
+    classConfiguration: ResolvedWasteClassConfiguration,
     selectedBinIds: Set<String>,
     activeBinIds: Set<String>,
     selectedLocalities: Set<String>,
@@ -516,7 +535,7 @@ fun BinMap(
                 bin.latitude.toString(),
                 bin.longitude.toString(),
                 bin.status.name,
-                bin.lastWasteType?.name.orEmpty(),
+                classConfiguration.toRuntimeDisplayLabel(bin.lastPredictedClass),
                 (bin.id in selectedBinIds).toString(),
                 (bin.id in activeBinIds).toString(),
             ).joinToString("|")
@@ -533,6 +552,7 @@ fun BinMap(
                         iconFactory.fromBitmap(
                             createMarkerBitmap(
                                 bin = bin,
+                                classConfiguration = classConfiguration,
                                 isSelected = bin.id in selectedBinIds,
                                 isActive = bin.id in activeBinIds,
                             ),
@@ -583,7 +603,12 @@ private fun AndroidMapContainer(mapView: MapView, modifier: Modifier) {
     )
 }
 
-private fun createMarkerBitmap(bin: Bin, isSelected: Boolean, isActive: Boolean): Bitmap {
+private fun createMarkerBitmap(
+    bin: Bin,
+    classConfiguration: ResolvedWasteClassConfiguration,
+    isSelected: Boolean,
+    isActive: Boolean,
+): Bitmap {
     val width = 128
     val height = 168
     val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
@@ -623,7 +648,7 @@ private fun createMarkerBitmap(bin: Bin, isSelected: Boolean, isActive: Boolean)
     canvas.drawCircle(width / 2f, 68f, 26f, innerPaint)
 
     val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = wasteColor(bin.lastWasteType).toArgb()
+        color = wasteClassColor(classConfiguration.toRuntimeDisplayLabel(bin.lastPredictedClass)).toArgb()
     }
     canvas.drawCircle(width / 2f, 68f, 14f, dotPaint)
 
@@ -634,13 +659,6 @@ private fun statusColor(status: BinStatus): Color = when (status) {
     BinStatus.ONLINE -> SmartBlue
     BinStatus.OFFLINE -> SmartSlate
     BinStatus.DEGRADED -> SmartAmber
-}
-
-private fun wasteColor(type: WasteType?): Color = when (type) {
-    WasteType.METAL -> Color(0xFF7C8799)
-    WasteType.ORGANIC -> SmartGreen
-    WasteType.PAPER -> Color(0xFF4F7DF3)
-    WasteType.OTHER, null -> SmartAmber
 }
 
 private val SmartBlue = Color(0xFF1B5E9A)
