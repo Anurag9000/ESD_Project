@@ -51,15 +51,22 @@ class PhaseSpec:
 class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
     def __init__(
         self,
-        root: Path,
+        root: Path | None,
         image_size: int,
         augment_repeats: int,
         split_name: str,
         seed: int,
         gaussian_sigmas: float,
         apply_augmentation: bool = True,
+        *,
+        base_dataset: datasets.ImageFolder | None = None,
+        samples: list[tuple[str, int]] | None = None,
     ) -> None:
-        self.base_dataset = datasets.ImageFolder(root)
+        if base_dataset is None:
+            if root is None:
+                raise ValueError("Either `root` or `base_dataset` must be provided.")
+            base_dataset = datasets.ImageFolder(root)
+        self.base_dataset = base_dataset
         self.image_size = image_size
         self.augment_repeats = augment_repeats
         self.split_name = split_name
@@ -68,8 +75,8 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
         self.apply_augmentation = apply_augmentation
         self.classes = self.base_dataset.classes
         self.class_to_idx = self.base_dataset.class_to_idx
-        self.samples = self.base_dataset.samples
-        self.targets = self.base_dataset.targets
+        self.samples = list(self.base_dataset.samples if samples is None else samples)
+        self.targets = [target for _, target in self.samples]
         self.current_epoch = 0
 
     def __len__(self) -> int:
@@ -920,17 +927,20 @@ def build_datasets(
     DeterministicSupConDataset,
 ]:
     root = Path(args.dataset_root)
-    train_dataset = DeterministicAugmentedImageFolder(
-        root / "train", args.image_size, args.augment_repeats, "train", args.seed, args.augment_gaussian_sigmas, apply_augmentation=True
-    )
-    val_dataset = DeterministicAugmentedImageFolder(
-        root / "val", args.image_size, 1, "val", args.seed, args.augment_gaussian_sigmas, apply_augmentation=False
-    )
-    test_dataset = DeterministicAugmentedImageFolder(
-        root / "test", args.image_size, args.augment_repeats, "test", args.seed, args.augment_gaussian_sigmas, apply_augmentation=True
-    )
-    if train_dataset.classes != val_dataset.classes or train_dataset.classes != test_dataset.classes:
-        raise ValueError("Class folders differ across train/val/test")
+    if has_explicit_split_layout(root):
+        train_dataset = DeterministicAugmentedImageFolder(
+            root / "train", args.image_size, args.augment_repeats, "train", args.seed, args.augment_gaussian_sigmas, apply_augmentation=True
+        )
+        val_dataset = DeterministicAugmentedImageFolder(
+            root / "val", args.image_size, 1, "val", args.seed, args.augment_gaussian_sigmas, apply_augmentation=False
+        )
+        test_dataset = DeterministicAugmentedImageFolder(
+            root / "test", args.image_size, args.augment_repeats, "test", args.seed, args.augment_gaussian_sigmas, apply_augmentation=True
+        )
+        if train_dataset.classes != val_dataset.classes or train_dataset.classes != test_dataset.classes:
+            raise ValueError("Class folders differ across train/val/test")
+    else:
+        train_dataset, val_dataset, test_dataset = build_auto_split_datasets(root, args)
     return (
         train_dataset,
         val_dataset,
@@ -938,6 +948,126 @@ def build_datasets(
         DeterministicSupConDataset(train_dataset),
         DeterministicSupConDataset(val_dataset),
     )
+
+
+def has_explicit_split_layout(root: Path) -> bool:
+    return all((root / split_name).is_dir() for split_name in ("train", "val", "test"))
+
+
+def parse_auto_split_ratios(spec: str) -> tuple[float, float, float]:
+    parts = [segment.strip() for segment in spec.split(",") if segment.strip()]
+    if len(parts) != 3:
+        raise ValueError("--auto-split-ratios must contain exactly three comma-separated values.")
+    values = [float(part) for part in parts]
+    if any(value <= 0.0 for value in values):
+        raise ValueError("--auto-split-ratios values must all be positive.")
+    total = sum(values)
+    return (values[0] / total, values[1] / total, values[2] / total)
+
+
+def allocate_split_counts(sample_count: int, ratios: tuple[float, float, float]) -> tuple[int, int, int]:
+    if sample_count <= 0:
+        return (0, 0, 0)
+    minimums = [0, 0, 0]
+    if sample_count >= 1:
+        minimums[0] = 1
+    if sample_count >= 2:
+        minimums[1] = 1
+    if sample_count >= 3:
+        minimums[2] = 1
+    remaining = sample_count - sum(minimums)
+    if remaining <= 0:
+        return tuple(minimums)
+    raw = [remaining * ratio for ratio in ratios]
+    extras = [int(math.floor(value)) for value in raw]
+    shortfall = remaining - sum(extras)
+    remainders = sorted(
+        ((raw[index] - extras[index], index) for index in range(3)),
+        reverse=True,
+    )
+    for _, index in remainders[:shortfall]:
+        extras[index] += 1
+    return tuple(minimums[index] + extras[index] for index in range(3))
+
+
+def build_auto_split_datasets(
+    root: Path,
+    args: argparse.Namespace,
+) -> tuple[DeterministicAugmentedImageFolder, DeterministicAugmentedImageFolder, DeterministicAugmentedImageFolder]:
+    ratios = parse_auto_split_ratios(args.auto_split_ratios)
+    base_dataset = datasets.ImageFolder(root)
+    by_class: dict[int, list[tuple[str, int]]] = {index: [] for index in range(len(base_dataset.classes))}
+    for path, target in base_dataset.samples:
+        by_class[int(target)].append((path, int(target)))
+
+    rng = random.Random(args.seed)
+    train_samples: list[tuple[str, int]] = []
+    val_samples: list[tuple[str, int]] = []
+    test_samples: list[tuple[str, int]] = []
+    split_counts: dict[str, dict[str, int]] = {"train": {}, "val": {}, "test": {}}
+    for class_index, samples in by_class.items():
+        shuffled = list(samples)
+        rng.shuffle(shuffled)
+        train_count, val_count, test_count = allocate_split_counts(len(shuffled), ratios)
+        train_chunk = shuffled[:train_count]
+        val_chunk = shuffled[train_count : train_count + val_count]
+        test_chunk = shuffled[train_count + val_count : train_count + val_count + test_count]
+        train_samples.extend(train_chunk)
+        val_samples.extend(val_chunk)
+        test_samples.extend(test_chunk)
+        class_name = base_dataset.classes[class_index]
+        split_counts["train"][class_name] = len(train_chunk)
+        split_counts["val"][class_name] = len(val_chunk)
+        split_counts["test"][class_name] = len(test_chunk)
+
+    manifest = {
+        "dataset_root": str(root),
+        "split_mode": "auto_stratified_from_flat_root",
+        "seed": int(args.seed),
+        "split_ratios": {"train": ratios[0], "val": ratios[1], "test": ratios[2]},
+        "class_names": list(base_dataset.classes),
+        "split_counts": split_counts,
+        "source_samples": len(base_dataset.samples),
+        "train_samples": len(train_samples),
+        "val_samples": len(val_samples),
+        "test_samples": len(test_samples),
+    }
+    save_json(root / "auto_split_manifest.json", manifest)
+
+    train_dataset = DeterministicAugmentedImageFolder(
+        None,
+        args.image_size,
+        args.augment_repeats,
+        "train",
+        args.seed,
+        args.augment_gaussian_sigmas,
+        apply_augmentation=True,
+        base_dataset=base_dataset,
+        samples=train_samples,
+    )
+    val_dataset = DeterministicAugmentedImageFolder(
+        None,
+        args.image_size,
+        1,
+        "val",
+        args.seed,
+        args.augment_gaussian_sigmas,
+        apply_augmentation=False,
+        base_dataset=base_dataset,
+        samples=val_samples,
+    )
+    test_dataset = DeterministicAugmentedImageFolder(
+        None,
+        args.image_size,
+        args.augment_repeats,
+        "test",
+        args.seed,
+        args.augment_gaussian_sigmas,
+        apply_augmentation=True,
+        base_dataset=base_dataset,
+        samples=test_samples,
+    )
+    return train_dataset, val_dataset, test_dataset
 
 
 def build_phase_plan(total_modules: int, args: argparse.Namespace) -> list[PhaseSpec]:
@@ -2484,6 +2614,7 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
         description += " using a Gabor front-end."
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--dataset-root", default="Dataset_Final")
+    parser.add_argument("--auto-split-ratios", default="0.7,0.2,0.1")
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--num-workers", type=int, default=4)
@@ -2652,8 +2783,8 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                 "targeted_confusion_penalties": args.targeted_confusion_penalties_resolved,
             },
         )
-    if use_gabor and "plastic" not in train_dataset.class_to_idx:
-        note = "note: current dataset has no `plastic` class; the Gabor front-end remains an ablation for texture-sensitive separation."
+    if use_gabor:
+        note = "note: class names are inferred from the dataset root; the Gabor front-end remains an ablation for texture-sensitive separation."
         print(note)
         append_jsonl(log_path, {"event": "note", "message": note})
 

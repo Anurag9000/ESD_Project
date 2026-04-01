@@ -1,13 +1,7 @@
 {
-  "source_root": "Dataset_Final",
-  "final_classes": [
-    "organic",
-    "paper",
-    "other",
-    "metal"
-  ],
-  "source_image_count": 56167,
-  "final_image_count": 56167,
+  "source_archive": "Dataset_Final_original_backup.zip",
+  "dataset_root": "Dataset_Final",
+  "split_structure_removed": true,
   "source_class_counts": {
     "organic": 9007,
     "other": 25617,
@@ -15,71 +9,147 @@
     "plastic": 8099
   },
   "final_class_counts": {
+    "battery": 1627,
+    "clothes": 6260,
+    "ewaste": 446,
+    "glass": 9995,
+    "metal": 5042,
     "organic": 9007,
     "paper": 13444,
-    "other": 29901,
-    "metal": 3815
+    "plastic": 8099,
+    "shoes": 2113,
+    "trash": 130
   },
-  "class_moves": {
-    "other->metal": 3563,
-    "plastic->other": 8099,
-    "other->metal_model": 252
+  "final_classes": [
+    "battery",
+    "clothes",
+    "ewaste",
+    "glass",
+    "metal",
+    "organic",
+    "paper",
+    "plastic",
+    "shoes",
+    "trash"
+  ],
+  "mapping_reference_markdown": "OTHER_FILENAME_CLASS_MAP.md",
+  "other_mapping_rule_counts": {
+    "image_series->ewaste": 68,
+    "r_series->metal": 1399,
+    "scene_series->clothes": 1,
+    "scene_series->ewaste": 13,
+    "scene_series->metal": 2,
+    "scene_series->trash": 2,
+    "text_series->clothes": 346,
+    "unresolved->ewaste": 8
   },
-  "source_format_counts": {
-    "organic:JPEG": 8864,
-    "organic:PNG": 143,
-    "other:JPEG": 25123,
-    "other:MPO": 1,
-    "other:PNG": 493,
-    "paper:JPEG": 13331,
-    "paper:MPO": 2,
-    "paper:PNG": 108,
-    "paper:WEBP": 3,
-    "plastic:JPEG": 7991,
-    "plastic:MPO": 3,
-    "plastic:PNG": 103,
-    "plastic:WEBP": 2
-  },
-  "output_format_counts": {
-    "JPEG": 55320,
-    "PNG": 847
-  },
-  "output_extension_counts": {
-    ".jpg": 55320,
-    ".png": 847
-  },
-  "mismatched_source_extensions_by_class": {
-    "organic": 143,
-    "other": 504,
-    "paper": 91,
-    "plastic": 81
-  },
-  "exif_removed": 2237,
-  "gps_removed": 99,
-  "metal_rule": {
-    "source_folder": "other",
-    "filename_prefixes": [
-      "metal",
-      "alum"
+  "example_filenames_by_final_class": {
+    "battery": [
+      "1-2-volt-battery-5650155.jpg",
+      "9-volt-battery-white-clipping-path-11607399.jpg",
+      "9v-battery-13496634.jpg",
+      "9v-battery-13693137.jpg",
+      "9v-battery-20280359.jpg",
+      "9v-battery-isolated-white-sign-energy-24846904.jpg",
+      "aa-accumulators-7201087.jpg",
+      "aa-batteries-energy-household-appliances-battery-recycling-used-alkaline-batteries-aa-size-format-207672475.jpg"
+    ],
+    "clothes": [
+      "abandoned-clothes-background-looking-down-piles-colourful-old-clothes-discarded-ground-abandoned-clothes-background-174236667.jpg",
+      "abandoned-clothes-background-looking-down-piles-colourful-old-clothes-discarded-ground-abandoned-clothes-background-174498277.jpg",
+      "abandoned-clothes-background-looking-down-piles-colourful-old-discarded-ground-informal-rubbish-dump-174236657.jpg",
+      "abandoned-clothes-background-looking-down-piles-colourful-old-discarded-ground-informal-rubbish-dump-174236688.jpg",
+      "alignment-second-hand-baby-children-clothing-to-recycle-displayed-rack-per-size-outdoor-flea-market-sale-exchange-96858260.jpg",
+      "assorted-clothes-isolated-heap-colorful-white-36145930.jpg",
+      "autumn-winter-jumpers-recycle-clothes-symbol-sign-t-shirt-jeans-sustainable-fashion-concept-185577496.jpg",
+      "baby-toddler-clothes-garage-sale-31599125.jpg"
+    ],
+    "ewaste": [
+      "E-waste.jpg",
+      "EWZY7f9XQAIuMZl.jpg",
+      "Eco_Music_800x450.jpg",
+      "Electronics.jpg",
+      "Example-of-e-waste-in-Category-3-ICT-a-used-mobile-phones-and-b-used-monitors_Q320.jpg",
+      "Large-amount-of-electronic-waste-discharged-into-the-environment_Q320.jpg",
+      "artificial-ingelligence-circuit-board-closeup-view-with-electronic-picture-id1204292248.jpg",
+      "artificial-ingelligence-circuit-board-closeup-view-with-electronic-picture-id1204292317.jpg"
+    ],
+    "glass": [
+      "202512-glass1.jpg",
+      "202512-glass10.jpg",
+      "202512-glass100.jpg",
+      "202512-glass101.jpg",
+      "202512-glass102.jpg",
+      "202512-glass103.jpg",
+      "202512-glass104.jpg",
+      "202512-glass105.jpg"
+    ],
+    "metal": [
+      "202512-metal1.jpg",
+      "202512-metal10.jpg",
+      "202512-metal105.jpg",
+      "202512-metal106.jpg",
+      "202512-metal107.jpg",
+      "202512-metal111.jpg",
+      "202512-metal112.jpg",
+      "202512-metal1121.jpg"
+    ],
+    "organic": [
+      "Food Organics_1.jpg",
+      "Food Organics_10.jpg",
+      "Food Organics_100.jpg",
+      "Food Organics_101.jpg",
+      "Food Organics_102.jpg",
+      "Food Organics_103.jpg",
+      "Food Organics_104.jpg",
+      "Food Organics_105.jpg"
+    ],
+    "paper": [
+      "202512-cardboard118.jpg",
+      "202512-cardboard119.jpg",
+      "202512-cardboard120.jpg",
+      "202512-cardboard122.jpg",
+      "202512-cardboard148.jpg",
+      "202512-cardboard16.jpg",
+      "202512-cardboard161.jpg",
+      "202512-cardboard33.jpg"
+    ],
+    "plastic": [
+      "20240626_162343.jpg",
+      "202512-plastic.jpg",
+      "202512-plastic021.jpg",
+      "202512-plastic1.jpg",
+      "202512-plastic10.jpg",
+      "202512-plastic100.jpg",
+      "202512-plastic101.jpg",
+      "202512-plastic102.jpg"
+    ],
+    "shoes": [
+      "flea-market-interior-vendors-selling-previously-owned-clothes-shoes-household-items-merchant-merchandise-seller-sales-153957169.jpg",
+      "overfilled-trash-dumpster-near-street-old-clothes-shoes-waste-left-near-to-trash-dumpsters-street-dirty-refuse-bins-104904612.jpg",
+      "photo-confused-young-woman-wearing-hat-sitting-near-bunch-clothes-shoes-over-pink-background-162585390.jpg",
+      "photo-sad-young-woman-wearing-hat-sitting-near-bunch-clothes-shoes-isolated-over-pink-background-162584977.jpg",
+      "photo-shocked-young-woman-wearing-hat-sitting-near-bunch-clothes-shoes-isolated-over-pink-background-162585049.jpg",
+      "pile-old-dirty-clothes-shoes-disposal-top-view-recycled-processing-recyclable-materials-concept-above-204120142.jpg",
+      "pile-old-worn-clothes-shoes-182270497.jpg",
+      "pile-old-worn-clothes-shoes-182270547.jpg"
+    ],
+    "trash": [
+      "20240626_161207.jpg",
+      "man-sorting-the-recyclable-junk-in-the-outskirts-of-accra-there-is-picture-id909551954.jpg",
+      "man-sorting-the-recyclable-junk-in-the-outskirts-of-accra-there-is-picture-id909552070.jpg",
+      "man-sorting-the-recyclable-junk-in-the-outskirts-of-accra-there-is-picture-id909552174.jpg",
+      "trash_trash1.jpg",
+      "trash_trash109.jpg",
+      "trash_trash115.jpg",
+      "trash_trash118.jpg"
     ]
   },
-  "filename_scheme": "<class>_<6-digit-sequence>.<normalized-extension>",
-  "path_separator_in_metadata": "forward_slash",
-  "model_assisted_relabel": {
-    "source_folder": "other",
-    "target_folder": "metal",
-    "moved_image_count": 252,
-    "previous_final_class_counts": {
-      "metal": 3563,
-      "organic": 9007,
-      "other": 30153,
-      "paper": 13444
-    },
-    "updated_final_class_counts": {
-      "organic": 9007,
-      "paper": 13444,
-      "other": 29901,
-      "metal": 3815
-    }
-  }
+  "total_images": 56163,
+  "unresolved_removed_files": [
+    "high-angle-view-of-worker-driving-forklift-in-recycling-plant-picture-id958248286.jpg",
+    "office-business-accessories-e-commerce-euro-dollar-banknotes-spread-out-table-office-business-accessories-210973456.jpg",
+    "office-business-accessories-e-commerce-euro-dollar-banknotes-spread-out-table-office-business-accessories-210979635.jpg",
+    "woman-worker-haiti-17486822.jpg"
+  ]
 }
