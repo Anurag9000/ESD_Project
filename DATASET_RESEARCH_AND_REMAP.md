@@ -459,6 +459,30 @@ These are the strongest non-Kaggle primary sources or well-known public sources 
   - direct: `glass`, `metal`, `organic`, `paper`, `plastic`
   - close: `litter -> trash`
 
+### Litter Assessment Dataset (Mendeley materials version)
+
+- Source: https://data.mendeley.com/datasets/9dbcd876wj/1
+- Material groups:
+  - `bulky items`
+  - `electronics`
+  - `glass`
+  - `hazardous`
+  - `medical`
+  - `metal`
+  - `mixed materials`
+  - `organics`
+  - `paper`
+  - `plastic`
+  - `textiles`
+  - `tobacco`
+  - `vehicle`
+  - `other items`
+- Best overlap:
+  - direct: `glass`, `metal`, `paper`, `plastic`
+  - close: `organics -> organic`, `electronics -> ewaste`, `textiles -> clothes`, `other items -> trash`
+- Note:
+  - broader materials-style variant than the simpler six-class Kaggle version
+
 ### HOWA
 
 - Source: https://www.iuii.ua.es/datasets/howa/index.html
@@ -715,6 +739,22 @@ These are the strongest non-Kaggle primary sources or well-known public sources 
 - Note:
   - this is distinct from the earlier Bangladeshi e-waste dataset entry and has broader cross-material coverage
 
+### Indoor Waste Image Dataset (Mendeley public-space version)
+
+- Source: https://data.mendeley.com/datasets/dy7smxr93r
+- Publicly surfaced size:
+  - `4,000` color images
+- Classes:
+  - `paper`
+  - `plastic`
+  - `cap`
+  - `shell`
+- Best overlap:
+  - direct: `paper`, `plastic`
+  - close: `cap` may overlap `metal` or `plastic` depending on item type, `shell` likely maps to `trash`
+- Note:
+  - collected for indoor public-place waste detection rather than household tabletop classification
+
 ### NWNU-TRASH
 
 - Sources:
@@ -942,6 +982,29 @@ These are the strongest non-Kaggle primary sources or well-known public sources 
   - close: `cans -> metal`, `cardboard -> paper`, bottles/canisters/detergent containers -> likely `plastic` or `glass` depending on subtype
 - Note:
   - useful as a waste-recycling-plant dataset family rather than a household tabletop set
+
+### Construction and Demolition Waste Object Detection Dataset (CODD)
+
+- Source: https://data.mendeley.com/datasets/wds85kt64j/3
+- Publicly surfaced size:
+  - `3,129` images
+  - `16,545` annotated samples
+- Classes:
+  - `bricks`
+  - `concrete`
+  - `tiles`
+  - `wood`
+  - `pipes`
+  - `plastics`
+  - `general waste`
+  - `foaming insulation`
+  - `stones`
+  - `plaster boards`
+- Best overlap:
+  - direct: `plastic`
+  - close: `general waste -> trash`
+- Note:
+  - construction-demolition domain, but still a distinct real-world waste detection benchmark
 
 ### MJU-Waste
 
@@ -1591,6 +1654,33 @@ These are narrower, but still useful if a specific class needs extra support.
   - plastic-only
 - Best overlap:
   - direct: `plastic`
+
+### Images of mixed-type recyclable waste
+
+- Source: https://zenodo.org/records/15575903
+- Scope:
+  - RGB and HSI images of mixed recyclable materials on a conveyor belt
+- Publicly surfaced material examples:
+  - `PET`
+  - `HDPE`
+  - `aluminum`
+- Best overlap:
+  - direct: `plastic`
+  - close: `aluminum -> metal`
+- Note:
+  - useful as a conveyor / industrial sorting auxiliary dataset
+
+### SWIR hyperspectral plastics detection in the environment
+
+- Source: https://data.mendeley.com/datasets/y8cvcs8tt5
+- Scope:
+  - SWIR hyperspectral cubes for plastic-litter detection in environmental scenes
+- Publicly surfaced size:
+  - `7` hyperspectral cubes
+- Best overlap:
+  - direct: `plastic`
+- Note:
+  - niche, but distinct and useful if hyperspectral plastic detection ever matters
 
 ### E-Waste Classification Dataset
 
