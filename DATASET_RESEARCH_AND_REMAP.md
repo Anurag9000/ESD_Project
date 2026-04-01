@@ -390,6 +390,27 @@ These are the strongest non-Kaggle primary sources or well-known public sources 
   - direct: `battery`
   - close: all other classes -> `ewaste`
 
+### HGI-30: 30 Classes of Household Garbage Images
+
+- Source: https://arxiv.org/abs/2202.11878
+- Scope:
+  - 30-class household garbage benchmark
+  - built with varied backgrounds, angles, lighting, and shapes
+- Best overlap:
+  - useful as a broader fine-grained pretraining source for household-waste visual diversity
+- Note:
+  - the search result exposed the benchmark and its 30-class framing, but not the full class list in the snippet
+
+### GlobalWasteData
+
+- Source: https://arxiv.org/abs/2602.07463
+- Scope:
+  - integrated large-scale benchmark that combines multiple waste datasets
+- Best overlap:
+  - useful more as a unification/meta-benchmark source than as a single clean original dataset
+- Note:
+  - class harmonization details matter here because the dataset is explicitly integrated from heterogeneous sources
+
 ### Indoor Waste Image Dataset
 
 - Source: https://www.kaggle.com/datasets/katyanad/indoor-waste-image-dataset
@@ -781,6 +802,46 @@ These are Kaggle-hosted datasets or dataset families with substantial overlap wi
   - direct: `plastic`
   - close: `can -> metal`, `cardboard -> paper`, `bottle` and `bottle cap` may split between `glass`, `plastic`, and `metal` depending on item material
 
+### Garbage Classification (12 classes) by mostafaabla
+
+- Source: https://www.kaggle.com/datasets/mostafaabla/garbage-classification
+- Classes:
+  - `paper`
+  - `cardboard`
+  - `biological`
+  - `metal`
+  - `plastic`
+  - `green-glass`
+  - `brown-glass`
+  - `white-glass`
+  - `clothes`
+  - `shoes`
+  - `batteries`
+  - `trash`
+- Best overlap:
+  - direct: `battery`, `clothes`, `metal`, `paper`, `plastic`, `shoes`, `trash`
+  - close: `biological -> organic`, glass color variants -> `glass`, `cardboard -> paper`
+
+### Household Waste Dataset index on Papers With Code
+
+- Source: https://paperswithcode.com/dataset/household-waste-dataset
+- Exposed classes:
+  - `metal`
+  - `glass`
+  - `biological`
+  - `paper`
+  - `battery`
+  - `trash`
+  - `cardboard`
+  - `shoes`
+  - `clothes`
+  - `plastic`
+- Best overlap:
+  - direct: `battery`, `clothes`, `glass`, `metal`, `paper`, `plastic`, `shoes`, `trash`
+  - close: `biological -> organic`, `cardboard -> paper`
+- Note:
+  - this is useful as an index/corroboration page; the underlying data lineage still points back to the broader garbage dataset family
+
 ### Drinking Waste Classification
 
 - Source: https://www.kaggle.com/datasets/arkadiyhacks/drinking-waste-classification
@@ -817,6 +878,49 @@ These are narrower, but still useful if a specific class needs extra support.
   - direct: `metal`
 - Caution:
   - lower trust than real-world waste datasets because of likely synthetic bias
+
+### Roboflow E-Waste Dataset
+
+- Sources:
+  - https://universe.roboflow.com/electronic-waste-detection
+  - https://universe.roboflow.com/jeff-t1fqn/e-waste-dataset-r0ojc-981jy
+- Scope:
+  - large annotated e-waste detection dataset
+  - one surfaced version reports `19613` images and `77` classes
+- Exposed classes include:
+  - `Battery`
+  - `Laptop`
+  - `Microwave`
+  - `Smartphone`
+  - `Printer`
+  - `PCB`
+  - `Computer-Keyboard`
+  - `Computer-Mouse`
+  - `Flat-Panel-TV`
+  - `CRT-TV`
+  - `Washing-Machine`
+  - many other device-specific e-waste labels
+- Best overlap:
+  - direct: `battery`
+  - close: almost all remaining classes -> `ewaste`
+- Note:
+  - this is a strong specialty source for `ewaste`, but it is object-detection-oriented and device-fine-grained
+
+### Roboflow100-VL waste-material subset
+
+- Source: https://media.roboflow.com/rf100vl/rf100vl.pdf
+- Exposed waste-material classes in the waste subset:
+  - `Aggregate`
+  - `Cardboard`
+  - `Hard Plastic`
+  - `Metal`
+  - `Soft Plastic`
+  - `Timber`
+- Best overlap:
+  - direct: `metal`
+  - close: `cardboard -> paper`, both plastic variants -> `plastic`
+- Note:
+  - useful mainly as a material-sorting auxiliary source, not as a full household-waste taxonomy
 
 ### Plastic Waste Classification
 
@@ -867,6 +971,9 @@ If the goal is to add external data without drowning in mirrors and near-duplica
 10. `BDWaste`
 11. `Litter Assessment Dataset`
 12. `Custom Bangladeshi E-Waste Dataset`
+13. `New Trash Classfication Dataset`
+14. `Unified Waste Classification Dataset`
+15. `Roboflow E-Waste Dataset`
 
 Why this shortlist:
 
@@ -884,3 +991,17 @@ Kaggle contains many mirrors, repackagings, and lightly modified reuploads of th
 - general `garbage-classification` six-class packs
 
 This file favors unique datasets or meaningfully expanded derivatives instead of counting every mirror as a separate source.
+
+## Fresh Sweep Additions
+
+On the latest broader web sweep, the most useful non-duplicate additions beyond the earlier list were:
+
+- `New Trash Classfication Dataset`
+- `Unified Waste Classification Dataset`
+- `garbage-dataset-10-classes`
+- `Garbage Classification (12 classes)` by `mostafaabla`
+- `Roboflow E-Waste Dataset`
+- `HGI-30`
+- `GlobalWasteData`
+
+These are the ones most worth checking next if the goal is to expand the current project’s class support without drowning in mirrors.
