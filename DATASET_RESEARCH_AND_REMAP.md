@@ -556,6 +556,29 @@ These are Kaggle-hosted datasets or dataset families with substantial overlap wi
   - direct: `battery`, `clothes`, `metal`, `paper`, `plastic`, `shoes`
   - close: `biological waste -> organic`, glass color variants -> `glass`, `general trash -> trash`, `cardboard -> paper`
 
+### Garbage Classification (12 classes) ENHANCED
+
+- Source: https://www.kaggle.com/datasets/huberthamelin/garbage-classification-labels-corrections
+- Classes:
+  - `paper`
+  - `cardboard`
+  - `biological`
+  - `metal`
+  - `plastic`
+  - `green-glass`
+  - `brown-glass`
+  - `white-glass`
+  - `clothes`
+  - `shoes`
+  - `batteries`
+  - `trash`
+- Notes:
+  - corrected / enhanced derivative of the 12-class garbage-classification family
+  - useful when preferring the corrected label set over the raw upstream variant
+- Best overlap:
+  - direct: `battery`, `clothes`, `metal`, `paper`, `plastic`, `shoes`, `trash`
+  - close: `biological -> organic`, glass color variants -> `glass`, `cardboard -> paper`
+
 ### Recyclable And Household Waste Classification
 
 - Source: https://www.kaggle.com/datasets/alistairking/recyclable-and-household-waste-classification
@@ -566,6 +589,21 @@ These are Kaggle-hosted datasets or dataset families with substantial overlap wi
 - Best overlap:
   - direct: `organic`
   - close: `Textile Waste -> clothes`
+
+### Custom Waste Classification Dataset
+
+- Source: https://www.kaggle.com/datasets/wasifmahmood01/custom-waste-classification-dataset
+- Classes explicitly surfaced in the dataset page/snippet:
+  - `battery waste`
+  - `glass waste`
+  - `metal waste`
+  - `organic waste`
+  - `paper waste`
+  - `plastic waste`
+  - `e-waste`
+- The page also states `9 classes of waste`, but only these seven were surfaced in the indexed snippet.
+- Best overlap:
+  - direct: `battery`, `ewaste`, `glass`, `metal`, `organic`, `paper`, `plastic`
 
 ### Waste Segregation Image Dataset
 
@@ -802,6 +840,32 @@ These are Kaggle-hosted datasets or dataset families with substantial overlap wi
   - direct: `plastic`
   - close: `can -> metal`, `cardboard -> paper`, `bottle` and `bottle cap` may split between `glass`, `plastic`, and `metal` depending on item material
 
+### Fotini10k
+
+- Source: https://arxiv.org/abs/2104.00868
+- Classes:
+  - `plastic bottles`
+  - `aluminum cans`
+  - `paper and cardboard`
+- Best overlap:
+  - close: `plastic bottles -> plastic`, `aluminum cans -> metal`, `paper and cardboard -> paper`
+- Note:
+  - narrow but clean for recyclable-object pretraining
+
+### ReCoDeWaste
+
+- Source: https://github.com/prasadvineetv/ReCoDeWaste
+- Classes surfaced in the repo/page:
+  - `cardboard`
+  - `hard plastic`
+  - `metal`
+  - plus additional construction and demolition material classes
+- Best overlap:
+  - direct: `metal`
+  - close: `cardboard -> paper`, `hard plastic -> plastic`
+- Note:
+  - construction/demolition domain rather than household-waste domain, but still a real material-sorting dataset
+
 ### Garbage Classification (12 classes) by mostafaabla
 
 - Source: https://www.kaggle.com/datasets/mostafaabla/garbage-classification
@@ -1000,8 +1064,12 @@ On the latest broader web sweep, the most useful non-duplicate additions beyond 
 - `Unified Waste Classification Dataset`
 - `garbage-dataset-10-classes`
 - `Garbage Classification (12 classes)` by `mostafaabla`
+- `Garbage Classification (12 classes) ENHANCED`
 - `Roboflow E-Waste Dataset`
 - `HGI-30`
 - `GlobalWasteData`
+- `Custom Waste Classification Dataset`
+- `Fotini10k`
+- `ReCoDeWaste`
 
 These are the ones most worth checking next if the goal is to expand the current project’s class support without drowning in mirrors.
