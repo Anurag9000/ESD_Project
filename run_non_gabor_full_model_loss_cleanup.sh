@@ -17,7 +17,7 @@ python scripts/run_recursive_refinement.py \
   --base-log-file "$LOG_FILE" \
   --initial-checkpoint "$BASE_CHECKPOINT" \
   --metric val_loss \
-  --threshold 0.001 \
+  --threshold 0.0001 \
   --initial-head-lr 1e-4 \
   --initial-backbone-lr 5e-5 \
   --dataset-root Dataset_Final \

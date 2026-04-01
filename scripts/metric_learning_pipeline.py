@@ -1525,20 +1525,56 @@ def classifier_loss(
     labels: torch.Tensor,
     criterion: nn.Module,
     args: argparse.Namespace,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     logits = model.classify(embeddings, labels)
-    base_loss = criterion(logits, labels)
     plain_logits = model.classify(embeddings, labels=None)
+    return classifier_loss_from_logits(logits, plain_logits, labels, args)
+
+
+def classifier_loss_from_logits(
+    logits: torch.Tensor,
+    plain_logits: torch.Tensor,
+    labels: torch.Tensor,
+    args: argparse.Namespace,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    per_sample_loss = F.cross_entropy(
+        logits,
+        labels,
+        reduction="none",
+        label_smoothing=args.label_smoothing,
+    )
+    class_loss_weight_map = getattr(args, "class_loss_weight_map_resolved", {}) or {}
+    if class_loss_weight_map:
+        sample_weights = torch.ones_like(per_sample_loss)
+        for class_index, weight in class_loss_weight_map.items():
+            sample_weights = torch.where(labels == int(class_index), sample_weights.new_tensor(float(weight)), sample_weights)
+        per_sample_loss = per_sample_loss * sample_weights
+    base_loss = per_sample_loss.mean()
     probabilities = torch.softmax(plain_logits, dim=1)
     true_class_confidence = probabilities.gather(1, labels.unsqueeze(1)).squeeze(1)
     predictions = plain_logits.argmax(dim=1)
     correct_mask = predictions == labels
     if correct_mask.any():
         confidence_gap = (args.confidence_threshold - true_class_confidence).clamp(min=0.0)
-        penalty = confidence_gap[correct_mask].square().mean()
+        confidence_penalty = confidence_gap[correct_mask].square().mean()
     else:
-        penalty = embeddings.new_zeros(())
-    return base_loss, penalty
+        confidence_penalty = logits.new_zeros(())
+    targeted_confusion_penalties = getattr(args, "targeted_confusion_penalties_resolved", []) or []
+    targeted_penalty = logits.new_zeros(())
+    if targeted_confusion_penalties:
+        for penalty_spec in targeted_confusion_penalties:
+            true_index = int(penalty_spec["true_index"])
+            predicted_index = int(penalty_spec["predicted_index"])
+            weight = float(penalty_spec["weight"])
+            true_mask = labels == true_index
+            if true_mask.any():
+                targeted_penalty = targeted_penalty + probabilities[true_mask, predicted_index].mean() * weight
+    total_loss = (
+        base_loss
+        + float(getattr(args, "confidence_gap_penalty_weight", 0.0)) * confidence_penalty
+        + targeted_penalty
+    )
+    return total_loss, base_loss, confidence_penalty, targeted_penalty
 
 
 def confidence_qualified_predictions(logits: torch.Tensor, confidence_threshold: float) -> tuple[torch.Tensor, torch.Tensor]:
@@ -1581,7 +1617,9 @@ def train_classifier_epoch(
     total_loss = 0.0
     total_correct = 0.0
     total_raw_correct = 0.0
+    total_base_loss = 0.0
     total_confidence_gap = 0.0
+    total_targeted_penalty = 0.0
     total_seen = 0
     total_batches = min(len(loader), max_batches) if max_batches > 0 else len(loader)
     progress = tqdm(enumerate(limited_batches(loader, max_batches), start=1), total=total_batches, leave=False)
@@ -1592,7 +1630,7 @@ def train_classifier_epoch(
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
             embeddings = model.encode(images)
-            loss, penalty = classifier_loss(model, embeddings, labels, criterion, args)
+            loss, base_loss, confidence_penalty, targeted_penalty = classifier_loss(model, embeddings, labels, criterion, args)
         if isinstance(optimizer, SAM):
             scaler.scale(loss).backward()
             scaler.unscale_(base_optimizer_for_scheduler(optimizer))
@@ -1600,7 +1638,9 @@ def train_classifier_epoch(
 
             with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
                 embeddings = model.encode(images)
-                second_loss, second_penalty = classifier_loss(model, embeddings, labels, criterion, args)
+                second_loss, second_base_loss, second_confidence_penalty, second_targeted_penalty = classifier_loss(
+                    model, embeddings, labels, criterion, args
+                )
             scaler.scale(second_loss).backward()
             scaler.unscale_(base_optimizer_for_scheduler(optimizer))
             optimizer.second_step(zero_grad=True)
@@ -1611,7 +1651,9 @@ def train_classifier_epoch(
             scaler.update()
             optimizer.zero_grad(set_to_none=True)
             second_loss = loss
-            second_penalty = penalty
+            second_base_loss = base_loss
+            second_confidence_penalty = confidence_penalty
+            second_targeted_penalty = targeted_penalty
         scheduler.step()
 
         with torch.no_grad():
@@ -1621,7 +1663,9 @@ def train_classifier_epoch(
 
         batch_size = labels.size(0)
         total_loss += second_loss.item() * batch_size
-        total_confidence_gap += second_penalty.item() * batch_size
+        total_base_loss += second_base_loss.item() * batch_size
+        total_confidence_gap += second_confidence_penalty.item() * batch_size
+        total_targeted_penalty += second_targeted_penalty.item() * batch_size
         total_correct += qualified_correct
         total_raw_correct += raw_correct
         total_seen += batch_size
@@ -1642,9 +1686,11 @@ def train_classifier_epoch(
                 "epoch_source_samples_seen": total_seen,
                 "global_source_samples_seen": train_progress["global_source_samples_seen"],
                 "running_loss": total_loss / max(1, total_seen),
+                "running_base_loss": total_base_loss / max(1, total_seen),
                 "running_acc": total_correct / max(1, total_seen),
                 "running_raw_acc": total_raw_correct / max(1, total_seen),
-                "running_confidence_gap": total_confidence_gap / max(1, total_seen),
+                "running_confidence_gap_penalty": total_confidence_gap / max(1, total_seen),
+                "running_targeted_confusion_penalty": total_targeted_penalty / max(1, total_seen),
                 "confidence_threshold": args.confidence_threshold,
                 "learning_rates": optimizer_learning_rates(optimizer),
             }
@@ -1682,7 +1728,9 @@ def train_classifier_steps(
     total_loss = 0.0
     total_correct = 0.0
     total_raw_correct = 0.0
+    total_base_loss = 0.0
     total_confidence_gap = 0.0
+    total_targeted_penalty = 0.0
     total_seen = 0
     steps_done = 0
 
@@ -1698,7 +1746,7 @@ def train_classifier_steps(
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
             embeddings = model.encode(images)
-            loss, penalty = classifier_loss(model, embeddings, labels, criterion, args)
+            loss, base_loss, confidence_penalty, targeted_penalty = classifier_loss(model, embeddings, labels, criterion, args)
         if isinstance(optimizer, SAM):
             scaler.scale(loss).backward()
             scaler.unscale_(base_optimizer_for_scheduler(optimizer))
@@ -1706,7 +1754,9 @@ def train_classifier_steps(
 
             with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
                 embeddings = model.encode(images)
-                second_loss, second_penalty = classifier_loss(model, embeddings, labels, criterion, args)
+                second_loss, second_base_loss, second_confidence_penalty, second_targeted_penalty = classifier_loss(
+                    model, embeddings, labels, criterion, args
+                )
             scaler.scale(second_loss).backward()
             scaler.unscale_(base_optimizer_for_scheduler(optimizer))
             optimizer.second_step(zero_grad=True)
@@ -1717,7 +1767,9 @@ def train_classifier_steps(
             scaler.update()
             optimizer.zero_grad(set_to_none=True)
             second_loss = loss
-            second_penalty = penalty
+            second_base_loss = base_loss
+            second_confidence_penalty = confidence_penalty
+            second_targeted_penalty = targeted_penalty
         scheduler.step()
 
         with torch.no_grad():
@@ -1727,7 +1779,9 @@ def train_classifier_steps(
 
         batch_size = labels.size(0)
         total_loss += second_loss.item() * batch_size
-        total_confidence_gap += second_penalty.item() * batch_size
+        total_base_loss += second_base_loss.item() * batch_size
+        total_confidence_gap += second_confidence_penalty.item() * batch_size
+        total_targeted_penalty += second_targeted_penalty.item() * batch_size
         total_correct += qualified_correct
         total_raw_correct += raw_correct
         total_seen += batch_size
@@ -1766,9 +1820,11 @@ def train_classifier_steps(
                 "epoch_source_samples_seen": total_seen,
                 "global_source_samples_seen": train_progress["global_source_samples_seen"],
                 "running_loss": total_loss / max(1, total_seen),
+                "running_base_loss": total_base_loss / max(1, total_seen),
                 "running_acc": total_correct / max(1, total_seen),
                 "running_raw_acc": total_raw_correct / max(1, total_seen),
-                "running_confidence_gap": total_confidence_gap / max(1, total_seen),
+                "running_confidence_gap_penalty": total_confidence_gap / max(1, total_seen),
+                "running_targeted_confusion_penalty": total_targeted_penalty / max(1, total_seen),
                 "confidence_threshold": args.confidence_threshold,
                 "learning_rates": optimizer_learning_rates(optimizer),
             }
@@ -1810,7 +1866,7 @@ def evaluate_classifier(
                 embeddings = model.encode(images)
                 margin_logits = model.classify(embeddings, labels)
                 logits = model.classify(embeddings, labels=None)
-                loss = criterion(margin_logits, labels)
+                loss, _, _, _ = classifier_loss_from_logits(margin_logits, logits, labels, args)
             total_loss += loss.item() * labels.size(0)
             qualified_correct, raw_correct = confidence_qualified_correct_count(logits, labels, args.confidence_threshold)
             total_correct += qualified_correct
@@ -2378,6 +2434,51 @@ def resolve_phase_start_index(
     return 1
 
 
+def parse_class_loss_weight_specs(specs: list[str], class_to_idx: dict[str, int]) -> dict[int, float]:
+    resolved: dict[int, float] = {}
+    for spec in specs:
+        if "=" not in spec:
+            raise ValueError(f"--class-loss-weight must be NAME=WEIGHT, got {spec!r}")
+        class_name, weight_text = spec.split("=", 1)
+        class_name = class_name.strip()
+        if class_name not in class_to_idx:
+            raise ValueError(f"--class-loss-weight referenced unknown class {class_name!r}")
+        weight = float(weight_text)
+        if weight <= 0:
+            raise ValueError(f"--class-loss-weight requires positive weight, got {weight} for {class_name!r}")
+        resolved[int(class_to_idx[class_name])] = weight
+    return resolved
+
+
+def parse_targeted_confusion_penalty_specs(specs: list[str], class_to_idx: dict[str, int]) -> list[dict[str, Any]]:
+    resolved: list[dict[str, Any]] = []
+    for spec in specs:
+        parts = [part.strip() for part in spec.split(":")]
+        if len(parts) != 3:
+            raise ValueError(
+                "--targeted-confusion-penalty must be TRUE_CLASS:PREDICTED_CLASS:WEIGHT, "
+                f"got {spec!r}"
+            )
+        true_name, predicted_name, weight_text = parts
+        if true_name not in class_to_idx:
+            raise ValueError(f"--targeted-confusion-penalty referenced unknown true class {true_name!r}")
+        if predicted_name not in class_to_idx:
+            raise ValueError(f"--targeted-confusion-penalty referenced unknown predicted class {predicted_name!r}")
+        weight = float(weight_text)
+        if weight <= 0:
+            raise ValueError(f"--targeted-confusion-penalty requires positive weight, got {weight} for {spec!r}")
+        resolved.append(
+            {
+                "true_class": true_name,
+                "predicted_class": predicted_name,
+                "true_index": int(class_to_idx[true_name]),
+                "predicted_index": int(class_to_idx[predicted_name]),
+                "weight": weight,
+            }
+        )
+    return resolved
+
+
 def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     description = (
         "Metric-learning EfficientNet B0 training with deterministic 16x split-safe augmentation, "
@@ -2428,6 +2529,9 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--adam-beta1", type=float, default=0.9)
     parser.add_argument("--adam-beta2", type=float, default=0.999)
     parser.add_argument("--label-smoothing", type=float, default=0.0)
+    parser.add_argument("--confidence-gap-penalty-weight", type=float, default=0.0)
+    parser.add_argument("--class-loss-weight", action="append", default=[])
+    parser.add_argument("--targeted-confusion-penalty", action="append", default=[])
     parser.add_argument("--weighted-sampling", action="store_true")
     parser.add_argument("--weights", choices=("default", "none"), default="default")
     parser.add_argument("--output-dir", default="Results/metric_learning_experiment")
@@ -2535,6 +2639,23 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         log_json_event(log_path, {"event": "resume_checkpoint_ignored", "message": resume_warning})
 
     train_dataset, val_dataset, test_dataset, supcon_train_dataset, supcon_val_dataset = build_datasets(args)
+    args.class_loss_weight_map_resolved = parse_class_loss_weight_specs(list(args.class_loss_weight), train_dataset.class_to_idx)
+    args.targeted_confusion_penalties_resolved = parse_targeted_confusion_penalty_specs(
+        list(args.targeted_confusion_penalty),
+        train_dataset.class_to_idx,
+    )
+    if args.class_loss_weight_map_resolved or args.targeted_confusion_penalties_resolved:
+        log_json_event(
+            log_path,
+            {
+                "event": "classifier_loss_configuration",
+                "class_loss_weight_map": {
+                    train_dataset.classes[int(class_index)]: float(weight)
+                    for class_index, weight in args.class_loss_weight_map_resolved.items()
+                },
+                "targeted_confusion_penalties": args.targeted_confusion_penalties_resolved,
+            },
+        )
     if use_gabor and "plastic" not in train_dataset.class_to_idx:
         note = "note: current dataset has no `plastic` class; the Gabor front-end remains an ablation for texture-sensitive separation."
         print(note)
