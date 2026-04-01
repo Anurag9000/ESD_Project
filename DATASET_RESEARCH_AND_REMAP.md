@@ -459,6 +459,133 @@ These are the strongest non-Kaggle primary sources or well-known public sources 
   - direct: `glass`, `metal`, `organic`, `paper`, `plastic`
   - close: `litter -> trash`
 
+### HOWA
+
+- Source: https://www.iuii.ua.es/datasets/howa/index.html
+- Classes:
+  - `plastic`
+  - `carton`
+  - `glass`
+  - `metal`
+- Counts surfaced on the official page:
+  - `plastic`: `1776`
+  - `carton`: `1626`
+  - `glass`: `1769`
+  - `metal`: `1772`
+- Best overlap:
+  - direct: `glass`, `metal`, `plastic`
+  - close: `carton -> paper`
+- Note:
+  - outdoor household-waste scenes, which makes it more realistic than clean-background object shots
+
+### OpenRecycle
+
+- Source: https://github.com/openrecycle/dataset
+- Classes:
+  - `cardboard`
+  - `glass`
+  - `metal`
+  - `paper`
+  - `plastic`
+  - `other`
+- Best overlap:
+  - direct: `glass`, `metal`, `paper`, `plastic`
+  - close: `cardboard -> paper`, `other -> trash`
+
+### WaDaBa
+
+- Source: https://wadaba.pcz.pl/
+- Scope:
+  - plastic-waste image database
+- Exposed label structure in public summaries:
+  - `PET`
+  - `HDPE`
+  - `PP`
+  - `PS`
+  - `Other`
+- Best overlap:
+  - direct: `plastic`
+- Note:
+  - narrow but useful if plastic subclass diversity becomes important
+
+### MULTI-TRASH
+
+- Source: https://journals.sagepub.com/doi/full/10.1089/ees.2023.0138
+- Classes:
+  - `paper`
+  - `plastic`
+  - `glass`
+  - `metal`
+- Best overlap:
+  - direct: `glass`, `metal`, `paper`, `plastic`
+- Note:
+  - built to be more realistic and multi-object than older tabletop waste sets
+
+### OrgalidWaste
+
+- Source: https://www.researchgate.net/publication/357260850_Classification_of_Organic_and_Solid_Waste_Using_Deep_Convolutional_Neural_Networks
+- Classes:
+  - `organic`
+  - `glass`
+  - `metal`
+  - `plastic`
+- Size surfaced in the paper summary:
+  - around `5600` images
+- Best overlap:
+  - direct: `glass`, `metal`, `organic`, `plastic`
+
+### Jenks Recycle Dataset
+
+- Source: https://github.com/jenkspt/recycle
+- Classes:
+  - `glass`
+  - `metal`
+  - `plastic`
+- Best overlap:
+  - direct: `glass`, `metal`, `plastic`
+
+### GreenSorter Dataset
+
+- Source: https://github.com/1nfinityLoop/GreenSorter
+- Classes surfaced in the public description:
+  - `cardboard`
+  - `metal`
+  - `rigid plastic`
+  - `soft plastic`
+- Best overlap:
+  - direct: `metal`
+  - close: `cardboard -> paper`, both plastic variants -> `plastic`
+
+### Huawei-40
+
+- Source: https://www.mdpi.com/2071-1050/14/5/3099
+- Class structure:
+  - `40` classes total
+  - `8` food-waste classes
+  - `23` recyclable classes
+  - `6` other-garbage classes
+  - `3` hazardous-garbage classes
+- Best overlap:
+  - broad partial overlap across `organic`, `paper`, `plastic`, `metal`, `glass`, `battery`, and `trash`
+
+### Baidu-RC
+
+- Source: https://www.mdpi.com/2071-1050/14/5/3099
+- Class structure:
+  - `21` recyclable-garbage classes
+  - `16,847` images
+- Best overlap:
+  - strong recyclable-side overlap for `paper`, `plastic`, `metal`, `glass`
+
+### BR-124
+
+- Source: https://www.mdpi.com/2071-1050/14/5/3099
+- Class structure:
+  - merged recyclable dataset built from `Huawei-40`, `Baidu-214`, and `Baidu-RC`
+  - `55,513` images in `124` classes
+- Best overlap:
+  - broad recyclable fine-grained supervision source for `paper`, `plastic`, `metal`, `glass`
+
 ### AquaTrash
 
 - Source: https://www.kaggle.com/datasets/harshpanwar/aquatrash
@@ -1001,6 +1128,28 @@ These are narrower, but still useful if a specific class needs extra support.
   - e-waste-focused
 - Best overlap:
   - direct: `ewaste`
+
+### E-Waste Vision Dataset
+
+- Sources:
+  - https://paperswithcode.com/paper/ewastenet-a-two-stream-data-efficient-image
+  - https://github.com/NifulIslam/EWasteNet-A-Two-Stream-DeiT-Approach-for-E-Waste-Classification
+- Scope:
+  - `8` e-waste device classes
+- Best overlap:
+  - direct or close: broad `ewaste` support
+- Note:
+  - useful as another independent e-waste source beyond the Roboflow-style detection sets
+
+### pLitterStreet
+
+- Source: https://paperswithcode.com/paper/plitterstreet-street-level-plastic-litter
+- Scope:
+  - street-level plastic litter detection and mapping
+  - more than `13,000` annotated images according to the paper summary
+- Best overlap:
+  - direct: plastic-heavy litter source
+  - close: can help with `trash` / roadside clutter scenes even though the focus is plastic litter
 
 ### Biomedical Waste Dataset
 
