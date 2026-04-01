@@ -1,0 +1,40 @@
+{
+  "dataset_root": "Dataset_Final",
+  "seed": 42,
+  "ratios": {
+    "train": 0.7,
+    "val": 0.2,
+    "test": 0.1
+  },
+  "class_totals": {
+    "organic": 9007,
+    "paper": 13444,
+    "other": 29901,
+    "metal": 3815
+  },
+  "split_class_counts": {
+    "train": {
+      "organic": 6305,
+      "paper": 9411,
+      "other": 21026,
+      "metal": 2575
+    },
+    "val": {
+      "organic": 1801,
+      "paper": 2689,
+      "other": 5912,
+      "metal": 832
+    },
+    "test": {
+      "organic": 901,
+      "paper": 1344,
+      "other": 2963,
+      "metal": 408
+    }
+  },
+  "split_totals": {
+    "train": 39317,
+    "val": 11234,
+    "test": 5616
+  }
+}

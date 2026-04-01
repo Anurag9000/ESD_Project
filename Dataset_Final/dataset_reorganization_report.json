@@ -1,0 +1,85 @@
+{
+  "source_root": "Dataset_Final",
+  "final_classes": [
+    "organic",
+    "paper",
+    "other",
+    "metal"
+  ],
+  "source_image_count": 56167,
+  "final_image_count": 56167,
+  "source_class_counts": {
+    "organic": 9007,
+    "other": 25617,
+    "paper": 13444,
+    "plastic": 8099
+  },
+  "final_class_counts": {
+    "organic": 9007,
+    "paper": 13444,
+    "other": 29901,
+    "metal": 3815
+  },
+  "class_moves": {
+    "other->metal": 3563,
+    "plastic->other": 8099,
+    "other->metal_model": 252
+  },
+  "source_format_counts": {
+    "organic:JPEG": 8864,
+    "organic:PNG": 143,
+    "other:JPEG": 25123,
+    "other:MPO": 1,
+    "other:PNG": 493,
+    "paper:JPEG": 13331,
+    "paper:MPO": 2,
+    "paper:PNG": 108,
+    "paper:WEBP": 3,
+    "plastic:JPEG": 7991,
+    "plastic:MPO": 3,
+    "plastic:PNG": 103,
+    "plastic:WEBP": 2
+  },
+  "output_format_counts": {
+    "JPEG": 55320,
+    "PNG": 847
+  },
+  "output_extension_counts": {
+    ".jpg": 55320,
+    ".png": 847
+  },
+  "mismatched_source_extensions_by_class": {
+    "organic": 143,
+    "other": 504,
+    "paper": 91,
+    "plastic": 81
+  },
+  "exif_removed": 2237,
+  "gps_removed": 99,
+  "metal_rule": {
+    "source_folder": "other",
+    "filename_prefixes": [
+      "metal",
+      "alum"
+    ]
+  },
+  "filename_scheme": "<class>_<6-digit-sequence>.<normalized-extension>",
+  "path_separator_in_metadata": "forward_slash",
+  "model_assisted_relabel": {
+    "source_folder": "other",
+    "target_folder": "metal",
+    "moved_image_count": 252,
+    "previous_final_class_counts": {
+      "metal": 3563,
+      "organic": 9007,
+      "other": 30153,
+      "paper": 13444
+    },
+    "updated_final_class_counts": {
+      "organic": 9007,
+      "paper": 13444,
+      "other": 29901,
+      "metal": 3815
+    }
+  }
+}

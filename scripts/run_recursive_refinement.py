@@ -277,7 +277,9 @@ def finalize_iteration(
         check=True,
     )
     decision = load_json(decision_file)
-    shutil.copy2(selected_output, accepted_checkpoint_path(base_output_dir))
+    accepted_output = accepted_checkpoint_path(base_output_dir)
+    if selected_output.resolve() != accepted_output.resolve():
+        shutil.copy2(selected_output, accepted_output)
     return decision
 
 
