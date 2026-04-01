@@ -586,6 +586,104 @@ These are the strongest non-Kaggle primary sources or well-known public sources 
 - Best overlap:
   - broad recyclable fine-grained supervision source for `paper`, `plastic`, `metal`, `glass`
 
+### waste_pictures
+
+- Sources:
+  - https://www.kaggle.com/datasets/wangziang/waste-pictures
+  - secondary citation snippet: https://www.e3s-conferences.org/articles/e3sconf/pdf/2024/85/e3sconf_rieem2024_04008.pdf
+- Scope:
+  - around `17,872` to `24,000` images depending on the cited version
+  - `34` classes of waste
+- Publicly surfaced class examples:
+  - `bandaid`
+  - `battery`
+  - `bowlsanddishes`
+  - plus many more fine-grained waste classes
+- Best overlap:
+  - direct: `battery`
+  - likely close overlap with `glass`, `metal`, `paper`, `plastic`, `trash` through its broader 34-class structure
+- Note:
+  - this appears repeatedly in later waste-classification papers as a broader fine-grained source
+
+### Custom Bangladeshi E-Waste Image Dataset for Object Detection and Recognition
+
+- Source: https://data.mendeley.com/datasets/77383kmdnw
+- Classes:
+  - `Battery Waste`
+  - `Glass Waste`
+  - `Keyboard`
+  - `Light Bulb`
+  - `Medical Waste`
+  - `Metal Waste`
+  - `Mobile`
+  - `Mouse`
+  - `Organic Waste`
+  - `Paper Waste`
+  - `PCB`
+  - `Plastic Waste`
+- Size:
+  - `2,157` images
+- Best overlap:
+  - direct: `battery`, `glass`, `metal`, `organic`, `paper`, `plastic`
+  - close: `keyboard`, `mobile`, `mouse`, `PCB` -> `ewaste`
+- Note:
+  - this is distinct from the earlier Bangladeshi e-waste dataset entry and has broader cross-material coverage
+
+### WaRP / WaRP-C / WaRP-D
+
+- Source:
+  - class examples surfaced in the paper snippet: https://grafft.github.io/assets/pdf/eaai2024.pdf
+- Publicly surfaced class examples:
+  - `bottle`
+  - `cans`
+  - `cardboard`
+  - `canister`
+  - `detergent`
+- Best overlap:
+  - close: `cans -> metal`, `cardboard -> paper`, bottles/canisters/detergent containers -> likely `plastic` or `glass` depending on subtype
+- Note:
+  - useful as a waste-recycling-plant dataset family rather than a household tabletop set
+
+### MJU-Waste
+
+- Source:
+  - summarized in: https://mostwiedzy.pl/pl/publication/download/1/deep-learning-based-waste-detection-in-natural-and-urban-environments_64668.pdf
+- Reported variants:
+  - one-class `rubbish` version for litter detection
+  - `16` classes for material version
+  - `22` classes for instance version
+- Best overlap:
+  - broad litter / material recognition overlap
+- Note:
+  - more useful for detection/segmentation and material discrimination than clean household classification
+
+### Recycling Waste and Litter
+
+- Source: https://www.kaggle.com/datasets/humansintheloop/recycling-dataset
+- Structure:
+  - bounding boxes with main class `litter`
+  - three mandatory attributes: `material`, `object`, and `brand`
+- Best overlap:
+  - indirectly useful for `plastic`, `metal`, `paper`, `glass`, and `trash` via its attribute system
+- Note:
+  - not a plain multiclass folder dataset, but a useful litter detection / material-tagging resource
+
+### StreetView-Waste
+
+- Sources:
+  - https://streetview-waste.di.ubi.pt/
+  - https://arxiv.org/abs/2511.16440
+- Scope:
+  - multi-task urban waste-management dataset
+  - litter segmentation plus waste-container detection/tracking
+- Publicly surfaced structure:
+  - large-scale benchmark for `7` classes of waste containers
+  - overflowing litter segmentation task
+- Best overlap:
+  - useful for real-world urban `trash` / litter scene understanding
+- Note:
+  - not a direct household-item classifier dataset, but highly relevant for scene-level waste monitoring
+
 ### AquaTrash
 
 - Source: https://www.kaggle.com/datasets/harshpanwar/aquatrash
