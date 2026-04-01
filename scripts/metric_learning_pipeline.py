@@ -1569,11 +1569,7 @@ def classifier_loss_from_logits(
             true_mask = labels == true_index
             if true_mask.any():
                 targeted_penalty = targeted_penalty + probabilities[true_mask, predicted_index].mean() * weight
-    total_loss = (
-        base_loss
-        + float(getattr(args, "confidence_gap_penalty_weight", 0.0)) * confidence_penalty
-        + targeted_penalty
-    )
+    total_loss = base_loss + targeted_penalty
     return total_loss, base_loss, confidence_penalty, targeted_penalty
 
 

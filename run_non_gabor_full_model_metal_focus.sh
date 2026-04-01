@@ -23,7 +23,6 @@ python scripts/train_efficientnet_b0_progressive.py \
   --classifier-early-stopping-metric val_loss \
   --head-lr 2.5e-5 \
   --backbone-lr 1.25e-5 \
-  --confidence-gap-penalty-weight 0.0 \
   --class-loss-weight metal=2.0 \
   --targeted-confusion-penalty metal:other:0.5 \
   --targeted-confusion-penalty other:metal:0.2 \
