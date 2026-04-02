@@ -1720,6 +1720,124 @@ These are narrower, but still useful if a specific class needs extra support.
 - Best overlap:
   - none direct to current final taxonomy, but useful as hard negatives against `trash` or `ewaste` depending on future scope
 
+## Additional Non-Duplicate Sweep: 2026-04-02
+
+These entries were added in a fresh pass after the earlier survey. They are not duplicates of the sources already listed above, though some are derivative or mixed-source datasets and are flagged accordingly.
+
+### Recycled Dataset (Portland State)
+
+- Source: https://web.cecs.pdx.edu/~singh/rcyc-web/dataset.html
+- Publicly surfaced size:
+  - `11,500` images
+  - `5` classes
+  - `2,300` images per class
+- Classes:
+  - `boxes`
+  - `glass_bottles`
+  - `soda cans`
+  - `crushed soda cans`
+  - `water bottles`
+- Best overlap:
+  - direct-ish: `glass`, `metal`, `plastic`
+  - close: `boxes -> paper/cardboard`
+- Note:
+  - lower resolution (`32x32`) and tightly controlled capture setup, so it is more useful as a narrow recyclable-material source than as a realistic household-waste benchmark
+
+### rootstrap-org/waste-classifier
+
+- Source: https://huggingface.co/datasets/rootstrap-org/waste-classifier
+- Publicly surfaced size:
+  - downloaded size about `1.15 GB`
+  - viewer reports `3,261` rows
+- Classes:
+  - `cardboard`
+  - `compost`
+  - `glass`
+  - `metal`
+  - `paper`
+  - `plastic`
+  - `trash`
+- Best overlap:
+  - direct: `glass`, `metal`, `paper`, `plastic`, `trash`
+  - close: `cardboard -> paper`, `compost -> organic`
+- Note:
+  - explicitly described as `TrashNet + internet images`; still worth listing because it is a materially expanded derivative rather than a pure mirror
+
+### (256x256) Litter Sort Annotated Wastes
+
+- Source: https://huggingface.co/datasets/mnemoraorg/256x256-litter-sort-annotated-wastes
+- Publicly surfaced size:
+  - `14,268` images
+- Classes:
+  - `Plastic`
+  - `Metal`
+  - `Glass`
+  - `Cardboard`
+  - `Paper`
+  - `Trash`
+- Best overlap:
+  - direct: `glass`, `metal`, `paper`, `plastic`, `trash`
+  - close: `cardboard -> paper`
+- Note:
+  - the dataset card claims duplicates were removed and the set was quality-filtered and balanced; that makes it a potentially cleaner six-material source than many older TrashNet-style packs
+
+### WasteBench
+
+- Source: https://huggingface.co/datasets/aliman8/WasteBench-Dataset
+- Publicly surfaced size:
+  - `952` images
+- Categories:
+  - `Rigid Plastic`
+  - `Soft Plastic`
+  - `Cardboard`
+  - `Metal`
+  - `Glass`
+  - `Paper`
+  - `Trash`
+- Best overlap:
+  - direct: `glass`, `metal`, `paper`, `trash`
+  - close: `rigid plastic + soft plastic -> plastic`, `cardboard -> paper`
+- Note:
+  - this is an evaluation-oriented VLM benchmark rather than a classic train set, but it is still relevant for hard-scene validation and cluttered waste-image testing
+
+### SpectralWaste
+
+- Sources:
+  - Zenodo: https://zenodo.org/records/10880544
+  - paper summary: https://arxiv.org/abs/2403.18033
+- Publicly surfaced size:
+  - `23.1 GB` segmentation archive
+- Classes:
+  - `film`
+  - `basket`
+  - `video tape`
+  - `filament`
+  - `trash bag`
+  - `cardboard`
+- Best overlap:
+  - close: `cardboard -> paper`, `trash bag -> trash`
+- Note:
+  - this is an industrial multimodal waste-sorting dataset rather than a household taxonomy match, but it is one of the more distinctive recent open datasets and could be useful for cluttered sorting robustness
+
+### dmedhi/garbage-image-classification-detection
+
+- Source: https://huggingface.co/datasets/dmedhi/garbage-image-classification-detection
+- Publicly surfaced classes:
+  - `Cardboard`
+  - `Glass`
+  - `Metal`
+  - `Paper`
+  - `Plastic`
+  - `Trash`
+- Publicly surfaced annotation type:
+  - bounding boxes
+  - segmentation masks
+- Best overlap:
+  - direct: `glass`, `metal`, `paper`, `plastic`, `trash`
+  - close: `cardboard -> paper`
+- Note:
+  - this one is useful specifically because it exposes detection and segmentation supervision, not just folder-level classification labels
+
 ## Meta-Resources
 
 These are not directly training datasets, but they are useful index pages for finding more waste datasets and understanding how dataset families relate to each other.
@@ -1781,5 +1899,11 @@ On the latest broader web sweep, the most useful non-duplicate additions beyond 
 - `Custom Waste Classification Dataset`
 - `Fotini10k`
 - `ReCoDeWaste`
+- `Recycled Dataset (Portland State)`
+- `rootstrap-org/waste-classifier`
+- `(256x256) Litter Sort Annotated Wastes`
+- `WasteBench`
+- `SpectralWaste`
+- `dmedhi/garbage-image-classification-detection`
 
 These are the ones most worth checking next if the goal is to expand the current project’s class support without drowning in mirrors.
