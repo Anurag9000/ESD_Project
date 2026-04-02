@@ -1838,6 +1838,129 @@ These entries were added in a fresh pass after the earlier survey. They are not 
 - Note:
   - this one is useful specifically because it exposes detection and segmentation supervision, not just folder-level classification labels
 
+### Baseline Marine Debris Data (CHNMS)
+
+- Source: https://zenodo.org/records/11268518
+- Publicly surfaced structure:
+  - `40` marine debris item-type categories
+  - `6` material categories
+  - `7` source-activity categories
+- Material categories:
+  - `plastic`
+  - `glass`
+  - `metal`
+  - `cloth`
+  - `paper and wood`
+  - `mixed`
+- Best overlap:
+  - direct-ish: `glass`, `metal`, `plastic`
+  - close: `cloth -> clothes`, `paper and wood` partially useful for `paper`, `mixed -> trash`
+- Note:
+  - this is a marine-debris assessment dataset rather than a household garbage benchmark, but it is genuinely distinct and can help with messy real-world litter material distribution
+
+### recycle_net
+
+- Source: https://github.com/SebastianCharmot/recycle_net
+- Publicly surfaced size:
+  - `1,969` annotated images
+- Classes:
+  - `glass`
+  - `paper`
+  - `plastic`
+  - `metal`
+- Best overlap:
+  - direct: `glass`, `metal`, `paper`, `plastic`
+- Note:
+  - valuable mainly because it is an object-detection-oriented recyclable dataset with manual bounding boxes rather than pure folder classification
+
+### RecycleTree model family data references
+
+- Source: https://huggingface.co/pyesonekyaw/recycletree_paper
+- Publicly surfaced paper-model data:
+  - `9,646` images across `12` classes
+- Exposed paper-model classes:
+  - `Beverage Carton`
+  - `Cardboard`
+  - `Chopsticks`
+  - `Disposables`
+  - `Paper Bag`
+  - `Paper Packaging`
+  - `Paper Product`
+  - `Paper Receipt`
+  - `Paper Roll`
+  - `Paper Sheet`
+  - `Tissue Box`
+  - `Tissue Paper`
+- Publicly surfaced broader family:
+  - materials classification model
+  - plastic classification model
+  - metal classification model
+  - glass classification model
+  - others classification model
+- Best overlap:
+  - direct-ish: strong `paper` specialization
+  - close: `Beverage Carton`, `Cardboard`, `Paper Packaging`, `Tissue*` all map well to `paper`
+- Note:
+  - this is especially useful if you later decide to strengthen paper/cardboard subtyping or create specialist heads per top-level material
+
+### Underwater Plastic Pollution Detection
+
+- Source: https://www.kaggle.com/datasets/arnavs19/underwater-plastic-pollution-detection
+- Publicly surfaced size:
+  - train `3,628`
+  - valid `1,001`
+  - test `501`
+  - total `5,130` images
+- Classes:
+  - `Mask`
+  - `can`
+  - `cellphone`
+  - `electronics`
+  - `gbottle`
+  - `glove`
+  - `metal`
+  - `misc`
+  - `net`
+  - `pbag`
+  - `pbottle`
+  - `plastic`
+  - `rod`
+  - `sunglasses`
+  - `tire`
+- Best overlap:
+  - direct-ish: `metal`, `plastic`
+  - close: `electronics -> ewaste`, `can -> metal`, `gbottle -> glass`, `misc -> trash`, `glove` can act as clutter/trash hard negative
+- Note:
+  - domain is underwater debris, so this is not a direct household match, but it is another genuinely distinct many-class litter source
+
+### PlasticInWater
+
+- Source: https://huggingface.co/datasets/OceanCV/PlasticInWater
+- Publicly surfaced size:
+  - `4,511` images
+  - `15` classes
+- Classes:
+  - `Black Plastic Cap`
+  - `Blue Nitrile Glove`
+  - `Blue Plastic Cap`
+  - `Brown Multilayer Plastic`
+  - `Green Plastic Cap`
+  - `Orange Plastic Cap`
+  - `Plastic Bottle`
+  - `Purple Insulation Foam`
+  - `Purple Multilayer Plastic Bag`
+  - `Red-Orange BOPP Bag`
+  - `Red Cap`
+  - `Red Netting`
+  - `Red Plastic Straw`
+  - `Yellow Foam`
+  - `Yellow Rope`
+- Best overlap:
+  - direct: `plastic`
+  - close: gloves/rope/netting/foam help as trashy clutter subclasses if you later break `trash` down further
+- Note:
+  - niche and plastic-only, but distinct and reasonably fine-grained
+
 ## Meta-Resources
 
 These are not directly training datasets, but they are useful index pages for finding more waste datasets and understanding how dataset families relate to each other.
@@ -1905,5 +2028,10 @@ On the latest broader web sweep, the most useful non-duplicate additions beyond 
 - `WasteBench`
 - `SpectralWaste`
 - `dmedhi/garbage-image-classification-detection`
+- `Baseline Marine Debris Data (CHNMS)`
+- `recycle_net`
+- `RecycleTree model family data references`
+- `Underwater Plastic Pollution Detection`
+- `PlasticInWater`
 
 These are the ones most worth checking next if the goal is to expand the current project’s class support without drowning in mirrors.
