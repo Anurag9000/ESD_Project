@@ -5,6 +5,30 @@ This repo now has two main parts:
 - a dynamic non-Gabor waste-classification training pipeline
 - a SmartBin Android app that lets the user choose runtime classes and collapses all unselected trained classes into `Other`
 
+## Documentation Map
+
+- [README.md](/home/anurag-basistha/Projects/ESD/README.md)
+  - top-level repo overview
+  - current training philosophy
+  - Android app status and APK location
+- [PYTORCH_SETUP.md](/home/anurag-basistha/Projects/ESD/PYTORCH_SETUP.md)
+  - training environment
+  - current flat-dataset contract
+  - run entry points
+  - evaluation workflow
+- [DATASET_RESEARCH_AND_REMAP.md](/home/anurag-basistha/Projects/ESD/DATASET_RESEARCH_AND_REMAP.md)
+  - current local dataset state
+  - old `other` remap history
+  - external dataset survey
+  - overlap and acquisition notes
+
+## Current Repo State
+
+- training is class-dynamic and no longer tied to a fixed small taxonomy
+- the Android app is class-dynamic at runtime and keeps an explicit fixed `Other` bucket
+- the checked-in Android APK is a tested debug artifact
+- there is no production backend implementation in this repo
+
 ## Current Dataset / Training Philosophy
 
 Training is no longer built around a fixed small class list.

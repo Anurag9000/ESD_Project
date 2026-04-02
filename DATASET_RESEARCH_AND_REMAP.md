@@ -2,6 +2,22 @@
 
 This file merges the previous dataset-overlap survey and the filename-based `other` remap notes into one project-specific reference.
 
+## How To Use This File
+
+This document has four jobs:
+
+1. record the current local dataset state in this repo
+2. document how the old generic `other` bucket was split
+3. define the external class-remap assumptions used during dataset search
+4. collect non-duplicate external datasets worth considering later
+
+Read it in this order:
+
+- `Current Local Dataset`
+- `Local Filename-Based Remap`
+- `Remap Assumptions For External Datasets`
+- the dataset survey sections after that
+
 ## Current Local Dataset
 
 Current local class taxonomy in this repo:

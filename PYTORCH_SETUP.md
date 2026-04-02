@@ -1,8 +1,29 @@
 # PyTorch Setup
 
-This project is set up for Linux with a Python virtual environment and CUDA-enabled PyTorch wheels.
+This document covers the current training-side environment and workflow for this repo.
 
-## Create the venv and install CUDA builds
+## Scope
+
+The retained training path is now:
+
+- dynamic all-class training from a flat dataset root
+- non-Gabor EfficientNet-B0 only
+- progressive full-model fine-tuning
+- recursive loss refinement
+- recursive raw-accuracy refinement
+
+The old Gabor path and old fixed-class assumptions are no longer part of the maintained workflow.
+
+## Environment
+
+Target environment:
+
+- Linux
+- Python virtual environment in `.venv`
+- CUDA-enabled PyTorch wheels
+- NVIDIA GPU
+
+Create the venv and install the CUDA builds with:
 
 ```bash
 chmod +x scripts/setup_venv_cuda.sh
@@ -11,139 +32,119 @@ chmod +x scripts/setup_venv_cuda.sh
 
 The installer uses [requirements-cu128.txt](/home/anurag-basistha/Projects/ESD/requirements-cu128.txt), which points `pip` at the official CUDA 12.8 PyTorch wheel index.
 
-## Training Variants
+## Current Dataset Contract
 
-There are two matched training scripts:
-- [train_efficientnet_b0_progressive.py](/home/anurag-basistha/Projects/ESD/scripts/train_efficientnet_b0_progressive.py): plain pretrained `efficientnet_b0`
-- [train_efficientnet_b0_gabor_progressive.py](/home/anurag-basistha/Projects/ESD/scripts/train_efficientnet_b0_gabor_progressive.py): the same EfficientNet backbone, but with a fixed multi-orientation Gabor front-end and a learnable adapter before the backbone
+The training code no longer expects:
 
-Both scripts share the same pipeline implementation in [metric_learning_pipeline.py](/home/anurag-basistha/Projects/ESD/scripts/metric_learning_pipeline.py). The plain model is the control arm; only the Gabor variant gets the extra texture front-end.
+- `Dataset_Final/train/<class>`
+- `Dataset_Final/val/<class>`
+- `Dataset_Final/test/<class>`
 
-## Training Pipeline
+Instead, it expects a flat dataset root:
 
-The full pipeline is:
-1. Initialize a pretrained `efficientnet_b0` backbone.
-2. Optionally run supervised contrastive pretraining on the embedding head.
-3. Early-stop the SupCon phase on validation SupCon loss with patience `20`.
-4. Restore the best SupCon checkpoint.
-5. Replace classification training with cross-entropy supervised learning.
-6. Train the classifier head first with the backbone frozen.
-7. Progressively unfreeze the backbone from the end in chunks, default `20` parameter-bearing modules at a time.
-8. For every cross-entropy phase, early-stop on validation loss with patience `20`.
-9. Restore the best phase checkpoint before moving to the next phase.
-10. Evaluate the best overall model on validation and test.
+- `Dataset_Final/<class>/<image files>`
 
-## Optimization
+Classes are inferred from folder names at runtime.
 
-The trainers use:
-- `AdamW` as the base optimizer
-- `SAM` (Sharpness-Aware Minimization) for flatter minima
-- step-based warmup + cosine decay scheduling
-- AMP autocast on CUDA
+The current local dataset classes are:
 
-This does not guarantee the global minimum, but it is a strong practical setup for robust fine-tuning.
+- `battery`
+- `clothes`
+- `ewaste`
+- `glass`
+- `metal`
+- `organic`
+- `paper`
+- `plastic`
+- `shoes`
+- `trash`
 
-## Augmentation Strategy
+The shared pipeline creates deterministic stratified train/val/test splits automatically from the flat root.
 
-All three splits use deterministic, split-safe online augmentation:
-- `train`, `val`, and `test` remain source-disjoint because they still read from separate folders
-- each source image is expanded into `16` deterministic augmented variants by default with `--augment-repeats 16`
-- the same original file never crosses split boundaries
-- each variant is keyed by split, source index, and repeat index, which keeps the probability of duplicate augmentations low
+## Core Training Files
 
-The augmentation stack includes only image-classification-safe transforms:
-- random resized crop
-- horizontal and vertical flip
-- affine transforms
-- perspective distortion
-- brightness, contrast, saturation, hue
-- gamma and sharpness perturbation
-- blur and additive noise
-- JPEG compression
-- channel shift and grayscale mixing
-- illumination gradient overlays
-- shadow overlays
-- specular glare overlays
-- cutout / coarse occlusion
+- [run_non_gabor.sh](/home/anurag-basistha/Projects/ESD/run_non_gabor.sh)
+- [run_non_gabor_full_model_loss_then_rawacc_recursive.sh](/home/anurag-basistha/Projects/ESD/run_non_gabor_full_model_loss_then_rawacc_recursive.sh)
+- [scripts/train_efficientnet_b0_progressive.py](/home/anurag-basistha/Projects/ESD/scripts/train_efficientnet_b0_progressive.py)
+- [scripts/metric_learning_pipeline.py](/home/anurag-basistha/Projects/ESD/scripts/metric_learning_pipeline.py)
+- [scripts/run_recursive_refinement.py](/home/anurag-basistha/Projects/ESD/scripts/run_recursive_refinement.py)
+- [scripts/evaluate_saved_classifier.py](/home/anurag-basistha/Projects/ESD/scripts/evaluate_saved_classifier.py)
+
+## Training Flow
+
+The current master flow is:
+
+1. initialize pretrained `efficientnet_b0`
+2. infer classes from the dataset root
+3. auto-build deterministic train/val/test splits
+4. run progressive fine-tuning from head to deeper backbone slices
+5. restore the best progressive checkpoint
+6. launch recursive loss refinement with LR halving
+7. stop loss recursion when the configured improvement threshold is no longer met
+8. launch recursive raw-accuracy refinement with LR halving
+9. stop accuracy recursion when its threshold is no longer met
+
+The main entry point is:
+
+```bash
+cd /home/anurag-basistha/Projects/ESD
+powerprofilesctl set performance
+./run_non_gabor.sh
+```
+
+## Optimization Defaults
+
+Current retained defaults:
+
+- backbone: `efficientnet_b0`
+- default batch size: `224`
+- optimizer family: `AdamW`
+- scheduler: warmup + cosine decay
+- classifier loss: cross-entropy
+- progressive unfreeze chunking: retained
+- recursive refinement: retained
+
+The repo philosophy is now:
+
+- train on every available raw class
+- do not hardcode the class taxonomy
+- collapse unselected classes into runtime `Other` only at evaluation or app/runtime use
 
 ## Outputs
 
-Each run writes result artifacts to its output directory under `Results/...`:
-- `best.pt`
-- `last.pt`
-- `metrics.json`
-- `validation_metrics.json`
-- `test_metrics.json`
+Training runs write local artifacts under `Results/` and `logs/` when you actually run them.
 
-Each run also writes a structured JSONL training log under `logs/...` with:
-- run start metadata
-- every 100th optimizer step by default via `--log-every-steps 100`
-- validation-window summaries during training
-- early-stopping events
-- final validation/test summary
+Typical outputs include:
 
-Saved metrics include the standard classification set used in model comparison:
-- loss
-- top-1 accuracy
-- top-3 accuracy
-- balanced accuracy
-- macro and weighted precision
-- macro and weighted recall
-- macro and weighted F1
-- per-class precision, recall, specificity, and F1
-- confusion matrix
-- one-vs-rest ROC-AUC
-- one-vs-rest PR-AUC
-- Cohen's kappa
-- multiclass Matthews correlation coefficient
+- progressive checkpoints
+- recursive refinement checkpoints
+- evaluation summaries
+- JSONL training logs
 
-## Standard Fine-Tuner
+These folders are treated as local run artifacts unless explicitly retained.
+
+## Evaluation
+
+Saved-model evaluation is handled by:
+
+- [scripts/evaluate_saved_classifier.py](/home/anurag-basistha/Projects/ESD/scripts/evaluate_saved_classifier.py)
+
+It supports runtime-style class collapsing, so you can keep only selected classes explicit and merge every other trained class into `Other`.
+
+Example:
 
 ```bash
-source .venv/bin/activate
-python scripts/train_efficientnet_b0_progressive.py \
-  --dataset-root Dataset_Final \
-  --batch-size 8 \
-  --num-workers 4 \
-  --augment-repeats 16 \
-  --supcon-epochs 200 \
-  --head-epochs 200 \
-  --stage-epochs 200 \
-  --unfreeze-chunk-size 20 \
-  --eval-every-train-steps 64 \
-  --log-every-steps 100 \
-  --early-stopping-patience 20 \
-  --weighted-sampling
+cd /home/anurag-basistha/Projects/ESD
+.venv/bin/python scripts/evaluate_saved_classifier.py \
+  --checkpoint Results/<run>/rawacc_refine/accepted_best.pt \
+  --output-dir Results/<run>/runtime_eval_selected \
+  --selected-class metal \
+  --selected-class organic \
+  --selected-class paper
 ```
 
-## Gabor Fine-Tuner
+## Practical Notes
 
-```bash
-source .venv/bin/activate
-python scripts/train_efficientnet_b0_gabor_progressive.py \
-  --dataset-root Dataset_Final \
-  --batch-size 8 \
-  --num-workers 4 \
-  --augment-repeats 16 \
-  --supcon-epochs 200 \
-  --head-epochs 200 \
-  --stage-epochs 200 \
-  --unfreeze-chunk-size 20 \
-  --eval-every-train-steps 64 \
-  --log-every-steps 100 \
-  --early-stopping-patience 20 \
-  --weighted-sampling
-```
-
-## Notes
-
-- Both scripts default to pretrained ImageNet weights with `EfficientNet_B0_Weights.DEFAULT`.
-- Add `--skip-supcon` to bypass the contrastive pretraining stage and go straight into classifier fine-tuning.
-- If `Results/.../last.pt` already exists for the chosen run directory, the trainer automatically resumes from that checkpoint.
-- cross-entropy was chosen over AdaFace because AdaFace is mainly useful for quality-varying face embeddings, while cross-entropy is the cleaner metric-learning choice for generic multiclass material/object classification.
-- The current dataset no longer has a separate `plastic` class; it was merged into `other`.
-- The Gabor variant may help if texture cues matter, but it can also become a front-end bottleneck. That is why it is kept as a separate ablation instead of being forced into both models.
-- The dataset structure expected by the scripts is:
-  - `Dataset_Final/train/<class>`
-  - `Dataset_Final/val/<class>`
-  - `Dataset_Final/test/<class>`
+- If you change the dataset taxonomy again, the training code should continue to infer the class list from the folder tree.
+- If you change class counts heavily, revisit class balance, weighted sampling, and refinement thresholds.
+- If you want a new stable training contract, update [README.md](/home/anurag-basistha/Projects/ESD/README.md) first and keep this file aligned with it.
