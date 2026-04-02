@@ -293,21 +293,6 @@ These are the strongest non-Kaggle primary sources or well-known public sources 
 - Best overlap:
   - direct or close: `bio -> organic`, `paper`, `can -> metal`, `wire -> ewaste/metal`, `trash -> trash`
 
-### BeachLitter v2022
-
-- Source: https://doi.org/10.17882/85472
-- Classes:
-  - `bottle`
-  - `can`
-  - `carton`
-  - `cup`
-  - `other plastic`
-  - `other plastic containers`
-  - `plastic bag`
-  - `wrapper`
-- Best overlap:
-  - close: `can -> metal`, `carton -> paper`, several `plastic* -> plastic`
-
 ### WasteVision / TrashNet++
 
 - Source: https://data.mendeley.com/datasets/mr67c82zw7/1
@@ -801,7 +786,6 @@ These are the strongest non-Kaggle primary sources or well-known public sources 
   - `Wade-AI`
   - `UAVVaste`
   - `TrashCan`
-  - `Trash-ICRA19`
   - `Drinking-Waste`
   - `MJU-Waste`
 - Publicly surfaced scale in a thesis summary:
@@ -837,19 +821,6 @@ These are the strongest non-Kaggle primary sources or well-known public sources 
   - aerial / drone waste detection
 - Best overlap:
   - useful for scene-level litter / trash detection
-
-### Trash-ICRA19
-
-- Sources:
-  - https://agnieszka.ai/project/detect-waste-dataset/
-  - review snippet in https://github.com/AgaMiko/waste-datasets-review
-- Publicly surfaced structure:
-  - `7` classes
-  - `5,700` images
-- Domain:
-  - underwater selected trash categories
-- Best overlap:
-  - auxiliary litter / debris detection source
 
 ### OpenLitterMap
 
@@ -1071,20 +1042,6 @@ These are the strongest non-Kaggle primary sources or well-known public sources 
 - Note:
   - plastic-only, but unusually fine-grained and real-world
 
-### CleanSea
-
-- Source: https://www.dlsi.ua.es/~jgallego/datasets/cleansea/
-- Scope:
-  - underwater debris detection and recognition benchmark
-- Publicly surfaced labels include:
-  - `Plastic waste`
-  - `Metal waste`
-  - additional underwater debris object categories
-- Best overlap:
-  - direct or close: `metal`, `plastic`
-- Note:
-  - underwater domain, so not a direct household classifier source, but still a distinct debris dataset
-
 ### StreetView-Waste
 
 - Sources:
@@ -1100,17 +1057,6 @@ These are the strongest non-Kaggle primary sources or well-known public sources 
   - useful for real-world urban `trash` / litter scene understanding
 - Note:
   - not a direct household-item classifier dataset, but highly relevant for scene-level waste monitoring
-
-### AquaTrash
-
-- Source: https://www.kaggle.com/datasets/harshpanwar/aquatrash
-- Classes:
-  - `glass`
-  - `paper`
-  - `metal`
-  - `plastic`
-- Best overlap:
-  - direct: `glass`, `metal`, `paper`, `plastic`
 
 ## Kaggle Datasets With Strong Practical Overlap
 
@@ -1838,26 +1784,6 @@ These entries were added in a fresh pass after the earlier survey. They are not 
 - Note:
   - this one is useful specifically because it exposes detection and segmentation supervision, not just folder-level classification labels
 
-### Baseline Marine Debris Data (CHNMS)
-
-- Source: https://zenodo.org/records/11268518
-- Publicly surfaced structure:
-  - `40` marine debris item-type categories
-  - `6` material categories
-  - `7` source-activity categories
-- Material categories:
-  - `plastic`
-  - `glass`
-  - `metal`
-  - `cloth`
-  - `paper and wood`
-  - `mixed`
-- Best overlap:
-  - direct-ish: `glass`, `metal`, `plastic`
-  - close: `cloth -> clothes`, `paper and wood` partially useful for `paper`, `mixed -> trash`
-- Note:
-  - this is a marine-debris assessment dataset rather than a household garbage benchmark, but it is genuinely distinct and can help with messy real-world litter material distribution
-
 ### recycle_net
 
 - Source: https://github.com/SebastianCharmot/recycle_net
@@ -1903,63 +1829,83 @@ These entries were added in a fresh pass after the earlier survey. They are not 
 - Note:
   - this is especially useful if you later decide to strengthen paper/cardboard subtyping or create specialist heads per top-level material
 
-### Underwater Plastic Pollution Detection
+### dataset-trash-type-combination
 
-- Source: https://www.kaggle.com/datasets/arnavs19/underwater-plastic-pollution-detection
-- Publicly surfaced size:
-  - train `3,628`
-  - valid `1,001`
-  - test `501`
-  - total `5,130` images
-- Classes:
-  - `Mask`
-  - `can`
-  - `cellphone`
-  - `electronics`
-  - `gbottle`
-  - `glove`
-  - `metal`
-  - `misc`
-  - `net`
-  - `pbag`
-  - `pbottle`
+- Source: https://www.kaggle.com/datasets/damaraaa/dataset-trash-type-combination
+- Publicly surfaced structure:
+  - combined and remapped from multiple public waste datasets
+  - unified `8`-class classification dataset
+- Unified classes:
+  - `cardboard`
   - `plastic`
-  - `rod`
-  - `sunglasses`
-  - `tire`
+  - `paper`
+  - `metal`
+  - `glass`
+  - `organic`
+  - `e-waste`
+  - `textile`
+- Publicly surfaced source families:
+  - `Garbage Classification`
+  - `Trash Type Image Dataset`
+  - `RealWaste`
+  - `Waste Classfication Dataset`
+  - `Waste Classification Data`
 - Best overlap:
-  - direct-ish: `metal`, `plastic`
-  - close: `electronics -> ewaste`, `can -> metal`, `gbottle -> glass`, `misc -> trash`, `glove` can act as clutter/trash hard negative
+  - direct: `glass`, `metal`, `organic`, `paper`, `plastic`
+  - close: `cardboard -> paper`, `e-waste -> ewaste`, `textile -> clothes`
 - Note:
-  - domain is underwater debris, so this is not a direct household match, but it is another genuinely distinct many-class litter source
+  - derivative and merged, but still useful because the remap target is closer to this repo’s expanded taxonomy than many single-source datasets
 
-### PlasticInWater
+### thomasavare/waste-classification-v3
 
-- Source: https://huggingface.co/datasets/OceanCV/PlasticInWater
-- Publicly surfaced size:
-  - `4,511` images
-  - `15` classes
-- Classes:
-  - `Black Plastic Cap`
-  - `Blue Nitrile Glove`
-  - `Blue Plastic Cap`
-  - `Brown Multilayer Plastic`
-  - `Green Plastic Cap`
-  - `Orange Plastic Cap`
-  - `Plastic Bottle`
-  - `Purple Insulation Foam`
-  - `Purple Multilayer Plastic Bag`
-  - `Red-Orange BOPP Bag`
-  - `Red Cap`
-  - `Red Netting`
-  - `Red Plastic Straw`
-  - `Yellow Foam`
-  - `Yellow Rope`
+- Source: https://huggingface.co/datasets/thomasavare/waste-classification-v3
+- Publicly surfaced structure:
+  - fine-grained disposal-routing dataset with many subtype labels
+  - viewer examples show at least `50` label IDs
+- Publicly surfaced example classes:
+  - `ALUMINIUM CAN`
+  - `CIGARETTE BUTT`
+  - `CIGARETTE PACK`
+  - `COMPOSTABLE PACKAGING`
+  - `CONDIMENT PACKETS`
+  - `COVID TEST`
+  - `FACE MASK`
+  - `GLASS BOTTLE`
+  - `GLASS JAR`
+  - `LAPTOP CHARGER`
+  - `MIXED PAPER-PLASTIC PACKAGING`
+  - `ORGANIC SCRAPS`
+  - `PAPER BOWL`
+  - `PAPER CUP`
+  - `PAPER FOOD PACKAGING`
+  - `PAPER MAGASINE`
+  - `PAPER PACKAGING`
+  - `PAPER PLATE`
+  - `PAPER SHEET`
+  - `PAPER SUGAR BAG`
+  - `PAPER TRAY`
+  - `PHONE CHARGER`
+  - `PLASTIC BAG`
+  - `PLASTIC BOTTLE`
+  - `PLASTIC BOWL`
+  - `PLASTIC CAP`
+  - `PLASTIC CUP`
+  - `PLASTIC CUTLERY`
+  - `PLASTIC DISH`
+  - `PLASTIC GLOVES`
+  - `PLASTIC STICKS`
+  - `PLASTIC TRAY`
+  - `SMARTPHONE`
+  - `TEA BAG`
+  - `TETRAPACK`
+  - `TOBACCO PACK`
+  - `TRANSPORT TICKET`
+  - `WOODEN CUTLERY`
 - Best overlap:
-  - direct: `plastic`
-  - close: gloves/rope/netting/foam help as trashy clutter subclasses if you later break `trash` down further
+  - direct-ish: strong coverage for `paper`, `plastic`, `glass`, `metal`, `organic`, and `ewaste`-adjacent charger/phone classes
+  - close: `TETRAPACK -> paper`, `FACE MASK/COVID TEST/CIGARETTE BUTT -> trash`, `WOODEN CUTLERY` can help future organic/misc routing
 - Note:
-  - niche and plastic-only, but distinct and reasonably fine-grained
+  - this is one of the more detailed ground-only disposal-taxonomy sources surfaced so far and is useful if you later want far more sub-classes instead of just broad materials
 
 ## Meta-Resources
 
@@ -2028,10 +1974,9 @@ On the latest broader web sweep, the most useful non-duplicate additions beyond 
 - `WasteBench`
 - `SpectralWaste`
 - `dmedhi/garbage-image-classification-detection`
-- `Baseline Marine Debris Data (CHNMS)`
 - `recycle_net`
 - `RecycleTree model family data references`
-- `Underwater Plastic Pollution Detection`
-- `PlasticInWater`
+- `dataset-trash-type-combination`
+- `thomasavare/waste-classification-v3`
 
 These are the ones most worth checking next if the goal is to expand the current project’s class support without drowning in mirrors.
