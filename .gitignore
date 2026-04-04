@@ -4,6 +4,7 @@ __pycache__/
 
 Dataset_Final/
 Dataset_Final_original_backup.zip
+external_datasets/
 
 runs/smoke_*/
 Results/smoke_*/

@@ -996,6 +996,27 @@ def build_auto_split_datasets(
 ) -> tuple[DeterministicAugmentedImageFolder, DeterministicAugmentedImageFolder, DeterministicAugmentedImageFolder]:
     ratios = parse_auto_split_ratios(args.auto_split_ratios)
     base_dataset = datasets.ImageFolder(root)
+    
+    alias_map = {"soft_plastic": "plastic", "rigid_plastic": "plastic"}
+    new_classes = set(base_dataset.classes)
+    for old, new in alias_map.items():
+        if old in new_classes:
+            new_classes.remove(old)
+            new_classes.add(new)
+            
+    new_classes = sorted(list(new_classes))
+    new_class_to_idx = {cls: i for i, cls in enumerate(new_classes)}
+    
+    for i in range(len(base_dataset.samples)):
+        path, old_target = base_dataset.samples[i]
+        old_class = base_dataset.classes[old_target]
+        new_class = alias_map.get(old_class, old_class)
+        base_dataset.samples[i] = (path, new_class_to_idx[new_class])
+        
+    base_dataset.classes = new_classes
+    base_dataset.class_to_idx = new_class_to_idx
+    base_dataset.targets = [s[1] for s in base_dataset.samples]
+
     by_class: dict[int, list[tuple[str, int]]] = {index: [] for index in range(len(base_dataset.classes))}
     for path, target in base_dataset.samples:
         by_class[int(target)].append((path, int(target)))

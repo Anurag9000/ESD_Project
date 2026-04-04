@@ -9,28 +9,34 @@
     "plastic": 8099
   },
   "final_class_counts": {
-    "battery": 1627,
-    "clothes": 6260,
-    "ewaste": 446,
-    "glass": 9995,
-    "metal": 5042,
-    "organic": 9007,
-    "paper": 13444,
-    "plastic": 8099,
-    "shoes": 2113,
-    "trash": 130
+    "battery": 1629,
+    "clothes": 6578,
+    "ewaste": 3930,
+    "glass": 23545,
+    "medical": 1608,
+    "metal": 36607,
+    "organic": 28765,
+    "paper": 51375,
+    "plastic": 34451,
+    "rigid_plastic": 15,
+    "shoes": 2120,
+    "soft_plastic": 96,
+    "wood": 508
   },
   "final_classes": [
     "battery",
     "clothes",
     "ewaste",
     "glass",
+    "medical",
     "metal",
     "organic",
     "paper",
     "plastic",
+    "rigid_plastic",
     "shoes",
-    "trash"
+    "soft_plastic",
+    "wood"
   ],
   "mapping_reference_markdown": "OTHER_FILENAME_CLASS_MAP.md",
   "other_mapping_rule_counts": {
@@ -145,11 +151,896 @@
       "trash_trash118.jpg"
     ]
   },
-  "total_images": 56163,
+  "total_images": 191227,
   "unresolved_removed_files": [
     "high-angle-view-of-worker-driving-forklift-in-recycling-plant-picture-id958248286.jpg",
     "office-business-accessories-e-commerce-euro-dollar-banknotes-spread-out-table-office-business-accessories-210973456.jpg",
     "office-business-accessories-e-commerce-euro-dollar-banknotes-spread-out-table-office-business-accessories-210979635.jpg",
     "woman-worker-haiti-17486822.jpg"
+  ],
+  "external_dataset_imports": [
+    {
+      "source_name": "realwaste",
+      "source_url": "https://archive.ics.uci.edu/dataset/908/realwaste",
+      "imported_at_utc": "2026-04-02T04:40:40.394287+00:00",
+      "added_entries": 4752,
+      "added_by_target_class": {
+        "clothes": 318,
+        "glass": 420,
+        "metal": 790,
+        "organic": 847,
+        "paper": 961,
+        "plastic": 921,
+        "trash": 495
+      },
+      "added_by_source_class": {
+        "cardboard": 461,
+        "food organics": 411,
+        "glass": 420,
+        "metal": 790,
+        "miscellaneous trash": 495,
+        "paper": 500,
+        "plastic": 921,
+        "textile trash": 318,
+        "vegetation": 436
+      },
+      "skipped_existing": 0,
+      "class_map": {
+        "cardboard": "paper",
+        "food organics": "organic",
+        "glass": "glass",
+        "metal": "metal",
+        "miscellaneous trash": "trash",
+        "paper": "paper",
+        "plastic": "plastic",
+        "textile trash": "clothes",
+        "vegetation": "organic"
+      }
+    },
+    {
+      "source_name": "trashnet",
+      "source_url": "https://github.com/garythung/trashnet",
+      "imported_at_utc": "2026-04-02T04:44:40.885975+00:00",
+      "added_entries": 2527,
+      "added_by_target_class": {
+        "glass": 501,
+        "metal": 410,
+        "paper": 997,
+        "plastic": 482,
+        "trash": 137
+      },
+      "added_by_source_class": {
+        "cardboard": 403,
+        "glass": 501,
+        "metal": 410,
+        "paper": 594,
+        "plastic": 482,
+        "trash": 137
+      },
+      "skipped_existing": 0,
+      "class_map": {
+        "cardboard": "paper",
+        "glass": "glass",
+        "metal": "metal",
+        "paper": "paper",
+        "plastic": "plastic",
+        "trash": "trash"
+      }
+    },
+    {
+      "source_name": "rootstrap_waste_classifier",
+      "source_url": "https://huggingface.co/datasets/rootstrap-org/waste-classifier",
+      "imported_at_utc": "2026-04-02T04:47:44.109090+00:00",
+      "added_entries": 3255,
+      "added_by_target_class": {
+        "glass": 134,
+        "metal": 315,
+        "organic": 769,
+        "paper": 997,
+        "plastic": 308,
+        "trash": 732
+      },
+      "added_by_source_class": {
+        "cardboard": 433,
+        "compost": 769,
+        "glass": 134,
+        "metal": 315,
+        "paper": 564,
+        "plastic": 308,
+        "trash": 732
+      },
+      "skipped_existing": 0,
+      "class_map": {
+        "cardboard": "paper",
+        "compost": "organic",
+        "glass": "glass",
+        "metal": "metal",
+        "paper": "paper",
+        "plastic": "plastic",
+        "trash": "trash"
+      }
+    },
+    {
+      "source_name": "recycled_portland_state",
+      "source_url": "https://web.cecs.pdx.edu/~singh/rcyc-web/dataset.html",
+      "imported_at_utc": "2026-04-02T04:52:51.351126+00:00",
+      "added_entries": 11500,
+      "added_by_target_class": {
+        "glass": 2300,
+        "metal": 4600,
+        "paper": 2300,
+        "plastic": 2300
+      },
+      "added_by_source_class": {
+        "boxes": 2300,
+        "crushed_soda_cans": 2300,
+        "glass_bottles": 2300,
+        "soda_cans": 2300,
+        "water_bottles": 2300
+      },
+      "skipped_existing": 0,
+      "class_map": {
+        "boxes": "paper",
+        "glass_bottles": "glass",
+        "soda_cans": "metal",
+        "crushed_soda_cans": "metal",
+        "water_bottles": "plastic"
+      }
+    },
+    {
+      "source_name": "mnemora_litter_sort",
+      "source_url": "https://huggingface.co/datasets/mnemoraorg/256x256-litter-sort-annotated-wastes",
+      "imported_at_utc": "2026-04-02T04:55:46.285135+00:00",
+      "added_entries": 6337,
+      "added_by_target_class": {
+        "glass": 2500,
+        "metal": 410,
+        "paper": 2808,
+        "plastic": 482,
+        "trash": 137
+      },
+      "added_by_source_class": {
+        "cardboard": 2214,
+        "glass": 2500,
+        "metal": 410,
+        "paper": 594,
+        "plastic": 482,
+        "trash": 137
+      },
+      "skipped_existing": 0,
+      "class_map": {
+        "cardboard": "paper",
+        "glass": "glass",
+        "metal": "metal",
+        "paper": "paper",
+        "plastic": "plastic",
+        "trash": "trash"
+      }
+    },
+    {
+      "source_name": "dmedhi_garbage_image_classification_detection",
+      "source_url": "https://huggingface.co/datasets/dmedhi/garbage-image-classification-detection",
+      "imported_at_utc": "2026-04-02T04:58:50.869797+00:00",
+      "added_entries": 3402,
+      "added_by_target_class": {
+        "glass": 852,
+        "metal": 574,
+        "paper": 1074,
+        "plastic": 643,
+        "trash": 259
+      },
+      "added_by_source_class": {
+        "Cardboard": 360,
+        "Glass": 852,
+        "Metal": 574,
+        "Paper": 714,
+        "Plastic": 643,
+        "Trash": 259
+      },
+      "skipped_existing": 0,
+      "class_map": {
+        "Cardboard": "paper",
+        "Glass": "glass",
+        "Metal": "metal",
+        "Paper": "paper",
+        "Plastic": "plastic",
+        "Trash": "trash"
+      }
+    },
+    {
+      "source_name": "openrecycle",
+      "source_url": "https://github.com/openrecycle/dataset",
+      "imported_at_utc": "2026-04-02T05:00:21.833588+00:00",
+      "added_entries": 2300,
+      "added_by_target_class": {
+        "glass": 452,
+        "metal": 436,
+        "paper": 960,
+        "plastic": 452
+      },
+      "added_by_source_class": {
+        "crumpled_paper": 259,
+        "disposable_paper_cups": 433,
+        "egg_packaging": 111,
+        "foil": 436,
+        "glass_bottle": 452,
+        "plastic_bottle": 452,
+        "receipt": 157
+      },
+      "skipped_existing": 0,
+      "class_map": {
+        "crumpled_paper": "paper",
+        "disposable_paper_cups": "paper",
+        "egg_packaging": "paper",
+        "foil": "metal",
+        "glass_bottle": "glass",
+        "plastic_bottle": "plastic",
+        "receipt": "paper"
+      }
+    },
+    {
+      "source_name": "metal_scrap_dataset",
+      "source_url": "https://huggingface.co/datasets/iDharshan/metal_scrap_dataset",
+      "imported_at_utc": "2026-04-02T05:13:46.159390+00:00",
+      "added_entries": 13895,
+      "added_by_target_class": {
+        "metal": 13895
+      },
+      "added_by_source_class": {
+        "grade_a_images": 5085,
+        "grade_b_images": 5570,
+        "grade_c_images": 3240
+      },
+      "skipped_existing": 0,
+      "class_map": {
+        "grade_a_images": "metal",
+        "grade_b_images": "metal",
+        "grade_c_images": "metal"
+      }
+    },
+    {
+      "source_name": "greensorter",
+      "source_url": "https://github.com/1nfinityLoop/GreenSorter",
+      "imported_at_utc": "2026-04-02T05:23:41.996545+00:00",
+      "added_entries": 3284,
+      "added_by_target_class": {
+        "metal": 559,
+        "paper": 1549,
+        "plastic": 1176
+      },
+      "added_by_source_class": {
+        "cardboard": 1549,
+        "metal": 559,
+        "rigid_plastic": 623,
+        "soft_plastic": 553
+      },
+      "skipped_existing": 0,
+      "class_map": {
+        "cardboard": "paper",
+        "metal": "metal",
+        "rigid_plastic": "plastic",
+        "soft_plastic": "plastic"
+      }
+    },
+    {
+      "source_name": "recycle_detector",
+      "source_url": "https://github.com/jenkspt/recycle",
+      "imported_at_utc": "2026-04-02T05:25:51.841359+00:00",
+      "added_entries": 1226,
+      "added_by_target_class": {
+        "glass": 503,
+        "metal": 413,
+        "plastic": 310
+      },
+      "added_by_source_class": {
+        "glass": 503,
+        "metal": 413,
+        "plastic": 310
+      },
+      "skipped_existing": 0,
+      "class_map": {
+        "glass": "glass",
+        "metal": "metal",
+        "plastic": "plastic"
+      }
+    },
+    {
+      "source_name": "ewastenet",
+      "source_url": "https://github.com/NifulIslam/EWasteNet-A-Two-Stream-DeiT-Approach-for-E-Waste-Classification",
+      "imported_at_utc": "2026-04-02T05:35:32.936151+00:00",
+      "added_entries": 878,
+      "added_by_target_class": {
+        "ewaste": 878
+      },
+      "added_by_source_class": {
+        "Keyboards": 110,
+        "Mobile": 152,
+        "Mouses": 104,
+        "TV": 131,
+        "camera": 62,
+        "laptop": 117,
+        "microwave": 102,
+        "smartwatch": 100
+      },
+      "skipped_existing": 0,
+      "class_map": {
+        "camera": "ewaste",
+        "Keyboards": "ewaste",
+        "laptop": "ewaste",
+        "microwave": "ewaste",
+        "Mobile": "ewaste",
+        "Mouses": "ewaste",
+        "smartwatch": "ewaste",
+        "TV": "ewaste"
+      }
+    },
+    {
+      "source_name": "taco",
+      "source_url": "https://github.com/pedropro/TACO",
+      "imported_at_utc": "2026-04-02T12:55:43.236793+00:00",
+      "added_entries": 2623,
+      "added_by_target_class": {
+        "battery": 2,
+        "glass": 115,
+        "metal": 311,
+        "organic": 6,
+        "paper": 277,
+        "plastic": 1258,
+        "shoes": 6,
+        "trash": 648
+      },
+      "added_by_source_class": {
+        "Aerosol": 7,
+        "Aluminium blister pack": 4,
+        "Aluminium foil": 17,
+        "Battery": 2,
+        "Broken glass": 56,
+        "Carded blister pack": 1,
+        "Cigarette": 361,
+        "Clear plastic bottle": 109,
+        "Corrugated carton": 45,
+        "Crisp packet": 26,
+        "Disposable food container": 17,
+        "Disposable plastic cup": 55,
+        "Drink can": 136,
+        "Drink carton": 16,
+        "Egg carton": 7,
+        "Foam cup": 10,
+        "Foam food container": 7,
+        "Food Can": 29,
+        "Food waste": 6,
+        "Garbage bag": 15,
+        "Glass bottle": 51,
+        "Glass cup": 6,
+        "Glass jar": 2,
+        "Magazine paper": 2,
+        "Meal carton": 20,
+        "Metal bottle cap": 43,
+        "Metal lid": 6,
+        "Normal paper": 39,
+        "Other carton": 58,
+        "Other plastic": 126,
+        "Other plastic bottle": 35,
+        "Other plastic container": 4,
+        "Other plastic wrapper": 176,
+        "Paper bag": 14,
+        "Paper cup": 32,
+        "Paper straw": 3,
+        "Pizza box": 1,
+        "Plastic bottle cap": 110,
+        "Plastic film": 287,
+        "Plastic glooves": 1,
+        "Plastic lid": 46,
+        "Plastic straw": 104,
+        "Plastic utensils": 21,
+        "Polypropylene bag": 2,
+        "Pop tab": 59,
+        "Rope & strings": 13,
+        "Scrap metal": 14,
+        "Shoe": 6,
+        "Single-use carrier bag": 32,
+        "Six pack rings": 3,
+        "Spread tub": 5,
+        "Squeezable tube": 4,
+        "Styrofoam piece": 62,
+        "Tissues": 25,
+        "Toilet tube": 5,
+        "Tupperware": 1,
+        "Unlabeled litter": 269,
+        "Wrapping paper": 10
+      },
+      "skipped_existing": 0,
+      "recovered_existing": 2623,
+      "class_map": {
+        "Aluminium foil": "metal",
+        "Battery": "battery",
+        "Aluminium blister pack": "trash",
+        "Carded blister pack": "trash",
+        "Other plastic bottle": "plastic",
+        "Clear plastic bottle": "plastic",
+        "Glass bottle": "glass",
+        "Plastic bottle cap": "plastic",
+        "Metal bottle cap": "metal",
+        "Broken glass": "glass",
+        "Food Can": "metal",
+        "Aerosol": "metal",
+        "Drink can": "metal",
+        "Toilet tube": "paper",
+        "Other carton": "paper",
+        "Egg carton": "paper",
+        "Drink carton": "paper",
+        "Corrugated carton": "paper",
+        "Meal carton": "paper",
+        "Pizza box": "paper",
+        "Paper cup": "paper",
+        "Disposable plastic cup": "plastic",
+        "Foam cup": "plastic",
+        "Glass cup": "glass",
+        "Other plastic cup": "plastic",
+        "Food waste": "organic",
+        "Glass jar": "glass",
+        "Plastic lid": "plastic",
+        "Metal lid": "metal",
+        "Other plastic": "plastic",
+        "Magazine paper": "paper",
+        "Tissues": "paper",
+        "Wrapping paper": "paper",
+        "Normal paper": "paper",
+        "Paper bag": "paper",
+        "Plastified paper bag": "paper",
+        "Plastic film": "plastic",
+        "Six pack rings": "plastic",
+        "Garbage bag": "plastic",
+        "Other plastic wrapper": "plastic",
+        "Single-use carrier bag": "plastic",
+        "Polypropylene bag": "plastic",
+        "Crisp packet": "plastic",
+        "Spread tub": "plastic",
+        "Tupperware": "plastic",
+        "Disposable food container": "plastic",
+        "Foam food container": "plastic",
+        "Other plastic container": "plastic",
+        "Plastic glooves": "plastic",
+        "Plastic utensils": "plastic",
+        "Pop tab": "metal",
+        "Rope & strings": "trash",
+        "Scrap metal": "metal",
+        "Shoe": "shoes",
+        "Squeezable tube": "plastic",
+        "Plastic straw": "plastic",
+        "Paper straw": "paper",
+        "Styrofoam piece": "plastic",
+        "Unlabeled litter": "trash",
+        "Cigarette": "trash"
+      },
+      "partial_reconciliation": true,
+      "note": "Recovered already-copied taco crops into metadata after interrupted remote import.",
+      "mapped_annotation_files_present": 2623,
+      "mapped_annotation_files_expected_total": 4784,
+      "remaining_estimated": 2161
+    },
+    {
+      "source_name": "trashbox",
+      "source_url": "https://github.com/nikhilvenkatkumsetty/TrashBox",
+      "imported_at_utc": "2026-04-02T12:56:02.799384+00:00",
+      "added_entries": 14282,
+      "added_by_target_class": {
+        "ewaste": 2406,
+        "glass": 2022,
+        "medical": 1565,
+        "metal": 2068,
+        "paper": 4086,
+        "plastic": 2135
+      },
+      "added_by_source_class": {
+        "cardboard": 1930,
+        "e-waste": 2406,
+        "glass": 2022,
+        "medical": 1565,
+        "metal": 2068,
+        "paper": 2156,
+        "plastic": 2135
+      },
+      "skipped_existing": 0,
+      "recovered_existing": 0,
+      "class_map": {
+        "cardboard": "paper",
+        "e-waste": "ewaste",
+        "glass": "glass",
+        "medical": "medical",
+        "metal": "metal",
+        "paper": "paper",
+        "plastic": "plastic"
+      }
+    },
+    {
+      "source_name": "wade_ai",
+      "source_url": "https://github.com/letsdoitworld/wade-ai",
+      "imported_at_utc": "2026-04-02T12:58:12.270147+00:00",
+      "added_entries": 2247,
+      "added_by_target_class": {
+        "trash": 2247
+      },
+      "added_by_source_class": {
+        "trash_region": 2247
+      },
+      "skipped_existing": 0,
+      "recovered_existing": 21,
+      "class_map": {
+        "trash_region": "trash"
+      }
+    },
+    {
+      "source_name": "recycle_net",
+      "source_url": "https://github.com/SebastianCharmot/recycle_net",
+      "imported_at_utc": "2026-04-02T13:47:38.633152+00:00",
+      "added_entries": 4725,
+      "added_by_target_class": {
+        "glass": 1179,
+        "metal": 1013,
+        "paper": 1423,
+        "plastic": 1110
+      },
+      "added_by_source_class": {
+        "glass": 1179,
+        "metal": 1013,
+        "paper": 1423,
+        "plastic": 1110
+      },
+      "skipped_existing": 0,
+      "recovered_existing": 0,
+      "failed_fetches": 0,
+      "failed_fetch_examples": [],
+      "class_map": {
+        "glass": "glass",
+        "metal": "metal",
+        "paper": "paper",
+        "plastic": "plastic"
+      }
+    },
+    {
+      "source_name": "garbage_object_detection",
+      "source_url": "https://github.com/dfayzur/garbage-object-detection",
+      "imported_at_utc": "2026-04-02T13:58:40.782916+00:00",
+      "added_entries": 1071,
+      "added_by_target_class": {
+        "paper": 543,
+        "trash": 528
+      },
+      "added_by_source_class": {
+        "cardboard": 543,
+        "garbage_bag": 528
+      },
+      "skipped_existing": 0,
+      "recovered_existing": 0,
+      "class_map": {
+        "cardboard": "paper",
+        "garbage_bag": "trash"
+      }
+    },
+    {
+      "source_name": "recodewaste",
+      "source_url": "https://github.com/prasadvineetv/ReCoDeWaste",
+      "imported_at_utc": "2026-04-02T14:13:57.028199+00:00",
+      "added_entries": 6392,
+      "added_by_target_class": {
+        "aggregates": 2357,
+        "metal": 1177,
+        "paper": 514,
+        "plastic": 1836,
+        "wood": 508
+      },
+      "added_by_source_class": {
+        "aggregate": 2357,
+        "cardboard": 514,
+        "hard plastic": 1344,
+        "metal": 1177,
+        "soft plastic": 492,
+        "timber": 508
+      },
+      "skipped_existing": 0,
+      "recovered_existing": 0,
+      "failed_fetches": 0,
+      "failed_fetch_examples": [],
+      "class_map": {
+        "aggregate": "aggregates",
+        "cardboard": "paper",
+        "hard plastic": "plastic",
+        "metal": "metal",
+        "soft plastic": "plastic",
+        "timber": "wood"
+      }
+    },
+    {
+      "source_name": "compostnet",
+      "source_url": "https://github.com/sarahmfrost/compostnet",
+      "imported_at_utc": "2026-04-02T14:28:17.888283+00:00",
+      "added_entries": 50,
+      "added_by_target_class": {
+        "glass": 11,
+        "metal": 10,
+        "organic": 11,
+        "paper": 18
+      },
+      "added_by_source_class": {
+        "cardboard": 11,
+        "compost": 11,
+        "glass": 11,
+        "metal": 10,
+        "paper": 7
+      },
+      "skipped_existing": 0,
+      "recovered_existing": 0,
+      "class_map": {
+        "cardboard": "paper",
+        "compost": "organic",
+        "glass": "glass",
+        "metal": "metal",
+        "paper": "paper",
+        "plastic": "plastic"
+      }
+    },
+    {
+      "source_name": "trash_detection_dataset",
+      "source_url": "https://data.mendeley.com/datasets/z732f9pwxt/1",
+      "imported_at_utc": "2026-04-02T14:46:04.815324+00:00",
+      "added_entries": 32924,
+      "added_by_target_class": {
+        "glass": 2372,
+        "metal": 3761,
+        "organic": 18123,
+        "paper": 4822,
+        "plastic": 3846
+      },
+      "added_by_source_class": {
+        "BIODEGRADABLE": 18123,
+        "CARDBOARD": 2681,
+        "GLASS": 2372,
+        "METAL": 3761,
+        "PAPER": 2141,
+        "PLASTIC": 3846
+      },
+      "skipped_existing": 0,
+      "recovered_existing": 0,
+      "class_map": {
+        "BIODEGRADABLE": "organic",
+        "CARDBOARD": "paper",
+        "GLASS": "glass",
+        "METAL": "metal",
+        "PAPER": "paper",
+        "PLASTIC": "plastic"
+      }
+    },
+    {
+      "source_name": "wastevision",
+      "source_url": "https://data.mendeley.com/datasets/mr67c82zw7/1",
+      "imported_at_utc": "2026-04-02T15:29:52.046672+00:00",
+      "added_entries": 677,
+      "added_by_target_class": {
+        "ewaste": 200,
+        "glass": 50,
+        "medical": 43,
+        "metal": 206,
+        "plastic": 178
+      },
+      "added_by_source_class": {
+        "Cable": 83,
+        "E-waste": 117,
+        "Glass": 50,
+        "Medical Waste": 43,
+        "Metal": 110,
+        "Plastics": 178,
+        "can": 96
+      },
+      "skipped_existing": 0,
+      "recovered_existing": 0,
+      "class_map": {
+        "Cable": "ewaste",
+        "E-waste": "ewaste",
+        "Glass": "glass",
+        "Medical Waste": "medical",
+        "Metal": "metal",
+        "Plastics": "plastic",
+        "can": "metal"
+      }
+    },
+    {
+      "source_name": "taco",
+      "source_url": "https://github.com/pedropro/TACO",
+      "imported_at_utc": "2026-04-02T15:49:02.012497+00:00",
+      "added_entries": 1590,
+      "added_by_target_class": {
+        "glass": 139,
+        "metal": 233,
+        "organic": 2,
+        "paper": 220,
+        "plastic": 995,
+        "shoes": 1
+      },
+      "added_by_source_class": {
+        "Aerosol": 3,
+        "Aluminium foil": 45,
+        "Broken glass": 82,
+        "Clear plastic bottle": 177,
+        "Corrugated carton": 19,
+        "Crisp packet": 13,
+        "Disposable food container": 21,
+        "Disposable plastic cup": 49,
+        "Drink can": 93,
+        "Drink carton": 29,
+        "Egg carton": 4,
+        "Foam cup": 3,
+        "Foam food container": 8,
+        "Food Can": 5,
+        "Food waste": 2,
+        "Garbage bag": 16,
+        "Glass bottle": 53,
+        "Glass jar": 4,
+        "Magazine paper": 10,
+        "Meal carton": 10,
+        "Metal bottle cap": 37,
+        "Metal lid": 4,
+        "Normal paper": 43,
+        "Other carton": 35,
+        "Other plastic": 147,
+        "Other plastic bottle": 15,
+        "Other plastic container": 2,
+        "Other plastic cup": 2,
+        "Other plastic wrapper": 84,
+        "Paper bag": 13,
+        "Paper cup": 35,
+        "Paper straw": 1,
+        "Pizza box": 2,
+        "Plastic bottle cap": 99,
+        "Plastic film": 164,
+        "Plastic glooves": 3,
+        "Plastic lid": 31,
+        "Plastic straw": 53,
+        "Plastic utensils": 16,
+        "Polypropylene bag": 1,
+        "Pop tab": 40,
+        "Scrap metal": 6,
+        "Shoe": 1,
+        "Single-use carrier bag": 29,
+        "Six pack rings": 2,
+        "Spread tub": 4,
+        "Squeezable tube": 3,
+        "Styrofoam piece": 50,
+        "Tissues": 17,
+        "Tupperware": 3,
+        "Wrapping paper": 2
+      },
+      "skipped_existing": 1974,
+      "recovered_existing": 0,
+      "failed_fetches": 0,
+      "failed_fetch_examples": [],
+      "class_map": {
+        "Aluminium foil": "metal",
+        "Battery": "battery",
+        "Other plastic bottle": "plastic",
+        "Clear plastic bottle": "plastic",
+        "Glass bottle": "glass",
+        "Plastic bottle cap": "plastic",
+        "Metal bottle cap": "metal",
+        "Broken glass": "glass",
+        "Food Can": "metal",
+        "Aerosol": "metal",
+        "Drink can": "metal",
+        "Toilet tube": "paper",
+        "Other carton": "paper",
+        "Egg carton": "paper",
+        "Drink carton": "paper",
+        "Corrugated carton": "paper",
+        "Meal carton": "paper",
+        "Pizza box": "paper",
+        "Paper cup": "paper",
+        "Disposable plastic cup": "plastic",
+        "Foam cup": "plastic",
+        "Glass cup": "glass",
+        "Other plastic cup": "plastic",
+        "Food waste": "organic",
+        "Glass jar": "glass",
+        "Plastic lid": "plastic",
+        "Metal lid": "metal",
+        "Other plastic": "plastic",
+        "Magazine paper": "paper",
+        "Tissues": "paper",
+        "Wrapping paper": "paper",
+        "Normal paper": "paper",
+        "Paper bag": "paper",
+        "Plastified paper bag": "paper",
+        "Plastic film": "plastic",
+        "Six pack rings": "plastic",
+        "Garbage bag": "plastic",
+        "Other plastic wrapper": "plastic",
+        "Single-use carrier bag": "plastic",
+        "Polypropylene bag": "plastic",
+        "Crisp packet": "plastic",
+        "Spread tub": "plastic",
+        "Tupperware": "plastic",
+        "Disposable food container": "plastic",
+        "Foam food container": "plastic",
+        "Other plastic container": "plastic",
+        "Plastic glooves": "plastic",
+        "Plastic utensils": "plastic",
+        "Pop tab": "metal",
+        "Scrap metal": "metal",
+        "Shoe": "shoes",
+        "Squeezable tube": "plastic",
+        "Plastic straw": "plastic",
+        "Paper straw": "paper",
+        "Styrofoam piece": "plastic"
+      }
+    },
+    {
+      "source_name": "zerowaste",
+      "source_url": "https://zenodo.org/records/6412647",
+      "imported_at_utc": "2026-04-02T17:04:22.683784+00:00",
+      "added_entries": 0,
+      "added_by_target_class": {},
+      "added_by_source_class": {},
+      "skipped_existing": 0,
+      "recovered_existing": 0,
+      "component_boxes_total": 0,
+      "class_map": {
+        "rigid_plastic": "plastic",
+        "cardboard": "paper",
+        "metal": "metal",
+        "soft_plastic": "plastic"
+      }
+    },
+    {
+      "source_name": "zerowaste",
+      "source_url": "https://zenodo.org/records/6412647",
+      "imported_at_utc": "2026-04-02T18:12:16.293373+00:00",
+      "added_entries": 22342,
+      "added_by_target_class": {
+        "metal": 380,
+        "paper": 14042,
+        "plastic": 7920
+      },
+      "added_by_source_class": {
+        "cardboard": 14042,
+        "metal": 380,
+        "rigid_plastic": 1740,
+        "soft_plastic": 6180
+      },
+      "skipped_existing": 0,
+      "recovered_existing": 0,
+      "component_boxes_total": 22342,
+      "class_map": {
+        "rigid_plastic": "plastic",
+        "cardboard": "paper",
+        "metal": "metal",
+        "soft_plastic": "plastic"
+      }
+    },
+    {
+      "source_name": "zerowaste",
+      "source_url": "https://zenodo.org/records/6412647",
+      "imported_at_utc": "2026-04-04T07:18:44.056168+00:00",
+      "added_entries": 455,
+      "added_by_target_class": {
+        "metal": 4,
+        "paper": 340,
+        "rigid_plastic": 15,
+        "soft_plastic": 96
+      },
+      "added_by_source_class": {
+        "cardboard": 340,
+        "metal": 4,
+        "rigid_plastic": 15,
+        "soft_plastic": 96
+      },
+      "skipped_existing": 22342,
+      "recovered_existing": 0,
+      "component_boxes_total": 22797,
+      "class_map": {
+        "rigid_plastic": "rigid_plastic",
+        "cardboard": "paper",
+        "metal": "metal",
+        "soft_plastic": "soft_plastic"
+      }
+    }
   ]
 }

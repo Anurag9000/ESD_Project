@@ -18,6 +18,84 @@ Read it in this order:
 - `Remap Assumptions For External Datasets`
 - the dataset survey sections after that
 
+## External Integration Tracker
+
+This tracker is the authoritative quick view of what has already been merged into the live flat dataset and what still remains in the queue.
+
+Status legend:
+
+- `DONE`: imported into `Dataset_Final` and recorded in `external_dataset_imports.json`
+- `PARTIAL`: partially integrated and reconciled, but not yet fully exhausted from the source
+- `IN_PROGRESS`: currently being imported or resumed
+- `READY`: downloaded / normalized / inspected and safe to import next
+- `BLOCKED`: currently not safe to import because labels are missing or the source format is still unusable for clean class remap
+- `CANDIDATE`: researched but not yet staged for integration
+
+Current tracker:
+
+- `DONE` `realwaste`
+- `DONE` `trashnet`
+- `DONE` `rootstrap-org/waste-classifier`
+- `DONE` `recycled dataset (portland state)`
+- `DONE` `mnemora litter sort`
+- `DONE` `dmedhi/garbage-image-classification-detection`
+- `DONE` `openrecycle`
+- `DONE` `metal_scrap_dataset`
+- `DONE` `greensorter`
+- `DONE` `recycle_detector`
+- `DONE` `ewastenet`
+- `DONE` `taco`
+- `DONE` `trashbox`
+- `DONE` `wade-ai`
+- `DONE` `recycle_net`
+- `DONE` `garbage_object_detection`
+- `DONE` `recodewaste`
+- `DONE` `compostnet`
+- `DONE` `trash_detection_dataset`
+- `DONE` `wastevision`
+- `IN_PROGRESS` `zerowaste`
+- `BLOCKED` `dwsd`
+- `BLOCKED` `litter_assessment_mendeley`
+- `BLOCKED` `mmcdwaste`
+- `BLOCKED` `thomasavare/waste-classification-v3`
+
+Notes:
+
+- `taco` is now fully integrated for the current explicit-class taxonomy. Residual-litter classes were intentionally excluded, so only the explicit material/use classes were kept.
+- `trashbox` is fully integrated and adds a practical `medical` class.
+- `wade-ai` was integrated earlier when the repo still had a residual `trash` bucket. Those mixed trash-region crops were later removed when `trash` was deleted from the live taxonomy.
+- `recycle_net` is fully integrated as a labeled object-detection crop source. It is still TrashNet-derived, so it is useful as additional detection supervision rather than as a wholly independent corpus.
+- `garbage_object_detection` is fully integrated, but only through its waste-relevant labels. `container_small` was intentionally excluded because it is not a clean waste class for this taxonomy.
+- `recodewaste` is integrated, and only its retained practical material classes remain in the live dataset.
+- `compostnet` is integrated only through its explicit material/compost images. Its Drive payload also contains TensorFlow bottleneck cache files, which are ignored.
+- `trash_detection_dataset` is fully integrated from the Mendeley YOLO archive and contributes a large amount of clean `organic`, `paper`, `glass`, `metal`, and `plastic` supervision.
+- `wastevision` is fully integrated from the Mendeley YOLO archive and contributes `ewaste`, `medical`, `glass`, `metal`, and `plastic` crops.
+- `dwsd` is a real segmentation dataset, but its local mask-value palette is not documented in the archive and currently does not line up cleanly enough with the published class description to trust an automatic remap yet.
+- `litter_assessment_mendeley` downloads cleanly, but the payload is only an Excel file rather than an image dataset, so it is not usable for this repo.
+- `mmcdwaste` currently has unlabeled image payload only, so it is not safe to merge into the classification dataset.
+- `thomasavare/waste-classification-v3` is a text/parquet question-classification dataset, not a usable image dataset for this repo.
+- `taco` was resumed with residual-litter mappings removed and now contributes only explicit material/use classes.
+
+## Known Download Size Summary
+
+Only a small subset of the surveyed datasets publicly exposes actual download/archive size. Most entries expose image counts or class counts only, so the true combined storage requirement for downloading everything in this file is still unknown.
+
+Datasets with explicit size disclosures captured in this document:
+
+- `rootstrap-org/waste-classifier`
+  - downloaded size about `1.15 GB`
+- `SpectralWaste`
+  - segmentation archive size about `23.1 GB`
+
+Known lower bound from explicit size disclosures in this file:
+
+- `24.25 GB`
+
+Interpretation:
+
+- `24.25 GB` is only a minimum guaranteed total from the datasets whose size is explicitly stated
+- the real combined total for all datasets in this survey is higher, but cannot be computed exactly from the currently exposed metadata alone
+
 ## Current Local Dataset
 
 Current local class taxonomy in this repo:
@@ -26,32 +104,141 @@ Current local class taxonomy in this repo:
 - `clothes`
 - `ewaste`
 - `glass`
+- `medical`
 - `metal`
 - `organic`
 - `paper`
 - `plastic`
 - `shoes`
-- `trash`
+- `wood`
 
 Current local class counts in [Dataset_Final](/home/anurag-basistha/Projects/ESD/Dataset_Final):
 
-- `paper`: `13444`
-- `glass`: `9995`
-- `organic`: `9007`
-- `plastic`: `8099`
-- `clothes`: `6260`
-- `metal`: `5042`
-- `shoes`: `2113`
-- `battery`: `1627`
-- `ewaste`: `446`
-- `trash`: `130`
+- `paper`: `36993`
+- `metal`: `36223`
+- `organic`: `28765`
+- `plastic`: `26531`
+- `glass`: `23545`
+- `clothes`: `6578`
+- `ewaste`: `3930`
+- `shoes`: `2120`
+- `battery`: `1629`
+- `medical`: `1608`
+- `wood`: `508`
 
 Notes:
 
 - The old generic `other` class was removed.
+- The later mixed residual `trash` bucket was also removed from the live dataset because it was not a clean material class.
+- The temporary `aggregates` class imported from `recodewaste` was also removed from the live dataset.
 - The old split layout was removed; the dataset is now a flat class-folder root.
 - The retained training code now infers classes dynamically from the dataset root and auto-builds deterministic stratified train/val/test splits.
 - A small unresolved residue was discarded from the final dataset rather than forced into the wrong class.
+
+## Integrated External Sources
+
+The repo has now started integrating selected external datasets directly into the flat class-root dataset, but only when their labels can be remapped into grounded real-world segregation classes rather than brittle visual subtypes.
+
+### Imported: RealWaste
+
+- Primary source: https://archive.ics.uci.edu/dataset/908/realwaste
+- Archive used locally: `external_datasets/realwaste/realwaste.zip`
+- Imported images: `4752`
+- Imported on: `2026-04-02`
+- Mapping used:
+  - `cardboard -> paper`
+  - `food organics -> organic`
+  - `glass -> glass`
+  - `metal -> metal`
+  - `miscellaneous trash -> trash`
+  - `paper -> paper`
+  - `plastic -> plastic`
+  - `textile trash -> clothes`
+  - `vegetation -> organic`
+- Added counts by target class:
+  - `paper`: `961`
+  - `organic`: `847`
+  - `plastic`: `921`
+  - `metal`: `790`
+  - `trash`: `495`
+  - `glass`: `420`
+  - `clothes`: `318`
+- Why this source was accepted:
+  - all nine source classes map cleanly into practical segregation categories already present in the repo
+  - it adds grounded landfill imagery rather than studio-style object photos
+  - it does not force bogus fine-grained classes such as color-specific bottles or product-specific cans
+
+### Imported: TrashNet
+
+- Primary source: https://github.com/garythung/trashnet
+- Archive used locally: `external_datasets/trashnet/trashnet.zip`
+- Imported images: `2527`
+- Imported on: `2026-04-02`
+- Mapping used:
+  - `cardboard -> paper`
+  - `glass -> glass`
+  - `metal -> metal`
+  - `paper -> paper`
+  - `plastic -> plastic`
+  - `trash -> trash`
+- Added counts by target class:
+  - `paper`: `997`
+  - `glass`: `501`
+  - `plastic`: `482`
+  - `metal`: `410`
+  - `trash`: `137`
+- Why this source was accepted:
+  - it is still one of the cleanest public material-sorting benchmarks
+  - its taxonomy maps directly into the repo without inventing product-color or brand-specific subclasses
+
+### Imported: rootstrap-org/waste-classifier
+
+- Primary source: https://huggingface.co/datasets/rootstrap-org/waste-classifier
+- Archive used locally: `external_datasets/rootstrap_waste_classifier/dataset-splits-custom.zip`
+- Imported images: `3255`
+- Imported on: `2026-04-02`
+- Mapping used:
+  - `cardboard -> paper`
+  - `compost -> organic`
+  - `glass -> glass`
+  - `metal -> metal`
+  - `paper -> paper`
+  - `plastic -> plastic`
+  - `trash -> trash`
+- Added counts by target class:
+  - `paper`: `997`
+  - `organic`: `769`
+  - `trash`: `732`
+  - `metal`: `315`
+  - `plastic`: `308`
+  - `glass`: `134`
+- Why this source was accepted:
+  - it is a practical seven-class waste taxonomy with no bogus visual subtyping
+  - it adds additional `organic` coverage via `compost`
+
+### Imported: Recycled Dataset (Portland State)
+
+- Primary source: https://web.cecs.pdx.edu/~singh/rcyc-web/dataset.html
+- Archive used locally: `external_datasets/recycled_portland_state/recycle_data_shuffled.tar.gz`
+- Imported images: `11500`
+- Imported on: `2026-04-02`
+- Source storage format:
+  - `.npz` arrays rather than image folders
+  - importer materialized the arrays back into image files before ingesting them
+- Mapping used:
+  - `boxes -> paper`
+  - `glass_bottles -> glass`
+  - `soda_cans -> metal`
+  - `crushed_soda_cans -> metal`
+  - `water_bottles -> plastic`
+- Added counts by target class:
+  - `metal`: `4600`
+  - `paper`: `2300`
+  - `glass`: `2300`
+  - `plastic`: `2300`
+- Why this source was accepted:
+  - all five classes are concrete recyclable-material categories used in real segregation settings
+  - the only subtype merge needed was `soda_cans + crushed_soda_cans -> metal`
 
 ## Local Filename-Based Remap That Replaced Old `other`
 
