@@ -924,7 +924,7 @@ def build_auto_split_datasets(
     ratios = parse_auto_split_ratios(args.auto_split_ratios)
     base_dataset = datasets.ImageFolder(root)
     
-    alias_map = {"soft_plastic": "plastic", "rigid_plastic": "plastic"}
+    alias_map = {"soft_plastic": "plastic", "rigid_plastic": "plastic", "hard_plastic": "plastic"}
     new_classes = set(base_dataset.classes)
     for old, new in alias_map.items():
         if old in new_classes:
