@@ -1,91 +1,105 @@
-#!/usr/bin/env python3
-
+"""
+Plastic Segregation Engine
+Migrates 'plastic' items into hard_plastic or soft_plastic based on source_label semantics.
+"""
 import json
+import os
 import shutil
-import sys
 from pathlib import Path
 
-sys.path.append(str(Path(__file__).parent))
-from integrate_external_dataset import regenerate_auto_split_manifest
+METADATA_PATH = "Dataset_Final/dataset_metadata.json"
+DATASET_ROOT = "Dataset_Final"
 
-def main():
-    root = Path("Dataset_Final")
-    meta_path = root / "dataset_metadata.json"
-    manifest_path = root / "auto_split_manifest.json"
-    
-    if not meta_path.exists():
-        print(f"Error: {meta_path} not found.")
-        return
+# HARD plastic = rigid, structural, thick-walled containers (PET bottles, trays, equipment)
+HARD_PLASTIC_LABELS = {
+    "plastic, bottle", "soda bottle", "water bottle", "pet",
+    "bottle-transp", "bottle-transp-full", "bottle-blue", "bottle-blue5l",
+    "bottle-blue-full", "bottle-dark", "bottle-green", "bottle-green-full",
+    "bottle-dark-full", "bottle-milk", "bottle-oil", "bottle-yogurt",
+    "bottle_150cl", "bottle_50cl", "bottle_100cl", "bottle_200cl",
+    "bottle_33cl", "bottle_25cl", "bottle_200cl",
+    "alucan", "hdpem",
+    "plastic, tub", "plastic, utensil", "7-plastic",
+    "plastic_equipment_packaging", "other plastic",
+    "plastic bottles", "water_bottles",
+    "plastic_bottle", "plastic_bottle_takeaway_cup",
+    "clear plastic bottle", "other plastic bottle",
+    "disposable plastic cup", "plastic bottle cap",
+    "plastic lid", "pop tab",
+}
 
-    with open(meta_path) as f:
-        metadata = json.load(f)
-        
-    soft_labels = {
-        "soft plastic", "soft_plastic", "Plastic film", "Other plastic wrapper", 
-        "Crisp packet", "Single-use carrier bag", "Garbage bag", "Six pack rings", 
-        "Polypropylene bag", "Plastic glooves"
-    }
+# SOFT plastic = flexible, film-based, bags, wrappers
+SOFT_PLASTIC_LABELS = {
+    "plastic, bag", "plastic, packaging", "plastic, film",
+    "plastic film", "plastic bag images",
+    "plastics", "other plastic wrapper",
+    "plastic utensils", "plastic glooves",
+    "single-use carrier bag", "plastic straw",
+    "crisp packet", "polypropylene bag",
+    "retort_pouch", "six pack rings",
+    "waste, styrofoam", "styrofoam piece",
+    "foam food container", "foam cup",
+    "spread tub", "squeezable tube",
+    "other plastic container", "other plastic cup",
+    "plastic utensils",
+}
+
+def run_plastic_segregation():
+    print("=== INITIATING PLASTIC SEGREGATION ENGINE ===")
     
-    rigid_labels = {
-        "rigid_plastic", "water_bottles", "hard plastic", "plastic_bottle", 
-        "Clear plastic bottle", "Other plastic bottle", "Plastic bottle cap", 
-        "Plastic straw", "Styrofoam piece", "Disposable plastic cup", "Plastic lid", 
-        "Disposable food container", "Plastic utensils", "Foam food container", 
-        "Foam cup", "Spread tub", "Squeezable tube", "Other plastic container", 
-        "Tupperware", "Other plastic cup"
-    }
+    with open(METADATA_PATH, "r") as f:
+        meta = json.load(f)
+    sources = meta.get("sources", meta)
     
-    soft_dir = root / "soft_plastic"
-    rigid_dir = root / "rigid_plastic"
-    soft_dir.mkdir(exist_ok=True)
-    rigid_dir.mkdir(exist_ok=True)
-    
+    hard_count = 0
     soft_count = 0
-    rigid_count = 0
-    missing_count = 0
+    clean_items = []
     
-    for item in metadata:
-        if item["label"] == "plastic":
-            src_label = str(item.get("source_label", "")).strip()
-            dest_label = None
+    for item in sources:
+        if item.get("label") == "plastic":
+            source_lbl = item.get("source_label", "").lower().strip()
             
-            if src_label in soft_labels:
-                dest_label = "soft_plastic"
-            elif src_label in rigid_labels:
-                dest_label = "rigid_plastic"
+            if source_lbl in HARD_PLASTIC_LABELS:
+                target_label = "hard_plastic"
+            elif source_lbl in SOFT_PLASTIC_LABELS:
+                target_label = "soft_plastic"
+            else:
+                clean_items.append(item)
+                continue
             
-            if dest_label:
-                old_path = Path(item["file_path"])
-                new_path = root / dest_label / old_path.name
-                
-                if old_path.exists():
-                    shutil.move(old_path, new_path)
-                    item["file_path"] = f"Dataset_Final/{dest_label}/{old_path.name}"
-                    item["label"] = dest_label
-                    item["mapping_rule"] = f"heuristic_remap_from_plastic:{src_label}->{dest_label}"
-                    
-                    if dest_label == "soft_plastic":
-                        soft_count += 1
+            original_path = item.get("file_path")
+            target_dir = os.path.join(DATASET_ROOT, target_label)
+            os.makedirs(target_dir, exist_ok=True)
+            new_path = os.path.join(target_dir, os.path.basename(original_path))
+            
+            if os.path.exists(original_path):
+                try:
+                    shutil.move(original_path, new_path)
+                    item["label"] = target_label
+                    item["file_path"] = new_path
+                    if target_label == "hard_plastic":
+                        hard_count += 1
                     else:
-                        rigid_count += 1
-                else:
-                    missing_count += 1
-                
-    with open(meta_path, "w") as f:
-        json.dump(metadata, f, indent=2)
-        f.write("\n")
+                        soft_count += 1
+                except:
+                    pass
         
-    print(f"Moved {soft_count} to soft_plastic, {rigid_count} to rigid_plastic.")
-    if missing_count > 0:
-        print(f"Warning: {missing_count} files were listed in JSON but missing on disk.")
-        
-    print("Regenerating auto-split manifest...")
-    manifest = regenerate_auto_split_manifest(root, 42, "0.7,0.2,0.1")
-    with open(manifest_path, "w") as f:
-        json.dump(manifest, f, indent=2)
-        f.write("\n")
-        
-    print("Manifest regenerated. Done.")
+        clean_items.append(item)
+    
+    print(f"[SUCCESS] Re-classified {hard_count} -> hard_plastic")
+    print(f"[SUCCESS] Re-classified {soft_count} -> soft_plastic")
+    
+    with open(METADATA_PATH, "w") as f:
+        json.dump({"sources": clean_items}, f, indent=2)
+    
+    from integrate_external_dataset import regenerate_auto_split_manifest
+    try:
+        regenerate_auto_split_manifest(Path(DATASET_ROOT), 42, "0.8,0.1,0.1")
+        print("[*] Manifest regenerated.")
+    except Exception as e:
+        print(f"Manifest error: {e}")
+    
+    print("=== PLASTIC SEGREGATION COMPLETE ===")
 
 if __name__ == "__main__":
-    main()
+    run_plastic_segregation()

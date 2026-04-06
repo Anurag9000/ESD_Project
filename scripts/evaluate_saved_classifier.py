@@ -106,7 +106,6 @@ def main() -> int:
         weights_mode=eval_args.weights,
         embedding_dim=int(eval_args.embedding_dim),
         projection_dim=int(eval_args.projection_dim),
-        use_gabor=False,
         args=eval_args,
     ).to(device=device, dtype=model_dtype_for_args(eval_args))
     model.load_state_dict(checkpoint["model_state_dict"])

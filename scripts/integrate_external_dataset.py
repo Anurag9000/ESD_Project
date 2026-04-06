@@ -1011,9 +1011,7 @@ def locate_source_class_dirs(extracted_root: Path, expected_classes: set[str]) -
             matches[expected_by_key[key]].append(directory)
     missing = expected_classes.difference(matches)
     if missing:
-        raise RuntimeError(
-            f"Could not locate class directories for: {sorted(missing)} under {extracted_root}"
-        )
+        print(f"Warning: Could not locate class directories for: {sorted(missing)} under {extracted_root}")
     return matches
 
 

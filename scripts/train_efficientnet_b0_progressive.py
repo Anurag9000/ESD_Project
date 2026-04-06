@@ -6,13 +6,13 @@ from metric_learning_pipeline import build_parser, run_experiment
 
 
 def main() -> int:
-    parser = build_parser(use_gabor=False)
+    parser = build_parser()
     parser.set_defaults(
-        output_dir="Results/efficientnet_b0_non_gabor_progressive_all_classes",
-        log_file="logs/efficientnet_b0_non_gabor_progressive_all_classes.log.jsonl",
+        output_dir="Results/efficientnet_b0_progressive_all_classes",
+        log_file="logs/efficientnet_b0_progressive_all_classes.log.jsonl",
     )
     args = parser.parse_args()
-    return run_experiment(args, use_gabor=False)
+    return run_experiment(args)
 
 
 if __name__ == "__main__":

@@ -7,12 +7,12 @@ This document covers the current training-side environment and workflow for this
 The retained training path is now:
 
 - dynamic all-class training from a flat dataset root
-- non-Gabor EfficientNet-B0 only
+- EfficientNet-B0 only
 - progressive full-model fine-tuning
 - recursive loss refinement
 - recursive raw-accuracy refinement
 
-The old Gabor path and old fixed-class assumptions are no longer part of the maintained workflow.
+The old fixed-class assumptions are no longer part of the maintained workflow.
 
 ## Environment
 
@@ -63,8 +63,8 @@ The shared pipeline creates deterministic stratified train/val/test splits autom
 
 ## Core Training Files
 
-- [run_non_gabor.sh](/home/anurag-basistha/Projects/ESD/run_non_gabor.sh)
-- [run_non_gabor_full_model_loss_then_rawacc_recursive.sh](/home/anurag-basistha/Projects/ESD/run_non_gabor_full_model_loss_then_rawacc_recursive.sh)
+- [run_training.sh](/home/anurag-basistha/Projects/ESD/run_training.sh)
+- [run_full_training_pipeline.sh](/home/anurag-basistha/Projects/ESD/run_full_training_pipeline.sh)
 - [scripts/train_efficientnet_b0_progressive.py](/home/anurag-basistha/Projects/ESD/scripts/train_efficientnet_b0_progressive.py)
 - [scripts/metric_learning_pipeline.py](/home/anurag-basistha/Projects/ESD/scripts/metric_learning_pipeline.py)
 - [scripts/run_recursive_refinement.py](/home/anurag-basistha/Projects/ESD/scripts/run_recursive_refinement.py)
@@ -89,7 +89,7 @@ The main entry point is:
 ```bash
 cd /home/anurag-basistha/Projects/ESD
 powerprofilesctl set performance
-./run_non_gabor.sh
+./run_training.sh
 ```
 
 ## Optimization Defaults

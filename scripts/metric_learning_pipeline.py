@@ -610,8 +610,7 @@ def build_gabor_kernel(
     return kernel
 
 
-class GaborAdapter(nn.Module):
-    def __init__(
+def __init__(
         self,
         kernel_size: int,
         orientations: int,
@@ -655,20 +654,11 @@ class MetricLearningEfficientNetB0(nn.Module):
         weights_mode: str,
         embedding_dim: int,
         projection_dim: int,
-        use_gabor: bool,
         args: argparse.Namespace,
     ) -> None:
         super().__init__()
         weights = EfficientNet_B0_Weights.DEFAULT if weights_mode == "default" else None
         self.front_end: nn.Module
-        if use_gabor:
-            self.front_end = GaborAdapter(
-                kernel_size=args.gabor_kernel_size,
-                orientations=args.gabor_orientations,
-                wavelengths=parse_wavelengths(args.gabor_wavelengths),
-                sigma=args.gabor_sigma,
-                gamma=args.gabor_gamma,
-            )
         else:
             self.front_end = IdentityFrontEnd()
 
@@ -2626,38 +2616,11 @@ def parse_targeted_confusion_penalty_specs(specs: list[str], class_to_idx: dict[
     return resolved
 
 
-def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
+def build_parser() -> argparse.ArgumentParser:
     description = (
         "Metric-learning EfficientNet B0 training with deterministic 16x split-safe augmentation, "
         "SupCon warmup, cross-entropy classification, progressive unfreezing, and paper-style metrics"
     )
-    if use_gabor:
-        description += " using a Gabor front-end."
-    parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("--dataset-root", default="Dataset_Final")
-    parser.add_argument("--auto-split-ratios", default="0.7,0.2,0.1")
-    parser.add_argument("--image-size", type=int, default=224)
-    parser.add_argument("--batch-size", type=int, default=224)
-    parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument("--prefetch-factor", type=int, default=None)
-    parser.add_argument("--augment-repeats", type=int, default=16)
-    parser.add_argument("--augment-gaussian-sigmas", type=float, default=2.0)
-    parser.add_argument("--embedding-dim", type=int, default=512)
-    parser.add_argument("--projection-dim", type=int, default=256)
-    parser.add_argument("--supcon-epochs", type=int, default=200)
-    parser.add_argument("--supcon-unfreeze-backbone-modules", type=int, default=0)
-    parser.add_argument("--skip-supcon", action="store_true")
-    parser.add_argument("--head-epochs", type=int, default=200)
-    parser.add_argument("--stage-epochs", type=int, default=200)
-    parser.add_argument("--unfreeze-chunk-size", type=int, default=20)
-    parser.add_argument("--max-progressive-phases", type=int, default=0)
-    parser.add_argument("--classifier-train-mode", choices=("progressive", "full_model"), default="progressive")
-    parser.add_argument("--classifier-early-stopping-metric", choices=("val_loss", "val_raw_acc"), default="val_loss")
-    parser.add_argument(
-        "--reject-current-phase-on-global-miss",
-        "--progressive-phase-reject-current-on-global-best-miss",
-        dest="reject_current_phase_on_global_miss",
-        action="store_true",
         default=False,
         help=(
             "Opt-in current-phase rejection only. When enabled, a completed progressive phase that "
@@ -2703,13 +2666,6 @@ def build_parser(use_gabor: bool) -> argparse.ArgumentParser:
     parser.add_argument("--warmup-steps", type=int, default=1024)
     parser.add_argument("--sam-rho", type=float, default=0.05)
     parser.add_argument("--grad-accum-steps", type=int, default=1)
-    if use_gabor:
-        parser.add_argument("--gabor-kernel-size", type=int, default=15)
-        parser.add_argument("--gabor-orientations", type=int, default=8)
-        parser.add_argument("--gabor-wavelengths", type=str, default="4.0,8.0")
-        parser.add_argument("--gabor-sigma", type=float, default=4.5)
-        parser.add_argument("--gabor-gamma", type=float, default=0.6)
-    return parser
 
 
 def resolve_runtime_selected_classes(
@@ -2789,7 +2745,7 @@ def collapse_logits_and_targets_to_runtime_classes(
     )
 
 
-def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
+def run_experiment(args: argparse.Namespace) -> int:
     if args.optimizer == "sam" and args.grad_accum_steps != 1:
         raise ValueError("SAM support in this trainer requires --grad-accum-steps 1")
     if args.unfreeze_chunk_size < 1:
@@ -2817,7 +2773,7 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
     torch.backends.cudnn.benchmark = True
     if str(args.precision) in {"32", "mixed"}:
         torch.set_float32_matmul_precision("high")
-    model_name = "efficientnet_b0_metric_learning_gabor" if use_gabor else "efficientnet_b0_metric_learning"
+    model_name = "efficientnet_b0_metric_learning"
 
     requested_output_dir = Path(args.output_dir)
     requested_log_path = Path(args.log_file)
@@ -2881,14 +2837,6 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
                 "targeted_confusion_penalties": args.targeted_confusion_penalties_resolved,
             },
         )
-    if use_gabor:
-        note = "note: class names are inferred from the dataset root; the Gabor front-end remains an ablation for texture-sensitive separation."
-        print(note)
-        append_jsonl(log_path, {"event": "note", "message": note})
-
-    train_sampler = (
-        make_weighted_sampler(train_dataset, train_dataset.classes, train_dataset.target_for_index, args.seed + 101)
-        if args.weighted_sampling
         else make_epoch_sampler(train_dataset, args.seed + 101, shuffle=True)
     )
     supcon_sampler = (
@@ -2939,7 +2887,6 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         weights_mode=args.weights,
         embedding_dim=args.embedding_dim,
         projection_dim=args.projection_dim,
-        use_gabor=use_gabor,
         args=args,
     ).to(device=device, dtype=model_dtype)
     if resume_checkpoint is not None:
@@ -3851,33 +3798,3 @@ def run_experiment(args: argparse.Namespace, use_gabor: bool) -> int:
         "validation_metrics": val_metrics,
         "test_metrics": test_metrics,
     }
-    if use_gabor:
-        metrics["gabor"] = {
-            "kernel_size": args.gabor_kernel_size,
-            "orientations": args.gabor_orientations,
-            "wavelengths": parse_wavelengths(args.gabor_wavelengths),
-            "sigma": args.gabor_sigma,
-            "gamma": args.gabor_gamma,
-        }
-
-    save_json(output_dir / "metrics.json", metrics)
-    save_json(output_dir / "validation_metrics.json", val_metrics)
-    save_json(output_dir / "test_metrics.json", test_metrics)
-    save_json(output_dir / "test_correct_confidence_by_class.json", test_correct_confidence)
-    final_event = {
-        "event": "run_finished",
-        "validation_accuracy": val_metrics["accuracy"],
-        "validation_raw_accuracy": val_metrics["raw_accuracy"],
-        "test_accuracy": test_metrics["accuracy"],
-        "test_raw_accuracy": test_metrics["raw_accuracy"],
-    }
-    log_json_event(log_path, final_event)
-    print(
-        {
-            "validation_accuracy": val_metrics["accuracy"],
-            "validation_raw_accuracy": val_metrics["raw_accuracy"],
-            "test_accuracy": test_metrics["accuracy"],
-            "test_raw_accuracy": test_metrics["raw_accuracy"],
-        }
-    )
-    return 0
