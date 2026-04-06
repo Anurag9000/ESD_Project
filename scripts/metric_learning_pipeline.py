@@ -584,69 +584,6 @@ def evaluation_tensor_from_image(image: Image.Image, image_size: int) -> torch.T
     return TF.normalize(tensor, IMAGENET_MEAN, IMAGENET_STD)
 
 
-class IdentityFrontEnd(nn.Module):
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x
-
-
-def build_gabor_kernel(
-    kernel_size: int,
-    sigma: float,
-    theta: float,
-    wavelength: float,
-    gamma: float,
-    psi: float = 0.0,
-) -> torch.Tensor:
-    radius = kernel_size // 2
-    coords = torch.arange(-radius, radius + 1, dtype=torch.float32)
-    yy, xx = torch.meshgrid(coords, coords, indexing="ij")
-    x_theta = xx * math.cos(theta) + yy * math.sin(theta)
-    y_theta = -xx * math.sin(theta) + yy * math.cos(theta)
-    gaussian = torch.exp(-(x_theta.square() + (gamma**2) * y_theta.square()) / (2 * sigma * sigma))
-    wave = torch.cos((2 * math.pi * x_theta / wavelength) + psi)
-    kernel = gaussian * wave
-    kernel = kernel - kernel.mean()
-    kernel = kernel / (kernel.abs().sum() + 1e-6)
-    return kernel
-
-
-def __init__(
-        self,
-        kernel_size: int,
-        orientations: int,
-        wavelengths: list[float],
-        sigma: float,
-        gamma: float,
-    ) -> None:
-        super().__init__()
-        kernels = []
-        for wavelength in wavelengths:
-            for orientation_index in range(orientations):
-                theta = orientation_index * math.pi / orientations
-                kernels.append(build_gabor_kernel(kernel_size, sigma, theta, wavelength, gamma))
-        bank = torch.stack(kernels).unsqueeze(1)
-        self.register_buffer("gabor_bank", bank)
-        self.num_filters = bank.shape[0]
-        self.adapter = nn.Sequential(
-            nn.Conv2d(3 + self.num_filters, 3, kernel_size=1, bias=False),
-            nn.BatchNorm2d(3),
-            nn.SiLU(inplace=True),
-        )
-        with torch.no_grad():
-            conv = self.adapter[0]
-            conv.weight.zero_()
-            conv.weight[0, 0, 0, 0] = 1.0
-            conv.weight[1, 1, 0, 0] = 1.0
-            conv.weight[2, 2, 0, 0] = 1.0
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        gray = (0.2989 * x[:, 0:1]) + (0.5870 * x[:, 1:2]) + (0.1140 * x[:, 2:3])
-        responses = F.conv2d(gray, self.gabor_bank, padding=self.gabor_bank.shape[-1] // 2)
-        responses = responses / (responses.abs().amax(dim=(2, 3), keepdim=True) + 1e-6)
-        fused = torch.cat([x, responses], dim=1)
-        return self.adapter(fused)
-
-
 class MetricLearningEfficientNetB0(nn.Module):
     def __init__(
         self,
