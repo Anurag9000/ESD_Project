@@ -55,4 +55,3 @@ RUN_ROOT="$RUN_ROOT" \
 LOG_ROOT="$LOG_ROOT" \
 DATASET_ROOT="$DATASET_ROOT" \
 ./run_full_training_pipeline.sh "${FILTERED_ARGS[@]}"
-@]}"
