@@ -595,11 +595,8 @@ class MetricLearningEfficientNetB0(nn.Module):
     ) -> None:
         super().__init__()
         weights = EfficientNet_B0_Weights.DEFAULT if weights_mode == "default" else None
-        self.front_end: nn.Module
-        else:
-            self.front_end = IdentityFrontEnd()
-
         backbone = efficientnet_b0(weights=weights)
+        self.front_end = nn.Identity()
         self.backbone = backbone
         self.in_features = backbone.classifier[1].in_features
         self.dropout_p = backbone.classifier[0].p if isinstance(backbone.classifier[0], nn.Dropout) else 0.0
@@ -1062,9 +1059,9 @@ def set_trainability_for_supcon(
         parameter.requires_grad = True
     for parameter in model.ce_head.parameters():
         parameter.requires_grad = False
-    if not isinstance(model.front_end, IdentityFrontEnd):
-        for parameter in model.front_end.parameters():
-            parameter.requires_grad = True
+    if not isinstance(model.front_end, nn.Identity):
+        for param in model.front_end.parameters():
+            param.requires_grad = True
 
     if unfrozen_backbone_modules <= 0:
         return []
@@ -1090,9 +1087,9 @@ def set_trainability_for_classifier(
         parameter.requires_grad = True
     for parameter in model.projection_head.parameters():
         parameter.requires_grad = False
-    if not isinstance(model.front_end, IdentityFrontEnd):
-        for parameter in model.front_end.parameters():
-            parameter.requires_grad = True
+    if not isinstance(model.front_end, nn.Identity):
+        for param in model.front_end.parameters():
+            param.requires_grad = True
 
     if unfrozen_backbone_modules <= 0:
         return []
@@ -1157,7 +1154,7 @@ def build_optimizer_from_groups(parameter_groups: list[dict[str, Any]], args: ar
 
 def build_supcon_optimizer(model: MetricLearningEfficientNetB0, args: argparse.Namespace) -> Optimizer:
     head_params = []
-    if not isinstance(model.front_end, IdentityFrontEnd):
+    if not isinstance(model.front_end, nn.Identity):
         head_params.extend(parameter for parameter in model.front_end.parameters() if parameter.requires_grad)
     head_params.extend(parameter for parameter in model.embedding.parameters() if parameter.requires_grad)
     head_params.extend(parameter for parameter in model.embedding_norm.parameters() if parameter.requires_grad)
@@ -1205,7 +1202,7 @@ def build_classifier_optimizer(
     head_group_lr = float(args.head_lr if head_lr is None else head_lr)
     backbone_group_lr = float(args.backbone_lr if backbone_lr is None else backbone_lr)
     head_params = []
-    if not isinstance(model.front_end, IdentityFrontEnd):
+    if not isinstance(model.front_end, nn.Identity):
         head_params.extend(parameter for parameter in model.front_end.parameters() if parameter.requires_grad)
     head_params.extend(parameter for parameter in model.embedding.parameters() if parameter.requires_grad)
     head_params.extend(parameter for parameter in model.embedding_norm.parameters() if parameter.requires_grad)
@@ -1925,12 +1922,12 @@ def evaluate_classifier(
     split: str,
     eval_context: dict[str, object] | None = None,
     args: argparse.Namespace | None = None,
-) -> tuple[float, float, float]:
+) -> dict[str, Any]:
     model.eval()
     total_loss = 0.0
-    total_correct = 0
-    total_raw_correct = 0
     total_seen = 0
+    all_logits = []
+    all_targets = []
     eval_context = dict(eval_context or {})
     with torch.no_grad():
         for eval_step, (images, labels) in enumerate(limited_batches(loader, max_batches), start=1):
@@ -1942,10 +1939,9 @@ def evaluate_classifier(
                 logits = model.classify(embeddings, labels=None)
                 loss, _, _, _ = classifier_loss_from_logits(margin_logits, logits, labels, args)
             total_loss += loss.item() * labels.size(0)
-            qualified_correct, raw_correct = confidence_qualified_correct_count(logits, labels, args.confidence_threshold)
-            total_correct += qualified_correct
-            total_raw_correct += raw_correct
             total_seen += labels.size(0)
+            all_logits.append(logits.detach().cpu().float().numpy())
+            all_targets.append(labels.detach().cpu().numpy())
             if eval_step % log_every_eval_steps == 0:
                 log_json_event(
                     log_path,
@@ -1957,17 +1953,15 @@ def evaluate_classifier(
                         "batch_size": labels.size(0),
                         "samples_seen": total_seen,
                         "running_loss": total_loss / max(1, total_seen),
-                        "running_acc": total_correct / max(1, total_seen),
-                        "running_raw_acc": total_raw_correct / max(1, total_seen),
-                        "confidence_threshold": args.confidence_threshold,
                         **eval_context,
                     },
                 )
-    return (
-        total_loss / max(1, total_seen),
-        total_correct / max(1, total_seen),
-        total_raw_correct / max(1, total_seen),
-    )
+    
+    logits_concat = np.concatenate(all_logits, axis=0)
+    targets_concat = np.concatenate(all_targets, axis=0)
+    metrics = compute_classification_metrics(logits_concat, targets_concat, getattr(loader.dataset, "classes", []), args.confidence_threshold)
+    metrics["loss"] = total_loss / max(1, total_seen)
+    return metrics
 
 
 def collect_logits_and_labels(
@@ -2316,10 +2310,44 @@ def append_jsonl(path: Path, payload: object) -> None:
         handle.write("\n")
 
 
-def log_json_event(path: Path, payload: object) -> None:
-    if isinstance(payload, dict) and "timestamp" not in payload:
+
+
+
+import csv
+from datetime import datetime
+
+
+def append_to_csv(csv_path: Path, data: dict[str, Any]):
+    file_exists = csv_path.exists()
+    import csv
+    # Flatten dict for CSV
+    flat_data = {}
+    for k, v in data.items():
+        if isinstance(v, (list, dict)):
+            import json
+            flat_data[k] = json.dumps(v)
+        else:
+            flat_data[k] = v
+    
+    keys = list(flat_data.keys())
+    with open(csv_path, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=keys)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(flat_data)
+
+
+def log_json_event(path: Path, payload: dict[str, Any]) -> None:
+    if "timestamp" not in payload:
         payload = {"timestamp": datetime.now().astimezone().isoformat(timespec="seconds"), **payload}
-    print(payload)
+    
+    # Log to CSV
+    csv_name = "train_metrics.csv"
+    if payload.get("event") in ["validation_finished", "eval_step", "final_evaluation_finished"]:
+        csv_name = "val_metrics.csv"
+    append_to_csv(path.parent / csv_name, payload)
+    
+    # Log to JSONL
     append_jsonl(path, payload)
 
 
@@ -2781,6 +2809,7 @@ def run_experiment(args: argparse.Namespace) -> int:
         log_json_event(log_path, {"event": "resume_checkpoint_ignored", "message": resume_warning})
 
     train_dataset, val_dataset, test_dataset, supcon_train_dataset, supcon_val_dataset = build_datasets(args)
+    args.class_names_resolved = train_dataset.classes
     args.class_loss_weight_map_resolved = parse_class_loss_weight_specs(list(args.class_loss_weight), train_dataset.class_to_idx)
     args.targeted_confusion_penalties_resolved = parse_targeted_confusion_penalty_specs(
         list(args.targeted_confusion_penalty),
@@ -2798,6 +2827,10 @@ def run_experiment(args: argparse.Namespace) -> int:
                 "targeted_confusion_penalties": args.targeted_confusion_penalties_resolved,
             },
         )
+
+    train_sampler = (
+        make_weighted_sampler(train_dataset, train_dataset.classes, train_dataset.target_for_index, args.seed + 101)
+        if args.weighted_sampling
         else make_epoch_sampler(train_dataset, args.seed + 101, shuffle=True)
     )
     supcon_sampler = (
@@ -3367,7 +3400,7 @@ def run_experiment(args: argparse.Namespace) -> int:
                         "eval_batches": val_eval_batches,
                     },
                 )
-                val_loss, val_acc, val_raw_acc = evaluate_classifier(
+                val_metrics = evaluate_classifier(
                     model=model,
                     loader=val_loader,
                     criterion=classifier_criterion,
@@ -3387,6 +3420,10 @@ def run_experiment(args: argparse.Namespace) -> int:
                     },
                     args=args,
                 )
+                val_loss = val_metrics["loss"]
+                val_acc = val_metrics["accuracy"]
+                val_raw_acc = val_metrics["raw_accuracy"]
+
                 release_training_memory(device, val_loader)
                 log_json_event(
                     log_path,
@@ -3419,6 +3456,27 @@ def run_experiment(args: argparse.Namespace) -> int:
                     phase_best_epoch = epoch
                     phase_best_state = cpu_state_dict(model)
                     phase_wait = 0
+                    
+                    # AUTO-GENERATION: Confusion Matrix for Step-Best
+                    if "confusion_matrix" in val_metrics:
+                        save_confusion_matrix_plot(
+                            output_dir / f"phase_{phase_index}_best_confusion_matrix.png",
+                            np.asarray(val_metrics["confusion_matrix"], dtype=np.int64),
+                            train_dataset.classes,
+                            f"Phase {phase_index} Best Validation Confusion Matrix",
+                        )
+
+                    torch.save({
+                         "model_state_dict" : cpu_state_dict(model),
+                         "class_names" : train_dataset.classes,
+                         "class_to_idx" : train_dataset.class_to_idx,
+                         "args" : vars(args),
+                         "phase_index" : phase_index,
+                         "phase_name" : phase.name,
+                         "val_loss" : val_loss,
+                         "val_raw_acc" : val_raw_acc,
+                    }, output_dir / f"best_phase_{phase_index}.pt" )
+
                 else:
                     phase_wait += 1
 
@@ -3689,6 +3747,8 @@ def run_experiment(args: argparse.Namespace) -> int:
         "history": history,
         "validation_metrics": val_metrics,
         "test_metrics": test_metrics,
+        "best_val_loss": best_val_loss,
+        "best_val_raw_acc": best_val_raw_acc,
     }
     torch.save(final_checkpoint, output_dir / "best.pt")
 
