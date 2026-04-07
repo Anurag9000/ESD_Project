@@ -35,6 +35,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--confidence-threshold", type=float, default=None)
     parser.add_argument("--selected-class", action="append", default=[])
     parser.add_argument("--other-label", default="other")
+    parser.add_argument(
+        "--class-mapping", 
+        type=str, 
+        default="", 
+        help="JSON string for custom class mapping, e.g. '{\"Fiber\": [\"paper\", \"cardboard\"]}'"
+    )
     parser.add_argument("--splits", nargs="+", default=["val", "test"])
     return parser.parse_args()
 
@@ -130,6 +136,9 @@ def main() -> int:
     empty_log_path.parent.mkdir(parents=True, exist_ok=True)
     empty_log_path.touch(exist_ok=True)
 
+    import json as json_lib
+    class_mapping_dict = json_lib.loads(args.class_mapping) if args.class_mapping else None
+
     for split in args.splits:
         if split not in datasets_by_split:
             raise ValueError(f"Unsupported split {split!r}; expected one of train/val/test.")
@@ -150,6 +159,7 @@ def main() -> int:
             targets,
             class_names,
             selected_classes=list(args.selected_class),
+            class_mapping=class_mapping_dict,
             other_label=args.other_label,
         )
         metrics = compute_classification_metrics(

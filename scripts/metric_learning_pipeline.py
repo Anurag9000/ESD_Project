@@ -2687,8 +2687,63 @@ def collapse_logits_and_targets_to_runtime_classes(
     targets: np.ndarray,
     class_names: list[str],
     selected_classes: list[str] | None = None,
+    class_mapping: dict[str, list[str]] | None = None,
     other_label: str = "other",
 ) -> tuple[np.ndarray, np.ndarray, list[str], dict[str, Any]]:
+    """
+    Collapses granular model classes into a smaller set of runtime classes for UI display.
+    Supports simple selection (subsetting) or explicit merging (grouping).
+    """
+    if class_mapping:
+        # 1. Explicit Merging Mode
+        collapsed_class_names = []
+        collapsed_columns = []
+        target_map = {}
+        
+        # Track which source classes have been mapped to avoid duplicates
+        mapped_source_indices = set()
+        
+        for custom_name, source_names in class_mapping.items():
+            source_indices = [class_names.index(name) for name in source_names if name in class_names]
+            if not source_indices:
+                continue
+                
+            # Aggregate Logits: LogSumExp for correct probability preservation
+            group_logits = logits[:, source_indices]
+            group_max = np.max(group_logits, axis=1, keepdims=True)
+            group_lse = group_max + np.log(np.exp(group_logits - group_max).sum(axis=1, keepdims=True))
+            
+            collapsed_columns.append(group_lse)
+            new_index = len(collapsed_class_names)
+            collapsed_class_names.append(custom_name)
+            
+            for idx in source_indices:
+                target_map[idx] = new_index
+                mapped_source_indices.add(idx)
+        
+        # Handle residual 'Other' if any classes weren't mapped
+        residual_indices = [i for i in range(len(class_names)) if i not in mapped_source_indices]
+        if residual_indices:
+            other_logits = logits[:, residual_indices]
+            other_max = np.max(other_logits, axis=1, keepdims=True)
+            other_lse = other_max + np.log(np.exp(other_logits - other_max).sum(axis=1, keepdims=True))
+            
+            collapsed_columns.append(other_lse)
+            other_index = len(collapsed_class_names)
+            collapsed_class_names.append(other_label)
+            for idx in residual_indices:
+                target_map[idx] = other_index
+
+        final_logits = np.concatenate(collapsed_columns, axis=1)
+        final_targets = np.asarray([target_map.get(int(t), -1) for t in targets], dtype=np.int64)
+        
+        return final_logits, final_targets, collapsed_class_names, {
+            "mode": "explicit_merge",
+            "mapping": class_mapping,
+            "collapse_applied": True
+        }
+
+    # 2. Simple Subsetting Mode (Original behavior)
     resolved_selected = resolve_runtime_selected_classes(class_names, selected_classes)
     if not selected_classes:
         return (
