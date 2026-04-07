@@ -1,66 +1,54 @@
-# PyTorch Development Environment and Workflow
+# PyTorch Environment and Execution Manual
 
-## Environment Configuration
+## 1. Environment Setup
 
-The development environment is optimized for a Linux-based architecture with NVIDIA GPU acceleration.
+The ESD platform is optimized for CUDA-accelerated Linux environments.
 
-### 1. Virtual Environment Initialization
-Initialization of the Python virtual environment and CUDA-specific PyTorch distribution is automated.
+### Initialization
 ```bash
-# Initialize venv with CUDA 12.8 wheel indices
+# Initialize Python venv with CUDA 12.8 wheel indices
+chmod +x scripts/setup_venv_cuda.sh
 ./scripts/setup_venv_cuda.sh .venv
 source .venv/bin/activate
 ```
 
-### 2. Dependency Management
-Standardized requirements are maintained in `requirements-cu128.txt`, including `torch`, `torchvision`, and `huggingface_hub`.
-
 ---
 
-## Dataset Definition and Contract
+## 2. Training Execution
 
-The training pipeline implements a **Material-Oriented Dynamic Taxonomy**.
-- **Dataset Root:** `Dataset_Final/`
-- **Structure:** `Dataset_Final/<class_name>/<image_files>`
-- **Dynamic Inference:** At runtime, the class list is derived from the immediate subdirectory names of the root.
+The training process is automated via deterministic shell scripts.
 
----
-
-## Model Training Lifecycle
-
-The training lifecycle is divided into three distinct phases to maximize feature extraction and model precision.
-
-### Phase 1: Progressive Fine-Tuning
-The system begins with a frozen EfficientNet-B0 backbone, incrementally unfreezing backbone layers in discrete slices while decaying the learning rate. This ensures the classification head is stabilized before higher-order features are specialized.
-
-### Phase 2: Recursive Validation Loss Refinement
-Utilizes the `run_recursive_refinement.py` module to iteratively train the model until the validation loss improvement falls below the defined `threshold`. Each successful iteration halves the head and backbone learning rates for the subsequent run.
-
-### Phase 3: Recursive Validation Accuracy Refinement
-The final refinement stage prioritizes validation raw accuracy. This ensures that the categorical boundaries are fine-tuned for maximal separation across the entire taxonomy.
-
----
-
-## Pipeline Execution
-
-Primary Entry Point:
+### Full Pipeline Orchestration
+Executes SupCon pre-training, Progressive Unfreezing, and Recursive Refinement (Loss + Accuracy).
 ```bash
-# Sets performance power profile and initiates training sequence
-./run_training.sh
+./run_full_training_pipeline.sh
 ```
 
-Post-Training Evaluation:
-The evaluation suite supports **Runtime Taxonomy Collapsing**, allowing the user to evaluate performance for any arbitrary subset of classes while treating others as the residual `Other` class.
+### Manual Execution (Standardized Params)
 ```bash
-# Evaluate model against a selected subset of material classes
+python scripts/train_efficientnet_b0_progressive.py \
+  --dataset-root Dataset_Final \
+  --batch-size 224 \
+  --precision mixed \
+  --optimizer sam
+```
+
+---
+
+## 3. Evaluation and Verification
+
+### Model Evaluation
+Supports runtime taxonomy collapsing for focused performance analysis.
+```bash
 python scripts/evaluate_saved_classifier.py \
-  --checkpoint Results/accepted_best.pt \
+  --checkpoint Results/best.pt \
   --selected-class metal \
   --selected-class organic \
   --selected-class paper
 ```
 
----
-
-## Verification and Standards
-All scripts must adhere to strict type-hinting and professional documentation standards. Legacy artifacts, including Gabor-specific logic and experimental search wordlists, must be rigorously excluded from the production-grade baseline.
+### Data Audit
+Verifies the 1:1 synchronization between physical files and logical metadata.
+```bash
+python scripts/audit_dataset_integrity.py
+```

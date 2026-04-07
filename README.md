@@ -1,85 +1,53 @@
 # Electronic Smart Dustbin (ESD) Platform
 
-## Project Summary
-The Electronic Smart Dustbin (ESD) platform is a production-grade ecosystem for automated waste classification and real-time fleet monitoring. It integrates a high-performance machine learning pipeline with a native Android dashboard to provide a seamless "Edge-to-Cloud" experience.
+The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for automated waste classification and real-time fleet monitoring. It integrates an advanced machine learning pipeline with a reactive Android dashboard to provide a verified "Edge-to-Cloud" infrastructure.
 
-The project is defined by its massive, purified dataset of over **1.04 million images** and a multi-stage training orchestration designed for maximal categorical separation and generalization.
+## 1. System Components
 
----
+### Machine Learning Engine
+- **Backbone:** EfficientNet-B0 (5.3M Parameters).
+- **Corpus:** 1,045,679 verified images (WSS-1.04M).
+- **Taxonomy:** 15 non-overlapping material classes.
+- **Orchestration:** Multi-phase training involving SupCon pre-training, Progressive Unfreezing, and Recursive Metric Refinement.
 
-## Technical Architecture
-
-### 1. Machine Learning Pipeline (Python/PyTorch)
-The core classification engine utilizes the **EfficientNet-B0** architecture, selected for its optimal balance of parameter efficiency and feature representation.
-
-#### Training Methodology
-- **Supervised Contrastive Learning (SupCon):** An optional pre-training phase that optimizes the embedding space by pulling similar classes together and pushing dissimilar ones apart before classification training begins.
-- **Progressive Unfreezing:** To preserve pretrained features, the pipeline iteratively unfreezes the backbone in chunks (defaulting to 20-module slices), transitioning from the classification head down through the feature extractor.
-- **Recursive Refinement Suite:**
-    - **Loss Optimization:** Iteratively reduces validation loss through learning rate halving and early stopping.
-    - **Accuracy Optimization:** A final refinement stage targeting validation raw accuracy to maximize real-world performance.
-- **Advanced Optimization:** Employs **AdamW** and **Sharpness-Aware Minimization (SAM)** to find flatter minima, enhancing the model's ability to generalize to unseen waste items.
-- **Deterministic Augmentation:** A 16x split-safe online augmentation bank (shadows, glares, rotations) ensures the model is robust against environmental variances in physical dustbins.
-
-### 2. SmartBin Android Application (Kotlin/Compose)
-A native monitoring interface built for city-scale fleet management.
-- **Fleet Mapping:** Utilizes **OpenStreetMap (OSM)** via MapLibre for a billing-free, high-performance geographic view of all active bins.
-- **Real-Time Synchronicity:** Integrated with a WebSocket/SSE backend to provide "instant-pulse" visual feedback when a waste event occurs at the edge.
-- **Deep Analytics:** Features professional-grade charts (Vico) with custom **Seasonal Filtering** (Q1: Feb-Apr, Q2: May-Jul, etc.) and multi-bin aggregation logic.
-- **Architecture:** Follows **Clean Architecture** and **MVVM**, utilizing Hilt for dependency injection and StateFlow for reactive UI updates.
+### SmartBin Android Fleet Dashboard
+- **Framework:** Native Kotlin, Jetpack Compose, Material 3.
+- **Geospatial:** OpenStreetMap (OSM) via MapLibre.
+- **Real-Time:** WebSocket-based event streaming for instantaneous updates.
+- **Analytics:** Professional time-series and composition charting (Vico).
 
 ---
 
-## The ESD Dataset (WSS-1.04M)
+## 2. Platform Summary
 
-The platform is powered by the **WSS-1.04M** corpus, containing **1,045,679 verified images** across 15 synchronized classes. This dataset is the result of an exhaustive normalization and purification process from over 20 primary and academic sources.
-
-### Standardized Taxonomy & Counts
-| Class | Image Count | Description |
-| :--- | :--- | :--- |
-| **organic** | 391,545 | Biodegradable waste, food scraps, and vegetation. |
-| **metal** | 134,510 | Aluminum cans, ferrous scrap, and industrial metal. |
-| **clothes** | 104,417 | Textiles, apparel, and woven fabrics. |
-| **hard_plastic** | 67,352 | High-density polymers and rigid containers. |
-| **paper** | 65,583 | Non-corrugated cellulose, office paper, and newsprint. |
-| **cardboard** | 64,050 | Corrugated shipping materials and heavy cartons. |
-| **glass** | 61,296 | Silica-based containers (clear and pigmented). |
-| **plastic** | 42,494 | General polymer waste and mixed plastics. |
-| **soft_plastic** | 38,346 | Flexible films, bags, and thin polymer sheets. |
-| **shoes** | 37,294 | Dedicated footwear and leather goods category. |
-| **battery** | 11,695 | Electrochemical cells and power storage units. |
-| **medical** | 8,422 | Clinical waste and personal protective equipment. |
-| **ewaste** | 7,910 | Electronic components, PCBs, and peripherals. |
-| **rigid_plastic** | 7,600 | Specialized high-rigidity industrial polymers. |
-| **ceramic** | 3,173 | Clay-based materials and pottery shards. |
-
-### Integration & Purity
-The dataset was constructed by merging and remapping several authoritative sources, including **TrashNet**, **TACO**, **RealWaste**, **WasteVision**, and **TrashBox**. 
-
-**Purification Highlights:**
-- **Cardboard/Paper Separation:** Exhaustive keyword and visual audit to ensure all corrugated materials are strictly in `cardboard` and high-grade cellulose is in `paper`.
-- **Footwear Isolation:** Segregated `shoes` from general `clothes` and `organic` (leather) to prevent texture confusion.
-- **Metadata Synchronization:** 100% 1:1 physical-to-logical synchronization verified via automated audit scripts.
+| Metric | Specification |
+| :--- | :--- |
+| **Current Taxonomy** | battery, cardboard, ceramic, clothes, ewaste, glass, hard_plastic, medical, metal, organic, paper, plastic, rigid_plastic, shoes, soft_plastic |
+| **Dataset Size** | 1,045,679 verified images |
+| **Model Architecture** | EfficientNet-B0 |
+| **Optimization** | AdamW + SAM (Sharpness-Aware Minimization) |
+| **Training Precision** | Mixed Precision (FP16) via `torch.amp` |
+| **Mobile State** | Clean Architecture / MVVM / Hilt |
 
 ---
 
-## Deployment & Execution
+## 3. Documentation Index
+- **`ARCHITECTURE_AND_PLAN.md`**: Technical specification of the model and training pipeline.
+- **`DATASET_SPECIFICATION.md`**: Detailed breakdown of the 1.04M image corpus and class definitions.
+- **`PYTORCH_SETUP.md`**: Environment configuration and execution manual.
+- **`SmartBin_Android/docs/`**: Mobile-specific architectural and product specifications.
 
-### Training Environment
+## 4. Execution Manual
+
+### Training Pipeline
 ```bash
-# Setup the CUDA-enabled environment
 ./scripts/setup_venv_cuda.sh .venv
 source .venv/bin/activate
-
-# Execute the full progressive and recursive pipeline
 ./run_full_training_pipeline.sh
 ```
 
-### Dashboard Development
+### Android Dashboard
 ```bash
 cd SmartBin_Android
 ./gradlew :app:assembleDebug
 ```
-
-## System Integrity
-Every component of this repository—from the data metadata to the model saving logic—has been exhaustively verified. The pipeline generates automated confusion matrices and exhaustive metrics CSVs at every step boundary to ensure complete transparency in model evolution.

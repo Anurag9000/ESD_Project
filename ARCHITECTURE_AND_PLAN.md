@@ -1,68 +1,46 @@
-# ESD Platform: Architectural Design and Pipeline Orchestration
+# ESD Platform: Technical Architecture and Training Orchestration
 
-This document provides an exhaustive technical specification of the Electronic Smart Dustbin (ESD) platform, detailing the model architecture, training methodologies, and end-to-end integration strategy.
+This document defines the current architectural specifications and training methodologies for the ESD classification system.
 
-## 1. Model Architecture
+## 1. Model Specifications
 
-The classification engine is engineered for high-accuracy material identification with a computational profile suitable for edge deployment.
+The classification engine utilizes a highly efficient feature extractor tuned for industrial material identification.
 
-### 1.1 Core Backbone
 - **Architecture:** EfficientNet-B0.
-- **Parameters:** ~5.3 million.
-- **Feature Extraction:** Utilizes depthwise separable convolutions and MBConv blocks to maximize feature representation while minimizing floating-point operations (FLOPs).
-- **Inference Latency:** Optimized for sub-100ms processing on edge hardware (e.g., Raspberry Pi 4 with Coral/GPU acceleration).
-
-### 1.2 Classification Head
-- **Global Average Pooling (GAP):** Reduces spatial dimensions while preserving categorical information.
-- **Dropout Layer:** Implemented at 0.2 to prevent overfitting during the specialized fine-tuning stages.
-- **Linear Projection:** Maps 1280 feature vectors to the 15-class industrial taxonomy.
+- **Parameters:** ~5.3 Million.
+- **Precision:** FP16 Mixed Precision.
+- **Classification Head:** 1280-dimension Global Average Pooling (GAP) followed by a 15-node linear classifier.
+- **Optimization Strategy:** Sharpness-Aware Minimization (SAM) combined with AdamW weight decay regularization.
 
 ---
 
-## 2. Pipeline Orchestration
+## 2. Multi-Stage Training Pipeline
 
-The training process follows a deterministic, multi-phase evolution to ensure the model achieves stable convergence across the 1.04M image corpus.
+The system progresses through four deterministic phases to achieve maximal convergence and categorical separation.
 
-### 2.1 Phase I: Progressive Layer Unfreezing
-To preserve the robust feature extractors learned on ImageNet while adapting to the waste domain, the system employs **Progressive Unfreezing**:
-1. **Head Stabilization:** Backbone is frozen; only the classification head is trained for 5 epochs.
-2. **Iterative Slicing:** The backbone is unfrozen in discrete 20-module chunks, starting from the final convolutional blocks and proceeding toward the input layer.
-3. **Learning Rate Decay:** Each subsequent unfreezing step utilizes a reduced learning rate to maintain gradient stability.
+### Phase I: Supervised Contrastive Pre-training (SupCon)
+- **Objective:** Optimize the embedding space by pulling positive samples (same class) together and pushing negative samples apart.
+- **Outcome:** A robust feature representation that precedes the traditional classification training.
 
-### 2.2 Phase II: Recursive Loss Minimization
-Utilizes a recursive logic gate to drive validation loss to its absolute minimum:
-- **Loop Logic:** The model is trained until validation loss plateaus.
-- **LR Halving:** Upon plateau detection, the system automatically restores the best state, halves the learning rate, and restarts the iteration.
-- **Convergence:** The phase concludes when improvement falls below the 1e-4 threshold.
+### Phase II: Progressive Backbone Unfreezing
+- **Process:** The model begins with a frozen backbone. It iteratively unfreezes 20-module slices, moving from the classification head toward the input layer.
+- **Goal:** Stabilize the head before fine-tuning higher-order spatial features.
 
-### 2.3 Phase III: Recursive Accuracy Refinement
-The final optimization phase shifts the objective function to **Validation Raw Accuracy**:
-- **Categorical Focus:** Specifically targets the refinement of decision boundaries for closely related classes (e.g., `cardboard` vs. `paper`).
-- **Patience Engine:** Utilizes an early-stopping mechanism with a patience of 5 validation windows to ensure peak performance is captured without overfitting.
+### Phase III: Recursive Validation Loss Minimization
+- **Mechanism:** Iteratively trains the model until the validation loss improvement drops below the 1e-4 threshold.
+- **Automation:** Upon each plateau, the system restores the best state, halves the learning rate, and restarts the iteration.
+
+### Phase IV: Recursive Validation Accuracy Refinement
+- **Final Polish:** Specifically targets the maximization of categorical precision by refining the model based on raw validation accuracy.
 
 ---
 
-## 3. Data Strategy and Robustness
+## 3. Data Robustness and Visualization
 
-### 3.1 Deterministic Augmentation Bank
-To simulate the varied conditions of physical bins, an online augmentation pipeline applies 16 variants to every training sample:
-- **Illumination:** Random shadows and glare intensity to simulate indoor/outdoor lighting.
-- **Geometry:** 360-degree rotations, horizontal/vertical flips, and random cropping.
-- **Texture:** Gaussian noise and slight blurring to account for lens smudging or dust.
+### Deterministic Augmentation
+Every training sample undergoes a 16x split-safe online augmentation cycle, simulating shadows, glares, and lens distortions found in physical dustbin environments.
 
-### 3.2 Precision and Performance
-- **Mixed Precision:** Employs `torch.amp` (FP16) to accelerate training and reduce memory footprint, allowing for a batch size of 224 on consumer-grade hardware (NVIDIA RTX 3050).
-- **Optimization:** Uses **AdamW** for weight decay regularization and **SAM (Sharpness-Aware Minimization)** to find flatter loss minima, significantly improving generalization.
-
----
-
-## 4. Platform Integration
-
-### 4.1 Edge Classification
-- The model is exported to TorchScript or ONNX for deployment on Raspberry Pi 4.
-- High-confidence predictions (>0.80) are transmitted via JSON payload to the backend aggregator.
-
-### 4.2 Real-Time Monitoring
-- **Backend:** A FastAPI service aggregates events from the fleet of bins.
-- **Android Dashboard:** Connects via WebSockets to provide instantaneous visualization of waste composition and geographic distribution.
-- **Data Flow:** Every "Bin" event triggers a visual pulse on the map and a real-time update to the analytics composition charts.
+### Step-Wise Analytics
+- **Confusion Matrices:** Automated PNG generation at the end of every "Best Phase" save.
+- **CSV Metrics:** Exhaustive logging of every training step and validation pass into `train_metrics.csv` and `val_metrics.csv`.
+- **Checkpointing:** High-frequency saving of `step_last.pt` and `best_phase_X.pt` to ensure zero data loss during training.
