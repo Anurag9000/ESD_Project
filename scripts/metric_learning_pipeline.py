@@ -982,10 +982,16 @@ def build_auto_split_datasets(
     new_classes = sorted(list(new_classes))
     new_class_to_idx = {cls: i for i, cls in enumerate(new_classes)}
     
+    # Create a reverse lookup for fast class re-mapping
+    reverse_map = {}
+    for target, sources in effective_mapping.items():
+        for s in sources:
+            reverse_map[s] = target
+
     for i in range(len(base_dataset.samples)):
         path, old_target = base_dataset.samples[i]
         old_class = base_dataset.classes[old_target]
-        new_class = alias_map.get(old_class, old_class)
+        new_class = reverse_map.get(old_class, old_class)
         base_dataset.samples[i] = (path, new_class_to_idx[new_class])
         
     base_dataset.classes = new_classes
@@ -2670,7 +2676,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--head-lr", type=float, default=1e-3)
     parser.add_argument("--backbone-lr", type=float, default=1e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
-    parser.add_argument("--optimizer", choices=["sam", "adamw"], default="sam")
+    parser.add_argument("--optimizer", choices=["sam", "adamw"], default="adamw")
     parser.add_argument("--precision", choices=("mixed", "32", "64"), default="mixed")
     parser.add_argument("--adam-beta1", type=float, default=0.9)
     parser.add_argument("--adam-beta2", type=float, default=0.999)
@@ -2687,6 +2693,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-file", default="logs/metric_learning_experiment.log.jsonl")
     parser.add_argument("--resume-checkpoint", default="")
     parser.add_argument("--class-mapping", type=str, default="", help="JSON string for training-time class merging")
+    parser.add_argument("--auto-split-ratios", default="0.7,0.2,0.1")
     parser.add_argument("--resume-mode", choices=("latest", "global_best", "phase_best"), default="latest")
     parser.add_argument("--resume-phase-index", type=int, default=0)
     parser.add_argument("--resume-phase-name", default="")
@@ -3925,4 +3932,6 @@ def run_experiment(args: argparse.Namespace) -> int:
         "history": history,
         "validation_metrics": val_metrics,
         "test_metrics": test_metrics,
+    }
+rics,
     }

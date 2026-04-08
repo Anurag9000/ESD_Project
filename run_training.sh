@@ -39,7 +39,6 @@ mkdir -p "$RUN_ROOT" "$LOG_ROOT"
 python scripts/train_efficientnet_b0_progressive.py \
   --dataset-root "$DATASET_ROOT" \
   --weighted-sampling \
-  --batch-size 224 \
   --output-dir "$PROGRESSIVE_OUTPUT_DIR" \
   --log-file "$PROGRESSIVE_LOG_FILE" \
   "${FILTERED_ARGS[@]}"
