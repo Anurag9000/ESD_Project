@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import argparse
 import copy
+import fcntl
 import gc
 import io
 import json
+import logging
 import math
+import os
 import random
+import warnings
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -39,6 +43,12 @@ DEFOCUS_BLUR_PROBABILITY = 0.18
 RESOLUTION_DEGRADE_PROBABILITY = 0.20
 TRUNCATION_PROBABILITY = 0.20
 SMUDGE_PROBABILITY = 0.18
+PALETTE_TRANSPARENCY_WARNING = "Palette images with Transparency expressed in bytes should be converted to RGBA images"
+RUNTIME_BAD_SAMPLE_CLEANUP_LOG = "runtime_bad_sample_cleanup.jsonl"
+RUNTIME_BAD_SAMPLE_CLEANUP_LOCK = ".runtime_bad_sample_cleanup.lock"
+
+warnings.filterwarnings("ignore", message=PALETTE_TRANSPARENCY_WARNING, category=UserWarning)
+logging.basicConfig(level=logging.WARNING)
 
 
 @dataclass
@@ -62,6 +72,8 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
         base_dataset: datasets.ImageFolder | None = None,
         samples: list[tuple[str, int]] | None = None,
         class_mapping: dict[str, list[str]] | None = None,
+        dataset_root: Path | None = None,
+        enable_runtime_bad_sample_cleanup: bool = False,
     ) -> None:
         if base_dataset is None:
             if root is None:
@@ -74,6 +86,9 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
         self.seed = seed
         self.gaussian_sigmas = gaussian_sigmas
         self.apply_augmentation = apply_augmentation
+        self.dataset_root = dataset_root
+        self.enable_runtime_bad_sample_cleanup = enable_runtime_bad_sample_cleanup
+        self.disabled_paths: set[str] = set()
         
         # Original metadata
         self.classes = self.base_dataset.classes
@@ -148,29 +163,90 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
             + view_offset * 1_299_721
         )
 
-    def load_augmented(self, source_index: int, variant_index: int, view_offset: int = 0) -> tuple[torch.Tensor, int]:
-        path, target = self.samples[source_index]
-        try:
-            image = self.base_dataset.loader(path).convert("RGB")
-        except Exception as e:
-            # Fault Tolerance: If an image is corrupted, find a random valid replacement from the SAME class
-            # This prevents the 1.04M image run from crashing on a single bad file.
-            import logging
-            logging.warning(f"Skipping corrupted image {path}: {e}")
-            
-            # Find all indices belonging to the same target class
-            same_class_indices = [i for i, (_, t) in enumerate(self.samples) if t == target]
-            # Pick a new index using a stable but different seed
-            fallback_rng = random.Random(source_index + self.seed + self.current_epoch)
-            new_source_index = fallback_rng.choice(same_class_indices)
-            return self.load_augmented(new_source_index, variant_index, view_offset)
+    def _fallback_index_for_target(self, source_index: int, target: int, attempt: int) -> int | None:
+        same_class_indices = [
+            i
+            for i, (candidate_path, candidate_target) in enumerate(self.samples)
+            if candidate_target == target and candidate_path not in self.disabled_paths
+        ]
+        if not same_class_indices:
+            return None
+        fallback_rng = random.Random(source_index + self.seed + self.current_epoch + attempt)
+        return fallback_rng.choice(same_class_indices)
 
-        if self.apply_augmentation:
-            rng = random.Random(self._seed_for_variant(source_index, variant_index, view_offset))
-            tensor = augmented_tensor_from_image(image, self.image_size, rng, self.gaussian_sigmas)
-        else:
-            tensor = evaluation_tensor_from_image(image, self.image_size)
-        return tensor, target
+    def _cleanup_bad_sample(self, path: str, target: int, attempt: int, error: Exception) -> None:
+        self.disabled_paths.add(path)
+        cleanup_event: dict[str, Any] = {
+            "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "event": "runtime_bad_sample_detected",
+            "split": self.split_name,
+            "attempt": attempt,
+            "path": path,
+            "target_index": int(target),
+            "target_class": self.classes[target] if 0 <= target < len(self.classes) else None,
+            "error_type": type(error).__name__,
+            "error": str(error),
+            "cleanup_enabled": bool(self.enable_runtime_bad_sample_cleanup),
+        }
+
+        if self.enable_runtime_bad_sample_cleanup and self.dataset_root is not None:
+            file_removed = delete_bad_sample_file(Path(path))
+            metadata_removed = remove_bad_sample_from_metadata(self.dataset_root, Path(path))
+            cleanup_event["file_removed"] = file_removed
+            cleanup_event["metadata_removed"] = metadata_removed
+            append_jsonl(self.dataset_root / RUNTIME_BAD_SAMPLE_CLEANUP_LOG, cleanup_event)
+            console_line = format_console_event(cleanup_event)
+            if console_line:
+                print(console_line, flush=True)
+
+        logging.warning(
+            "Attempt %s/100: Skipping corrupted image %s: %s",
+            attempt,
+            path,
+            error,
+        )
+
+    def load_augmented(self, source_index: int, variant_index: int, view_offset: int = 0) -> tuple[torch.Tensor, int]:
+        max_attempts = 100
+        attempt = 0
+        current_source_index = source_index
+        
+        while attempt < max_attempts:
+            path, target = self.samples[current_source_index]
+            if path in self.disabled_paths:
+                attempt += 1
+                next_index = self._fallback_index_for_target(source_index, target, attempt)
+                if next_index is None:
+                    break
+                current_source_index = next_index
+                continue
+            try:
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", message=PALETTE_TRANSPARENCY_WARNING, category=UserWarning)
+                    warnings.simplefilter("error", Image.DecompressionBombWarning)
+                    raw_image = self.base_dataset.loader(path)
+                # Handle images with transparency or palettes properly before training
+                if raw_image.mode in ("RGBA", "P"):
+                    image = raw_image.convert("RGB")
+                else:
+                    image = raw_image.convert("RGB")
+                
+                if self.apply_augmentation:
+                    rng = random.Random(self._seed_for_variant(source_index, variant_index, view_offset) + attempt)
+                    tensor = augmented_tensor_from_image(image, self.image_size, rng, self.gaussian_sigmas)
+                else:
+                    tensor = evaluation_tensor_from_image(image, self.image_size)
+                return tensor, target
+                
+            except Exception as e:
+                attempt += 1
+                self._cleanup_bad_sample(path, target, attempt, e)
+                next_index = self._fallback_index_for_target(source_index, target, attempt)
+                if next_index is None:
+                    break
+                current_source_index = next_index
+
+        raise RuntimeError(f"Could not find a valid image for class index {target} after {max_attempts} attempts.")
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, int]:
         source_index = index % len(self.samples)
@@ -913,13 +989,40 @@ def build_datasets(
     root = Path(args.dataset_root)
     if has_explicit_split_layout(root):
         train_dataset = DeterministicAugmentedImageFolder(
-            root / "train", args.image_size, args.augment_repeats, "train", args.seed, args.augment_gaussian_sigmas, apply_augmentation=True, class_mapping=class_mapping
+            root / "train",
+            args.image_size,
+            args.augment_repeats,
+            "train",
+            args.seed,
+            args.augment_gaussian_sigmas,
+            apply_augmentation=True,
+            class_mapping=class_mapping,
+            dataset_root=root,
+            enable_runtime_bad_sample_cleanup=args.runtime_bad_sample_cleanup,
         )
         val_dataset = DeterministicAugmentedImageFolder(
-            root / "val", args.image_size, 1, "val", args.seed, args.augment_gaussian_sigmas, apply_augmentation=False, class_mapping=class_mapping
+            root / "val",
+            args.image_size,
+            1,
+            "val",
+            args.seed,
+            args.augment_gaussian_sigmas,
+            apply_augmentation=False,
+            class_mapping=class_mapping,
+            dataset_root=root,
+            enable_runtime_bad_sample_cleanup=args.runtime_bad_sample_cleanup,
         )
         test_dataset = DeterministicAugmentedImageFolder(
-            root / "test", args.image_size, args.augment_repeats, "test", args.seed, args.augment_gaussian_sigmas, apply_augmentation=True, class_mapping=class_mapping
+            root / "test",
+            args.image_size,
+            args.augment_repeats,
+            "test",
+            args.seed,
+            args.augment_gaussian_sigmas,
+            apply_augmentation=True,
+            class_mapping=class_mapping,
+            dataset_root=root,
+            enable_runtime_bad_sample_cleanup=args.runtime_bad_sample_cleanup,
         )
         if train_dataset.classes != val_dataset.classes or train_dataset.classes != test_dataset.classes:
             raise ValueError("Class folders differ across train/val/test")
@@ -1060,6 +1163,8 @@ def build_auto_split_datasets(
         apply_augmentation=True,
         base_dataset=base_dataset,
         samples=train_samples,
+        dataset_root=root,
+        enable_runtime_bad_sample_cleanup=args.runtime_bad_sample_cleanup,
     )
     val_dataset = DeterministicAugmentedImageFolder(
         None,
@@ -1071,6 +1176,8 @@ def build_auto_split_datasets(
         apply_augmentation=False,
         base_dataset=base_dataset,
         samples=val_samples,
+        dataset_root=root,
+        enable_runtime_bad_sample_cleanup=args.runtime_bad_sample_cleanup,
     )
     test_dataset = DeterministicAugmentedImageFolder(
         None,
@@ -1082,6 +1189,8 @@ def build_auto_split_datasets(
         apply_augmentation=True,
         base_dataset=base_dataset,
         samples=test_samples,
+        dataset_root=root,
+        enable_runtime_bad_sample_cleanup=args.runtime_bad_sample_cleanup,
     )
     return train_dataset, val_dataset, test_dataset
 
@@ -2381,6 +2490,98 @@ def append_jsonl(path: Path, payload: object) -> None:
         handle.write("\n")
 
 
+def delete_bad_sample_file(path: Path) -> bool:
+    try:
+        path.unlink(missing_ok=True)
+    except Exception:
+        return False
+    return True
+
+
+def remove_bad_sample_from_metadata(dataset_root: Path, sample_path: Path) -> int:
+    metadata_path = dataset_root / "dataset_metadata.json"
+    if not metadata_path.exists():
+        return 0
+
+    lock_path = dataset_root / RUNTIME_BAD_SAMPLE_CLEANUP_LOCK
+    normalized_targets = {sample_path.as_posix()}
+    try:
+        relative_path = sample_path.relative_to(dataset_root).as_posix()
+        normalized_targets.add(relative_path)
+        normalized_targets.add(f"{dataset_root.name}/{relative_path}")
+    except ValueError:
+        pass
+
+    with lock_path.open("a+", encoding="utf-8") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        try:
+            records = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if not isinstance(records, list):
+                return 0
+            filtered = [
+                record
+                for record in records
+                if str(record.get("file_path", "")).replace(os.sep, "/") not in normalized_targets
+            ]
+            removed = len(records) - len(filtered)
+            if removed > 0:
+                temp_path = metadata_path.with_suffix(".json.tmp")
+                temp_path.write_text(json.dumps(filtered, ensure_ascii=True, indent=2), encoding="utf-8")
+                temp_path.replace(metadata_path)
+            return removed
+        finally:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
+
+def format_console_event(payload: dict[str, Any]) -> str | None:
+    event = payload.get("event")
+    timestamp = payload.get("timestamp", "")
+    if event == "run_started":
+        return (
+            f"[{timestamp}] run_started model={payload.get('model_name')} "
+            f"output_dir={payload.get('output_dir')}"
+        )
+    if event == "dataset_schedule":
+        return (
+            f"[{timestamp}] dataset_schedule train_steps={payload.get('train_steps_per_epoch')} "
+            f"val_steps={payload.get('val_steps_per_eval')} test_steps={payload.get('test_steps_per_eval')}"
+        )
+    if event == "train_step":
+        pieces = [
+            f"[{timestamp}] train_step",
+            f"stage={payload.get('stage')}",
+            f"epoch={payload.get('epoch')}",
+            f"epoch_step={payload.get('epoch_step')}",
+            f"global_step={payload.get('global_train_step')}",
+            f"loss={payload.get('running_loss'):.6f}" if isinstance(payload.get("running_loss"), (int, float)) else None,
+        ]
+        if isinstance(payload.get("running_acc"), (int, float)):
+            pieces.append(f"acc={payload.get('running_acc'):.6f}")
+        if isinstance(payload.get("running_raw_acc"), (int, float)):
+            pieces.append(f"raw_acc={payload.get('running_raw_acc'):.6f}")
+        learning_rates = payload.get("learning_rates")
+        if learning_rates:
+            pieces.append("lr=" + ",".join(f"{lr:.8g}" for lr in learning_rates))
+        return " ".join(piece for piece in pieces if piece)
+    if event in {"validation_finished", "final_evaluation_finished"}:
+        pieces = [
+            f"[{timestamp}] {event}",
+            f"stage={payload.get('stage')}",
+            f"epoch={payload.get('epoch')}",
+            f"loss={payload.get('loss'):.6f}" if isinstance(payload.get("loss"), (int, float)) else None,
+            f"raw_acc={payload.get('raw_accuracy'):.6f}" if isinstance(payload.get("raw_accuracy"), (int, float)) else None,
+            f"acc={payload.get('qualified_accuracy'):.6f}" if isinstance(payload.get("qualified_accuracy"), (int, float)) else None,
+        ]
+        return " ".join(piece for piece in pieces if piece)
+    if event == "runtime_bad_sample_detected":
+        return (
+            f"[{timestamp}] runtime_bad_sample_detected split={payload.get('split')} "
+            f"path={payload.get('path')} removed={payload.get('file_removed')} "
+            f"metadata_removed={payload.get('metadata_removed')} error={payload.get('error_type')}: {payload.get('error')}"
+        )
+    return None
+
+
 
 
 
@@ -2420,6 +2621,9 @@ def log_json_event(path: Path, payload: dict[str, Any]) -> None:
     
     # Log to JSONL
     append_jsonl(path, payload)
+    console_line = format_console_event(payload)
+    if console_line:
+        print(console_line, flush=True)
 
 
 def cpu_state_dict(model: nn.Module) -> dict[str, torch.Tensor]:
@@ -2661,8 +2865,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset-root", default="Dataset_Final")
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--batch-size", type=int, default=224)
-    parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument("--prefetch-factor", type=int, default=2)
+    parser.add_argument("--num-workers", type=int, default=2)
+    parser.add_argument("--prefetch-factor", type=int, default=1)
     parser.add_argument("--embedding-dim", type=int, default=128)
     parser.add_argument("--projection-dim", type=int, default=128)
     parser.add_argument("--supcon-epochs", type=int, default=100)
@@ -2714,9 +2918,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-train-batches", type=int, default=0)
     parser.add_argument("--max-eval-batches", type=int, default=0)
-    parser.add_argument("--log-every-steps", type=int, default=100)
-    parser.add_argument("--log-eval-every-steps", type=int, default=1000)
+    parser.add_argument("--log-every-steps", type=int, default=1)
+    parser.add_argument("--log-eval-every-steps", type=int, default=1)
     parser.add_argument("--eval-every-epochs", type=float, default=0.5)
+    parser.add_argument(
+        "--runtime-bad-sample-cleanup",
+        action="store_true",
+        help=(
+            "Temporary opt-in cleanup path: when a sample fails to load during training, "
+            "delete the file immediately and remove its entry from dataset_metadata.json."
+        ),
+    )
     parser.add_argument("--confidence-threshold", type=float, default=0.80)
     parser.add_argument("--supcon-early-stopping-patience", type=int, default=5)
     parser.add_argument("--head-early-stopping-patience", type=int, default=5)
