@@ -893,21 +893,25 @@ def build_datasets(
     DeterministicSupConDataset,
     DeterministicSupConDataset,
 ]:
+    import json as json_lib
+    class_mapping = json_lib.loads(args.class_mapping) if args.class_mapping else None
+    
     root = Path(args.dataset_root)
     if has_explicit_split_layout(root):
         train_dataset = DeterministicAugmentedImageFolder(
-            root / "train", args.image_size, args.augment_repeats, "train", args.seed, args.augment_gaussian_sigmas, apply_augmentation=True
+            root / "train", args.image_size, args.augment_repeats, "train", args.seed, args.augment_gaussian_sigmas, apply_augmentation=True, class_mapping=class_mapping
         )
         val_dataset = DeterministicAugmentedImageFolder(
-            root / "val", args.image_size, 1, "val", args.seed, args.augment_gaussian_sigmas, apply_augmentation=False
+            root / "val", args.image_size, 1, "val", args.seed, args.augment_gaussian_sigmas, apply_augmentation=False, class_mapping=class_mapping
         )
         test_dataset = DeterministicAugmentedImageFolder(
-            root / "test", args.image_size, args.augment_repeats, "test", args.seed, args.augment_gaussian_sigmas, apply_augmentation=True
+            root / "test", args.image_size, args.augment_repeats, "test", args.seed, args.augment_gaussian_sigmas, apply_augmentation=True, class_mapping=class_mapping
         )
         if train_dataset.classes != val_dataset.classes or train_dataset.classes != test_dataset.classes:
             raise ValueError("Class folders differ across train/val/test")
     else:
-        train_dataset, val_dataset, test_dataset = build_auto_split_datasets(root, args)
+        # Pass mapping through to auto-split logic too
+        train_dataset, val_dataset, test_dataset = build_auto_split_datasets(root, args, class_mapping=class_mapping)
     return (
         train_dataset,
         val_dataset,
@@ -960,16 +964,20 @@ def allocate_split_counts(sample_count: int, ratios: tuple[float, float, float])
 def build_auto_split_datasets(
     root: Path,
     args: argparse.Namespace,
+    class_mapping: dict[str, list[str]] | None = None,
 ) -> tuple[DeterministicAugmentedImageFolder, DeterministicAugmentedImageFolder, DeterministicAugmentedImageFolder]:
     ratios = parse_auto_split_ratios(args.auto_split_ratios)
     base_dataset = datasets.ImageFolder(root)
     
-    alias_map = {"soft_plastic": "plastic", "rigid_plastic": "plastic", "hard_plastic": "plastic"}
+    # Use provided mapping or default plastic alias
+    effective_mapping = class_mapping if class_mapping else {"plastic": ["soft_plastic", "rigid_plastic", "hard_plastic"]}
+    
     new_classes = set(base_dataset.classes)
-    for old, new in alias_map.items():
-        if old in new_classes:
-            new_classes.remove(old)
-            new_classes.add(new)
+    for target, sources in effective_mapping.items():
+        for s in sources:
+            if s in new_classes:
+                new_classes.remove(s)
+        new_classes.add(target)
             
     new_classes = sorted(list(new_classes))
     new_class_to_idx = {cls: i for i, cls in enumerate(new_classes)}
@@ -2640,7 +2648,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--supcon-epochs", type=int, default=100)
     parser.add_argument("--head-epochs", type=int, default=5)
     parser.add_argument("--stage-epochs", type=int, default=20)
-    parser.add_argument("--unfreeze-chunk-size", type=int, default=50)
+    parser.add_argument("--unfreeze-chunk-size", type=int, default=20)
     parser.add_argument("--max-progressive-phases", type=int, default=0)
     parser.add_argument("--skip-supcon", action="store_true")
     parser.add_argument("--classifier-train-mode", choices=("progressive", "full_model"), default="progressive")
@@ -2648,11 +2656,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--reject-current-phase-on-global-miss",
         action="store_true",
-        default=False,
+        default=True,
         help=(
             "Opt-in current-phase rejection only. When enabled, a completed progressive phase that "
             "fails to beat the global best checkpoint on the selected classifier early-stopping metric "
-            "is not used to initialize the next phase. Future phases still continue normally. Disabled "
+            "is not used to initialize the next phase. Future phases still continue normally. Enabled "
             "by default."
         ),
     )
@@ -2670,7 +2678,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--confidence-gap-penalty-weight", type=float, default=0.0)
     parser.add_argument("--class-loss-weight", action="append", default=[])
     parser.add_argument("--targeted-confusion-penalty", action="append", default=[])
-    parser.add_argument("--weighted-sampling", action="store_true")
+    parser.add_argument("--weighted-sampling", action="store_false", dest="weighted_sampling", default=True)
     parser.add_argument("--weights", choices=("default", "none"), default="default")
     parser.add_argument("--augment-repeats", type=int, default=16)
     parser.add_argument("--augment-gaussian-sigmas", type=float, default=0.5)

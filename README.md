@@ -7,8 +7,9 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 ### Machine Learning Engine
 - **Backbone:** EfficientNet-B0 (5.3M Parameters).
 - **Corpus:** 1,045,679 verified images (WSS-1.04M).
-- **Taxonomy:** 15 non-overlapping material classes.
-- **Orchestration:** Multi-phase training involving SupCon pre-training, Progressive Unfreezing, and Recursive Metric Refinement.
+- **Taxonomy:** 15 granular classes, dynamically mappable to custom classification heads.
+- **Orchestration:** Multi-phase training involving SupCon pre-training, 20-module Progressive Unfreezing, and Recursive Metric Refinement.
+- **Balancing:** Automatic **Weighted Random Sampling** enabled by default to handle severe class imbalances.
 
 ### SmartBin Android Fleet Dashboard
 - **Framework:** Native Kotlin, Jetpack Compose, Material 3.
@@ -22,10 +23,10 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 
 | Metric | Specification |
 | :--- | :--- |
-| **Current Taxonomy** | battery, cardboard, ceramic, clothes, ewaste, glass, hard_plastic, medical, metal, organic, paper, plastic, rigid_plastic, shoes, soft_plastic |
-| **Dataset Size** | 1,045,679 verified images |
-| **Model Architecture** | EfficientNet-B0 |
-| **Optimization** | AdamW + SAM (Sharpness-Aware Minimization) |
+| **Current Taxonomy** | 15 granular material classes (battery, ceramic, cardboard, etc.) |
+| **Class Balancing** | **Weighted Random Sampling (Default: ON)** |
+| **Unfreeze Step** | **20 modules (Default)** |
+| **Optimization** | AdamW (Base) or SAM (Sharpness-Aware Minimization) |
 | **Training Precision** | Mixed Precision (FP16) via `torch.amp` |
 | **Mobile State** | Clean Architecture / MVVM / Hilt |
 
@@ -39,11 +40,13 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 
 ## 4. Execution Manual
 
-### Training Pipeline
+### Standard Production Training
 ```bash
-./scripts/setup_venv_cuda.sh .venv
-source .venv/bin/activate
-./run_full_training_pipeline.sh
+# Execute the full lifecycle with 10% validation steps and merged plastics
+./run_training.sh \
+  --eval-every-epochs 0.1 \
+  --optimizer adamw \
+  --class-mapping '{"plastic": ["plastic", "hard_plastic", "rigid_plastic", "soft_plastic"]}'
 ```
 
 ### Android Dashboard

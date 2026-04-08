@@ -9,38 +9,35 @@ The classification engine utilizes a highly efficient feature extractor tuned fo
 - **Architecture:** EfficientNet-B0.
 - **Parameters:** ~5.3 Million.
 - **Precision:** FP16 Mixed Precision.
-- **Classification Head:** 1280-dimension Global Average Pooling (GAP) followed by a 15-node linear classifier.
-- **Optimization Strategy:** Sharpness-Aware Minimization (SAM) combined with AdamW weight decay regularization.
+- **Optimization Strategy:** AdamW or SAM.
+- **Class Balancing:** **Weighted Random Sampling** is utilized by default. This mathematically ensures that every training batch (size 224) contains a representative distribution of all classes, preventing model bias toward high-volume categories like `organic`.
 
 ---
 
 ## 2. Multi-Stage Training Pipeline
 
-The system progresses through four deterministic phases to achieve maximal convergence and categorical separation.
-
 ### Phase I: Supervised Contrastive Pre-training (SupCon)
-- **Objective:** Optimize the embedding space by pulling positive samples (same class) together and pushing negative samples apart.
-- **Outcome:** A robust feature representation that precedes the traditional classification training.
+- **Objective:** Optimize the embedding space clusters.
+- **State:** Backbone is frozen by default to preserve ImageNet-derived spatial features.
 
-### Phase II: Progressive Backbone Unfreezing
-- **Process:** The model begins with a frozen backbone. It iteratively unfreezes 20-module slices, moving from the classification head toward the input layer.
-- **Goal:** Stabilize the head before fine-tuning higher-order spatial features.
+### Phase II: Progressive 20-Module Unfreezing
+- **Process:** The system iteratively unfreezes 20-module slices of the backbone. 
+- **Validation Frequency:** Recommended at 0.1 (10%) of the epoch to capture peak performance in high-volume datasets.
+- **Phase Rejection:** Enabled by default. If an unfreezing phase results in a validation loss worse than the previous global best, the phase is rejected, weights are restored to the safe state, and the pipeline proceeds to the next slice.
 
-### Phase III: Recursive Validation Loss Minimization
-- **Mechanism:** Iteratively trains the model until the validation loss improvement drops below the 1e-4 threshold.
-- **Automation:** Upon each plateau, the system restores the best state, halves the learning rate, and restarts the iteration.
-
-### Phase IV: Recursive Validation Accuracy Refinement
-- **Final Polish:** Specifically targets the maximization of categorical precision by refining the model based on raw validation accuracy.
+### Phase III: Recursive Refinement (Loss & Acc)
+- **Mechanism:** Automatic learning rate halving upon validation plateau.
+- **End-State:** Deployment-ready `best.pt` with maximized categorical separation.
 
 ---
 
-## 3. Data Robustness and Visualization
+## 3. Dynamic Inference and Display
 
-### Deterministic Augmentation
-Every training sample undergoes a 16x split-safe online augmentation cycle, simulating shadows, glares, and lens distortions found in physical dustbin environments.
+### Class Mapping (Custom Heads)
+The platform supports **Dynamic Class Merging** at both training and inference time. This allows the model to learn from all 15 granular classes while grouping them into logical UI categories (e.g., merging all plastic variants into one `plastic` head) using LogSumExp aggregation to preserve probability integrity.
 
-### Step-Wise Analytics
-- **Confusion Matrices:** Automated PNG generation at the end of every "Best Phase" save.
-- **CSV Metrics:** Exhaustive logging of every training step and validation pass into `train_metrics.csv` and `val_metrics.csv`.
-- **Checkpointing:** High-frequency saving of `step_last.pt` and `best_phase_X.pt` to ensure zero data loss during training.
+---
+
+## 4. Integrity and Visualization
+- **Step-Wise Analytics:** Automated confusion matrix PNGs are generated every time a new "Phase Best" is captured.
+- **Exhaustive Logging:** Every training step and validation pass is recorded in synchronized CSV files for post-run audit.

@@ -15,6 +15,8 @@ This file serves as the definitive context for AI agents operating within the ES
 - **Mobile Stack:** Jetpack Compose, OSM (MapLibre), WebSockets.
 
 ## 3. Mandatory Constraints
+- **Class Balancing:** **Weighted Random Sampling is MANDATORY** for all training runs to address class imbalance.
+- **Unfreezing:** Progressive unfreezing must occur in **20-module increments** to maintain feature stability.
 - **Zero-Mistake Data:** 1:1 metadata-to-physical sync via `dataset_metadata.json`.
 - **Billing-Free:** Strictly use OpenStreetMap for all geospatial features.
 - **Automated Validation:** Every training phase must generate a confusion matrix PNG and exhaustive CSV metrics.
