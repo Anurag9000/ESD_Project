@@ -150,7 +150,21 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
 
     def load_augmented(self, source_index: int, variant_index: int, view_offset: int = 0) -> tuple[torch.Tensor, int]:
         path, target = self.samples[source_index]
-        image = self.base_dataset.loader(path).convert("RGB")
+        try:
+            image = self.base_dataset.loader(path).convert("RGB")
+        except Exception as e:
+            # Fault Tolerance: If an image is corrupted, find a random valid replacement from the SAME class
+            # This prevents the 1.04M image run from crashing on a single bad file.
+            import logging
+            logging.warning(f"Skipping corrupted image {path}: {e}")
+            
+            # Find all indices belonging to the same target class
+            same_class_indices = [i for i, (_, t) in enumerate(self.samples) if t == target]
+            # Pick a new index using a stable but different seed
+            fallback_rng = random.Random(source_index + self.seed + self.current_epoch)
+            new_source_index = fallback_rng.choice(same_class_indices)
+            return self.load_augmented(new_source_index, variant_index, view_offset)
+
         if self.apply_augmentation:
             rng = random.Random(self._seed_for_variant(source_index, variant_index, view_offset))
             tensor = augmented_tensor_from_image(image, self.image_size, rng, self.gaussian_sigmas)
