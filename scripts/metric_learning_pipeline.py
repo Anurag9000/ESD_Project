@@ -3933,5 +3933,4 @@ def run_experiment(args: argparse.Namespace) -> int:
         "validation_metrics": val_metrics,
         "test_metrics": test_metrics,
     }
-rics,
-    }
+    return 0
