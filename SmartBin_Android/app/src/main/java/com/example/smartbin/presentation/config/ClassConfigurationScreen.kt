@@ -14,6 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -44,6 +45,7 @@ fun ClassConfigurationScreen(
     state: ClassConfigurationState,
     onClassCountChanged: (String) -> Unit,
     onPrimaryClassSelected: (Int, String) -> Unit,
+    onMergedRawClassToggled: (String, String) -> Unit,
     onReset: () -> Unit,
     onSave: () -> Unit,
     modifier: Modifier = Modifier,
@@ -65,7 +67,7 @@ fun ClassConfigurationScreen(
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                text = "The model still predicts every trained waste label. Here you choose how many runtime classes the app should expose. The last class is always Other and contains every raw class you did not select.",
+                text = "The model still predicts every trained waste label. Here you choose how many runtime classes the app should expose. Each explicit runtime class can merge multiple raw model classes into one display bucket. The last class is always Other and contains every raw class you did not assign.",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -125,6 +127,57 @@ fun ClassConfigurationScreen(
                             }
                         }
                     }
+
+                    val mergedForCurrent = resolved.mergedRawClassesFor(currentRawClass)
+                    val mergeCandidates = resolved.availableOptions.filter { option ->
+                        option.rawClass != currentRawClass &&
+                            option.rawClass !in selectedElsewhere &&
+                            (
+                                resolved.mergedAssignments[option.rawClass] == null ||
+                                    resolved.mergedAssignments[option.rawClass] == currentRawClass
+                                )
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "Also show these raw classes as ${formatLabelForSummary(currentRawClass)}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (mergeCandidates.isEmpty()) {
+                            Text(
+                                text = "No additional raw classes available for this bucket.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                mergeCandidates.forEach { option ->
+                                    val isSelected = option.rawClass in mergedForCurrent
+                                    AssistChip(
+                                        onClick = { onMergedRawClassToggled(currentRawClass, option.rawClass) },
+                                        label = { Text(option.displayLabel) },
+                                        colors = AssistChipDefaults.assistChipColors(
+                                            containerColor = if (isSelected) {
+                                                MaterialTheme.colorScheme.primaryContainer
+                                            } else {
+                                                MaterialTheme.colorScheme.surfaceContainerHighest
+                                            },
+                                        ),
+                                    )
+                                }
+                            }
+                        }
+                        if (mergedForCurrent.isNotEmpty()) {
+                            Text(
+                                text = "Merged here: ${mergedForCurrent.joinToString { formatLabelForSummary(it) }}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
                 }
 
                 OutlinedTextField(
@@ -174,7 +227,7 @@ fun ClassConfigurationScreen(
                     }
                 }
                 Text(
-                    text = "Raw classes that currently collapse into ${resolved.otherLabel}: ${resolved.remainingRawClasses().joinToString()}",
+                    text = "Raw classes that currently collapse into ${resolved.otherLabel}: ${resolved.remainingRawClasses().joinToString { formatLabelForSummary(it) }}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -196,3 +249,15 @@ fun ClassConfigurationScreen(
         }
     }
 }
+
+private fun formatLabelForSummary(rawClass: String): String = rawClass
+    .trim()
+    .replace('-', ' ')
+    .replace('_', ' ')
+    .split(Regex("\\s+"))
+    .filter { it.isNotBlank() }
+    .joinToString(" ") { token ->
+        token.lowercase().replaceFirstChar { char ->
+            if (char.isLowerCase()) char.titlecase() else char.toString()
+        }
+    }

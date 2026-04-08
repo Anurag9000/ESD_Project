@@ -37,6 +37,7 @@ class ClassConfigurationScreenTest {
                 savedConfiguration = catalog.resolve(WasteClassConfiguration()),
                 draftClassCountText = "4",
                 draftSelectedPrimaryClasses = listOf("metal", "organic", "paper"),
+                draftMergedAssignments = emptyMap(),
                 draftResolvedConfiguration = catalog.resolve(WasteClassConfiguration()),
                 requiresInitialConfirmation = true,
             ),
@@ -47,12 +48,14 @@ class ClassConfigurationScreenTest {
                 WasteClassConfiguration(
                     classCount = classCountText.toIntOrNull() ?: 4,
                     selectedPrimaryClasses = selectedPrimaryClasses,
+                    mergedAssignments = uiState.draftMergedAssignments,
                     userConfirmed = false,
                 ),
             )
             uiState = uiState.copy(
                 draftClassCountText = classCountText,
                 draftSelectedPrimaryClasses = resolved.selectedPrimaryClasses,
+                draftMergedAssignments = resolved.mergedAssignments,
                 draftResolvedConfiguration = resolved,
             )
         }
@@ -69,6 +72,7 @@ class ClassConfigurationScreenTest {
                     selections[index] = rawClass
                     updateDraft(uiState.draftClassCountText, selections)
                 },
+                onMergedRawClassToggled = { _, _ -> },
                 onReset = {},
                 onSave = {},
                 mandatory = true,

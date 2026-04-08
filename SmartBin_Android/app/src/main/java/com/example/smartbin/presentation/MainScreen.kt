@@ -92,6 +92,7 @@ fun MainScreen(
             state = classConfigurationState,
             onClassCountChanged = classConfigurationViewModel::onClassCountChanged,
             onPrimaryClassSelected = classConfigurationViewModel::onPrimaryClassSelected,
+            onMergedRawClassToggled = classConfigurationViewModel::onMergedRawClassToggled,
             onReset = classConfigurationViewModel::resetDraft,
             onSave = classConfigurationViewModel::saveDraft,
             mandatory = true,
@@ -160,6 +161,7 @@ fun MainScreen(
                     state = classConfigurationState,
                     onClassCountChanged = classConfigurationViewModel::onClassCountChanged,
                     onPrimaryClassSelected = classConfigurationViewModel::onPrimaryClassSelected,
+                    onMergedRawClassToggled = classConfigurationViewModel::onMergedRawClassToggled,
                     onReset = classConfigurationViewModel::resetDraft,
                     onSave = classConfigurationViewModel::saveDraft,
                 )

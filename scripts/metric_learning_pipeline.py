@@ -61,6 +61,7 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
         *,
         base_dataset: datasets.ImageFolder | None = None,
         samples: list[tuple[str, int]] | None = None,
+        class_mapping: dict[str, list[str]] | None = None,
     ) -> None:
         if base_dataset is None:
             if root is None:
@@ -73,11 +74,53 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
         self.seed = seed
         self.gaussian_sigmas = gaussian_sigmas
         self.apply_augmentation = apply_augmentation
+        
+        # Original metadata
         self.classes = self.base_dataset.classes
         self.class_to_idx = self.base_dataset.class_to_idx
         self.samples = list(self.base_dataset.samples if samples is None else samples)
+        
+        # Apply Mapping if provided
+        if class_mapping:
+            self.apply_class_mapping(class_mapping)
+            
         self.targets = [target for _, target in self.samples]
         self.current_epoch = 0
+
+    def apply_class_mapping(self, class_mapping: dict[str, list[str]]) -> None:
+        # 1. Define new logical classes
+        new_classes = sorted(list(class_mapping.keys()))
+        
+        # Add any unmapped classes to the new class list to ensure data isn't lost
+        mapped_sources = set()
+        for sources in class_mapping.values():
+            mapped_sources.update(sources)
+        
+        for old_cls in self.classes:
+            if old_cls not in mapped_sources and old_cls not in new_classes:
+                new_classes.append(old_cls)
+        
+        new_classes = sorted(list(set(new_classes)))
+        new_class_to_idx = {cls_name: i for i, cls_name in enumerate(new_classes)}
+        
+        # 2. Re-map every sample
+        new_samples = []
+        for path, old_idx in self.samples:
+            old_name = self.classes[old_idx]
+            
+            # Find target class
+            new_name = old_name # Default
+            for target, sources in class_mapping.items():
+                if old_name in sources:
+                    new_name = target
+                    break
+            
+            new_samples.append((path, new_class_to_idx[new_name]))
+            
+        # 3. Update state
+        self.classes = new_classes
+        self.class_to_idx = new_class_to_idx
+        self.samples = new_samples
 
     def __len__(self) -> int:
         return len(self.samples) * self.augment_repeats
@@ -2635,6 +2678,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default="Results/metric_learning_experiment")
     parser.add_argument("--log-file", default="logs/metric_learning_experiment.log.jsonl")
     parser.add_argument("--resume-checkpoint", default="")
+    parser.add_argument("--class-mapping", type=str, default="", help="JSON string for training-time class merging")
     parser.add_argument("--resume-mode", choices=("latest", "global_best", "phase_best"), default="latest")
     parser.add_argument("--resume-phase-index", type=int, default=0)
     parser.add_argument("--resume-phase-name", default="")

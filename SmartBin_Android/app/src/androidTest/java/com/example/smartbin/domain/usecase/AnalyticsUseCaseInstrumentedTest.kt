@@ -66,6 +66,40 @@ class AnalyticsUseCaseInstrumentedTest {
         assertEquals(2, result.trend[1].countsByLabel["Other"])
     }
 
+    @Test
+    fun analyticsUsesMergedRuntimeBucketsWhenConfigured() = runBlocking {
+        wasteClassConfigStore.saveConfiguration(
+            classCount = 4,
+            selectedPrimaryClasses = listOf("metal", "organic", "paper"),
+            mergedAssignments = mapOf(
+                "glass" to "metal",
+                "plastic" to "paper",
+            ),
+        )
+        val repository = fakeRepository(
+            bins = listOf(testBin(id = "B1", locality = "Central Plaza")),
+            events = listOf(
+                WasteEvent("E1", "B1", "metal", 0.95f, Instant.parse("2026-03-28T10:00:00Z")),
+                WasteEvent("E2", "B1", "glass", 0.82f, Instant.parse("2026-03-28T12:00:00Z")),
+                WasteEvent("E3", "B1", "plastic", 0.77f, Instant.parse("2026-03-29T09:00:00Z")),
+                WasteEvent("E4", "B1", "battery", 0.71f, Instant.parse("2026-03-29T11:00:00Z")),
+            ),
+        )
+
+        val result = GetAggregatedAnalyticsUseCase(repository, wasteClassConfigStore)(
+            binIds = setOf("B1"),
+            localities = emptySet(),
+            startTime = Instant.parse("2026-03-01T00:00:00Z"),
+            endTime = Instant.parse("2026-03-31T23:59:59Z"),
+            bucket = AnalyticsBucket.DAY,
+        ).first()
+
+        assertEquals(listOf("Metal", "Organic", "Paper", "Other"), result.displayClasses)
+        assertEquals(2, result.countsByLabel["Metal"])
+        assertEquals(1, result.countsByLabel["Paper"])
+        assertEquals(1, result.countsByLabel["Other"])
+    }
+
     private fun fakeRepository(
         bins: List<Bin>,
         events: List<WasteEvent>,

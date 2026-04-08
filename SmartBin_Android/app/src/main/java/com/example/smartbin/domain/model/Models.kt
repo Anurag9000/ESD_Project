@@ -24,13 +24,22 @@ data class WasteClassCatalog(
 data class WasteClassConfiguration(
     val classCount: Int = 4,
     val selectedPrimaryClasses: List<String> = emptyList(),
+    val mergedAssignments: Map<String, String> = emptyMap(),
     val userConfirmed: Boolean = false,
+)
+
+data class ResolvedWasteClassGroup(
+    val primaryRawClass: String,
+    val displayLabel: String,
+    val rawClasses: List<String>,
 )
 
 data class ResolvedWasteClassConfiguration(
     val classCount: Int,
     val selectedPrimaryClasses: List<String>,
     val selectedDisplayLabels: List<String>,
+    val groups: List<ResolvedWasteClassGroup>,
+    val mergedAssignments: Map<String, String>,
     val otherLabel: String,
     val runtimeDisplayLabels: List<String>,
     val availableOptions: List<WasteClassOption>,
@@ -39,12 +48,19 @@ data class ResolvedWasteClassConfiguration(
     fun toRuntimeDisplayLabel(rawClass: String?): String {
         if (rawClass.isNullOrBlank()) return otherLabel
         val normalized = rawClass.trim()
-        val selectedIndex = selectedPrimaryClasses.indexOf(normalized)
-        return if (selectedIndex >= 0) selectedDisplayLabels[selectedIndex] else otherLabel
+        return groups.firstOrNull { normalized in it.rawClasses }?.displayLabel ?: otherLabel
     }
 
     fun remainingRawClasses(): List<String> {
-        return availableOptions.map { it.rawClass }.filterNot { it in selectedPrimaryClasses }
+        val groupedRawClasses = groups.flatMap { it.rawClasses }.toSet()
+        return availableOptions.map { it.rawClass }.filterNot { it in groupedRawClasses }
+    }
+
+    fun mergedRawClassesFor(primaryRawClass: String): List<String> {
+        return groups.firstOrNull { it.primaryRawClass == primaryRawClass }
+            ?.rawClasses
+            .orEmpty()
+            .filterNot { it == primaryRawClass }
     }
 }
 
@@ -86,11 +102,36 @@ fun WasteClassCatalog.resolve(configuration: WasteClassConfiguration): ResolvedW
     }
 
     val selectedPrimary = normalizedPrimary.take(requiredPrimaryCount)
-    val selectedDisplay = selectedPrimary.map(::formatWasteClassLabel)
+    val selectedPrimarySet = selectedPrimary.toSet()
+    val sanitizedMergedAssignments = linkedMapOf<String, String>()
+    configuration.mergedAssignments.forEach { (rawClass, groupPrimary) ->
+        if (rawClass !in available) return@forEach
+        if (groupPrimary !in selectedPrimarySet) return@forEach
+        if (rawClass in selectedPrimarySet) return@forEach
+        sanitizedMergedAssignments[rawClass] = groupPrimary
+    }
+    val groups = selectedPrimary.map { primaryRawClass ->
+        val groupedRawClasses = buildList {
+            add(primaryRawClass)
+            addAll(
+                available.filter { rawClass ->
+                    rawClass !in selectedPrimarySet && sanitizedMergedAssignments[rawClass] == primaryRawClass
+                },
+            )
+        }
+        ResolvedWasteClassGroup(
+            primaryRawClass = primaryRawClass,
+            displayLabel = formatWasteClassLabel(primaryRawClass),
+            rawClasses = groupedRawClasses,
+        )
+    }
+    val selectedDisplay = groups.map { it.displayLabel }
     return ResolvedWasteClassConfiguration(
         classCount = normalizedClassCount,
         selectedPrimaryClasses = selectedPrimary,
         selectedDisplayLabels = selectedDisplay,
+        groups = groups,
+        mergedAssignments = sanitizedMergedAssignments,
         otherLabel = otherLabel,
         runtimeDisplayLabels = selectedDisplay + otherLabel,
         availableOptions = available.map { rawClass ->

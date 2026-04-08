@@ -23,6 +23,28 @@ class WasteClassCatalogResolveTest {
     }
 
     @Test
+    fun `merged assignments collapse multiple raw classes into one runtime class`() {
+        val resolved = catalog.resolve(
+            WasteClassConfiguration(
+                classCount = 4,
+                selectedPrimaryClasses = listOf("metal", "organic", "paper"),
+                mergedAssignments = mapOf(
+                    "glass" to "metal",
+                    "plastic" to "paper",
+                ),
+                userConfirmed = true,
+            ),
+        )
+
+        assertEquals(listOf("glass"), resolved.mergedRawClassesFor("metal"))
+        assertEquals(listOf("plastic"), resolved.mergedRawClassesFor("paper"))
+        assertEquals("Metal", resolved.toRuntimeDisplayLabel("glass"))
+        assertEquals("Paper", resolved.toRuntimeDisplayLabel("plastic"))
+        assertEquals("Other", resolved.toRuntimeDisplayLabel("battery"))
+        assertEquals(listOf("battery"), resolved.remainingRawClasses())
+    }
+
+    @Test
     fun `invalid selections are removed and class count is clamped`() {
         val resolved = catalog.resolve(
             WasteClassConfiguration(

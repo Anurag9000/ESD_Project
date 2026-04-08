@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -49,9 +50,18 @@ class WasteClassConfigStore @Inject constructor(
     val resolvedConfiguration: StateFlow<ResolvedWasteClassConfiguration> = _resolvedConfiguration.asStateFlow()
 
     fun saveConfiguration(classCount: Int, selectedPrimaryClasses: List<String>) {
+        saveConfiguration(classCount, selectedPrimaryClasses, emptyMap())
+    }
+
+    fun saveConfiguration(
+        classCount: Int,
+        selectedPrimaryClasses: List<String>,
+        mergedAssignments: Map<String, String>,
+    ) {
         val configuration = WasteClassConfiguration(
             classCount = classCount,
             selectedPrimaryClasses = selectedPrimaryClasses,
+            mergedAssignments = mergedAssignments,
             userConfirmed = true,
         )
         persist(configuration)
@@ -73,10 +83,21 @@ class WasteClassConfigStore @Inject constructor(
                 runCatching { json.decodeFromString<List<String>>(encoded) }.getOrNull()
             }
             ?: preferences.getStringSet(KEY_SELECTED_PRIMARY_CLASSES, emptySet()).orEmpty().toList()
+        val savedMergedAssignments = preferences.getString(KEY_MERGED_ASSIGNMENTS_JSON, null)
+            ?.let { encoded ->
+                runCatching {
+                    json.decodeFromString(
+                        MapSerializer(String.serializer(), String.serializer()),
+                        encoded,
+                    )
+                }.getOrNull()
+            }
+            ?: emptyMap()
         val userConfirmed = preferences.getBoolean(KEY_USER_CONFIRMED, false)
         return WasteClassConfiguration(
             classCount = savedClassCount,
             selectedPrimaryClasses = savedSelection,
+            mergedAssignments = savedMergedAssignments,
             userConfirmed = userConfirmed,
         )
     }
@@ -88,6 +109,13 @@ class WasteClassConfigStore @Inject constructor(
                 KEY_SELECTED_PRIMARY_CLASSES_JSON,
                 json.encodeToString(ListSerializer(String.serializer()), configuration.selectedPrimaryClasses),
             )
+            .putString(
+                KEY_MERGED_ASSIGNMENTS_JSON,
+                json.encodeToString(
+                    MapSerializer(String.serializer(), String.serializer()),
+                    configuration.mergedAssignments,
+                ),
+            )
             .putStringSet(KEY_SELECTED_PRIMARY_CLASSES, configuration.selectedPrimaryClasses.toSet())
             .putBoolean(KEY_USER_CONFIRMED, configuration.userConfirmed)
             .apply()
@@ -97,6 +125,7 @@ class WasteClassConfigStore @Inject constructor(
         private const val KEY_CLASS_COUNT = "class_count"
         private const val KEY_SELECTED_PRIMARY_CLASSES = "selected_primary_classes"
         private const val KEY_SELECTED_PRIMARY_CLASSES_JSON = "selected_primary_classes_json"
+        private const val KEY_MERGED_ASSIGNMENTS_JSON = "merged_assignments_json"
         private const val KEY_USER_CONFIRMED = "user_confirmed"
     }
 }

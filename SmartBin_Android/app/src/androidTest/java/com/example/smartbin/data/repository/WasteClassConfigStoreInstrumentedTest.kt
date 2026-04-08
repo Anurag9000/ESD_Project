@@ -25,6 +25,7 @@ class WasteClassConfigStoreInstrumentedTest {
         store.saveConfiguration(
             classCount = 4,
             selectedPrimaryClasses = listOf("metal", "organic", "paper"),
+            mergedAssignments = mapOf("glass" to "metal"),
         )
 
         val reloadedStore = WasteClassConfigStore(context)
@@ -32,6 +33,10 @@ class WasteClassConfigStoreInstrumentedTest {
         assertEquals(
             listOf("metal", "organic", "paper"),
             reloadedStore.resolvedConfiguration.value.selectedPrimaryClasses,
+        )
+        assertEquals(
+            mapOf("glass" to "metal"),
+            reloadedStore.resolvedConfiguration.value.mergedAssignments,
         )
         assertEquals(
             listOf("Metal", "Organic", "Paper", "Other"),

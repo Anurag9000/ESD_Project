@@ -1,20 +1,3 @@
-{
-  "available_raw_classes": [
-    "battery",
-    "clothes",
-    "ewaste",
-    "glass",
-    "metal",
-    "organic",
-    "paper",
-    "plastic",
-    "shoes",
-    "trash"
-  ],
-  "recommended_primary_classes": [
-    "metal",
-    "organic",
-    "paper"
-  ],
-  "other_label": "Other"
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:d70264bd156902d7e81e6cdbfe7d2d8cc2b8836332425177d876ac19e45cce8d
+size 295

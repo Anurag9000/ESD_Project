@@ -21,6 +21,7 @@ data class ClassConfigurationState(
     val savedConfiguration: ResolvedWasteClassConfiguration = WasteClassCatalog.EMPTY.resolve(WasteClassConfiguration()),
     val draftClassCountText: String = "4",
     val draftSelectedPrimaryClasses: List<String> = emptyList(),
+    val draftMergedAssignments: Map<String, String> = emptyMap(),
     val draftResolvedConfiguration: ResolvedWasteClassConfiguration = WasteClassCatalog.EMPTY.resolve(WasteClassConfiguration()),
     val requiresInitialConfirmation: Boolean = false,
 )
@@ -44,6 +45,7 @@ class ClassConfigurationViewModel @Inject constructor(
                         savedConfiguration = resolved,
                         draftClassCountText = resolved.classCount.toString(),
                         draftSelectedPrimaryClasses = resolved.selectedPrimaryClasses,
+                        draftMergedAssignments = resolved.mergedAssignments,
                         draftResolvedConfiguration = resolved,
                         requiresInitialConfirmation = !resolved.hasExplicitUserConfiguration,
                     )
@@ -59,6 +61,7 @@ class ClassConfigurationViewModel @Inject constructor(
         updateDraft(
             classCount = parsed,
             selectedPrimaryClasses = state.value.draftSelectedPrimaryClasses,
+            mergedAssignments = state.value.draftMergedAssignments,
             rawText = if (digitsOnly.isBlank()) fallback.toString() else digitsOnly,
         )
     }
@@ -72,6 +75,23 @@ class ClassConfigurationViewModel @Inject constructor(
         updateDraft(
             classCount = state.value.draftClassCountText.toIntOrNull() ?: state.value.savedConfiguration.classCount,
             selectedPrimaryClasses = selections,
+            mergedAssignments = state.value.draftMergedAssignments,
+            rawText = state.value.draftClassCountText,
+        )
+    }
+
+    fun onMergedRawClassToggled(primaryRawClass: String, rawClass: String) {
+        val mergedAssignments = state.value.draftMergedAssignments.toMutableMap()
+        val currentAssignment = mergedAssignments[rawClass]
+        if (currentAssignment == primaryRawClass) {
+            mergedAssignments.remove(rawClass)
+        } else {
+            mergedAssignments[rawClass] = primaryRawClass
+        }
+        updateDraft(
+            classCount = state.value.draftClassCountText.toIntOrNull() ?: state.value.savedConfiguration.classCount,
+            selectedPrimaryClasses = state.value.draftSelectedPrimaryClasses,
+            mergedAssignments = mergedAssignments,
             rawText = state.value.draftClassCountText,
         )
     }
@@ -82,6 +102,7 @@ class ClassConfigurationViewModel @Inject constructor(
             it.copy(
                 draftClassCountText = resolved.classCount.toString(),
                 draftSelectedPrimaryClasses = resolved.selectedPrimaryClasses,
+                draftMergedAssignments = resolved.mergedAssignments,
                 draftResolvedConfiguration = resolved,
             )
         }
@@ -92,6 +113,7 @@ class ClassConfigurationViewModel @Inject constructor(
         wasteClassConfigStore.saveConfiguration(
             classCount = resolved.classCount,
             selectedPrimaryClasses = resolved.selectedPrimaryClasses,
+            mergedAssignments = resolved.mergedAssignments,
         )
         _state.update {
             it.copy(
@@ -102,12 +124,18 @@ class ClassConfigurationViewModel @Inject constructor(
         }
     }
 
-    private fun updateDraft(classCount: Int, selectedPrimaryClasses: List<String>, rawText: String) {
+    private fun updateDraft(
+        classCount: Int,
+        selectedPrimaryClasses: List<String>,
+        mergedAssignments: Map<String, String>,
+        rawText: String,
+    ) {
         val catalog = state.value.catalog
         val draft = catalog.resolve(
             WasteClassConfiguration(
                 classCount = classCount,
                 selectedPrimaryClasses = selectedPrimaryClasses.filter { it.isNotBlank() },
+                mergedAssignments = mergedAssignments,
                 userConfirmed = state.value.savedConfiguration.hasExplicitUserConfiguration,
             ),
         )
@@ -115,6 +143,7 @@ class ClassConfigurationViewModel @Inject constructor(
             it.copy(
                 draftClassCountText = rawText,
                 draftSelectedPrimaryClasses = draft.selectedPrimaryClasses,
+                draftMergedAssignments = draft.mergedAssignments,
                 draftResolvedConfiguration = draft,
             )
         }

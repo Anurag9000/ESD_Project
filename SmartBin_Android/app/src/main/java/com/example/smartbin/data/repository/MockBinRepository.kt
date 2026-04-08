@@ -244,9 +244,9 @@ class MockBinRepository @Inject constructor(
         if (availableClasses.isEmpty()) return ""
         val favored = when (locality) {
             "Food Court" -> listOf("organic", "paper", "plastic")
-            "Market Street" -> listOf("plastic", "glass", "trash")
+            "Market Street" -> listOf("plastic", "glass", "metal")
             "Residential Zone" -> listOf("paper", "plastic", "clothes")
-            else -> listOf("metal", "paper", "trash")
+            else -> listOf("metal", "paper", "ewaste")
         }.filter { it in availableClasses }
         val pool = buildList {
             repeat(3) { addAll(favored) }
