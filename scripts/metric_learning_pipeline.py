@@ -25,7 +25,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from torch import nn
 from torch.optim import AdamW, Optimizer
 from torch.utils.checkpoint import checkpoint_sequential
-from torch.utils.data import DataLoader, Dataset, Sampler
+from torch.utils.data import DataLoader, Dataset, Sampler, get_worker_info
 from torchvision import datasets
 from torchvision.models import EfficientNet_B0_Weights, efficientnet_b0
 from torchvision.transforms import InterpolationMode
@@ -86,9 +86,11 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
         self.seed = seed
         self.gaussian_sigmas = gaussian_sigmas
         self.apply_augmentation = apply_augmentation
+        self.stochastic_augmentation = apply_augmentation and split_name in {"train", "test"}
         self.dataset_root = dataset_root
         self.enable_runtime_bad_sample_cleanup = enable_runtime_bad_sample_cleanup
         self.disabled_paths: set[str] = set()
+        self._draw_counter = 0
         
         # Original metadata
         self.classes = self.base_dataset.classes
@@ -163,6 +165,26 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
             + view_offset * 1_299_721
         )
 
+    def _runtime_augmentation_seed(
+        self,
+        source_index: int,
+        variant_index: int,
+        view_offset: int = 0,
+        attempt: int = 0,
+    ) -> int:
+        self._draw_counter += 1
+        worker = get_worker_info()
+        worker_id = worker.id if worker is not None else -1
+        entropy = int.from_bytes(os.urandom(8), byteorder="little", signed=False)
+        return (
+            entropy
+            ^ self._seed_for_variant(source_index, variant_index, view_offset)
+            ^ ((attempt + 1) * 15_485_863)
+            ^ ((self._draw_counter + 1) * 32_452_843)
+            ^ ((os.getpid() & 0xFFFFFFFF) << 1)
+            ^ ((worker_id + 2) << 17)
+        ) & ((1 << 63) - 1)
+
     def _fallback_index_for_target(self, source_index: int, target: int, attempt: int) -> int | None:
         same_class_indices = [
             i
@@ -232,7 +254,12 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
                     image = raw_image.convert("RGB")
                 
                 if self.apply_augmentation:
-                    rng = random.Random(self._seed_for_variant(source_index, variant_index, view_offset) + attempt)
+                    seed = (
+                        self._runtime_augmentation_seed(source_index, variant_index, view_offset, attempt)
+                        if self.stochastic_augmentation
+                        else self._seed_for_variant(source_index, variant_index, view_offset) + attempt
+                    )
+                    rng = random.Random(seed)
                     tensor = augmented_tensor_from_image(image, self.image_size, rng, self.gaussian_sigmas)
                 else:
                     tensor = evaluation_tensor_from_image(image, self.image_size)
@@ -2902,7 +2929,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--confidence-gap-penalty-weight", type=float, default=0.0)
     parser.add_argument("--class-loss-weight", action="append", default=[])
     parser.add_argument("--targeted-confusion-penalty", action="append", default=[])
-    parser.add_argument("--weighted-sampling", action="store_false", dest="weighted_sampling", default=True)
+    weighted_sampling_group = parser.add_mutually_exclusive_group()
+    weighted_sampling_group.add_argument(
+        "--weighted-sampling",
+        action="store_true",
+        dest="weighted_sampling",
+        help="Enable class-balanced weighted random sampling.",
+    )
+    weighted_sampling_group.add_argument(
+        "--no-weighted-sampling",
+        action="store_false",
+        dest="weighted_sampling",
+        help="Disable class-balanced weighted random sampling.",
+    )
+    parser.set_defaults(weighted_sampling=True)
     parser.add_argument("--weights", choices=("default", "none"), default="default")
     parser.add_argument("--augment-repeats", type=int, default=16)
     parser.add_argument("--augment-gaussian-sigmas", type=float, default=0.5)

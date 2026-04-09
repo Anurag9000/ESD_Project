@@ -10,7 +10,7 @@ The classification engine utilizes a highly efficient feature extractor tuned fo
 - **Parameters:** ~5.3 Million.
 - **Precision:** FP16 Mixed Precision.
 - **Optimization Strategy:** AdamW or SAM.
-- **Class Balancing:** **Weighted Random Sampling** is utilized by default. This mathematically ensures that every training batch (size 224) contains a representative distribution of all classes, preventing model bias toward high-volume categories like `organic`.
+- **Class Balancing:** **Weighted Random Sampling** is utilized by default. This balances class exposure in expectation across training and reduces bias toward high-volume categories like `organic`.
 
 ---
 
@@ -41,3 +41,9 @@ The platform supports **Dynamic Class Merging** at both training and inference t
 ## 4. Integrity and Visualization
 - **Step-Wise Analytics:** Automated confusion matrix PNGs are generated every time a new "Phase Best" is captured.
 - **Exhaustive Logging:** Every training step and validation pass is recorded in synchronized CSV files for post-run audit.
+
+---
+
+## 5. Deferred Work
+
+- **Grad-CAM / Weak Localization TODO:** Add classifier-side localization output for inference-time visualization. The intended first step is Grad-CAM heatmap generation with an approximate bounding box extracted from the hottest connected region. This is explicitly deferred and is not part of the current classifier training or deployment path.
