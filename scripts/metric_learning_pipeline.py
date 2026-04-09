@@ -145,6 +145,9 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
     def source_count(self) -> int:
         return len(self.samples)
 
+    def source_target_for_index(self, index: int) -> int:
+        return self.targets[index]
+
     def target_for_index(self, index: int) -> int:
         source_index = index % len(self.samples)
         return self.targets[source_index]
@@ -295,6 +298,12 @@ class DeterministicSupConDataset(Dataset[tuple[torch.Tensor, torch.Tensor, int]]
 
     def target_for_index(self, index: int) -> int:
         return self.base_dataset.target_for_index(index)
+
+    def source_count(self) -> int:
+        return self.base_dataset.source_count()
+
+    def source_target_for_index(self, index: int) -> int:
+        return self.base_dataset.source_target_for_index(index)
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, int]:
         source_index = index % self.base_dataset.source_count()
@@ -961,6 +970,63 @@ class DeterministicEpochSampler(Sampler[int]):
         return max(0, self.num_samples - self.start_index)
 
 
+class BalancedClassEpochSampler(Sampler[int]):
+    def __init__(
+        self,
+        classes: list[str],
+        class_source_indices: dict[int, list[int]],
+        batch_size: int,
+        seed: int,
+    ) -> None:
+        self.classes = list(classes)
+        self.class_source_indices = {int(key): list(value) for key, value in class_source_indices.items()}
+        self.batch_size = int(batch_size)
+        self.seed = int(seed)
+        self.epoch = 0
+        self.start_index = 0
+        self.max_class_count = max((len(indices) for indices in self.class_source_indices.values()), default=0)
+        self.num_samples = self.max_class_count * len(self.classes)
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = max(0, int(epoch))
+
+    def set_start_index(self, start_index: int) -> None:
+        self.start_index = min(max(0, int(start_index)), self.num_samples)
+
+    def __iter__(self):
+        if self.num_samples <= 0:
+            return iter(())
+
+        rng = random.Random(self.seed + self.epoch)
+        class_order = list(range(len(self.classes)))
+        rng.shuffle(class_order)
+        per_class_streams: dict[int, list[int]] = {}
+        for class_index in class_order:
+            source_indices = list(self.class_source_indices.get(class_index, []))
+            if not source_indices:
+                continue
+            stream: list[int] = []
+            pool: list[int] = []
+            while len(stream) < self.max_class_count:
+                if not pool:
+                    pool = list(source_indices)
+                    rng.shuffle(pool)
+                stream.append(pool.pop())
+            per_class_streams[class_index] = stream
+
+        flat_indices: list[int] = []
+        for row_index in range(self.max_class_count):
+            for class_index in class_order:
+                stream = per_class_streams.get(class_index)
+                if stream is None:
+                    continue
+                flat_indices.append(stream[row_index])
+        return iter(flat_indices[self.start_index :])
+
+    def __len__(self) -> int:
+        return max(0, self.num_samples - self.start_index)
+
+
 def make_weighted_sampler(dataset: Dataset, classes: list[str], target_fn, seed: int) -> DeterministicEpochSampler:
     counts = {name: 0 for name in classes}
     for index in range(len(dataset)):
@@ -977,6 +1043,16 @@ def make_weighted_sampler(dataset: Dataset, classes: list[str], target_fn, seed:
 
 def make_epoch_sampler(dataset: Dataset, seed: int, shuffle: bool) -> DeterministicEpochSampler:
     return DeterministicEpochSampler(len(dataset), seed, shuffle=shuffle)
+
+
+def make_balanced_sampler(dataset: Dataset, classes: list[str], batch_size: int, seed: int) -> BalancedClassEpochSampler:
+    if not hasattr(dataset, "source_count") or not hasattr(dataset, "source_target_for_index"):
+        raise TypeError("Balanced sampling requires dataset.source_count() and dataset.source_target_for_index().")
+    class_source_indices: dict[int, list[int]] = {index: [] for index in range(len(classes))}
+    source_count = int(dataset.source_count())
+    for source_index in range(source_count):
+        class_source_indices[int(dataset.source_target_for_index(source_index))].append(source_index)
+    return BalancedClassEpochSampler(classes, class_source_indices, batch_size=batch_size, seed=seed)
 
 
 def make_loader(
@@ -1114,7 +1190,7 @@ def build_auto_split_datasets(
     base_dataset = datasets.ImageFolder(root)
     
     # Use provided mapping or default plastic alias
-    effective_mapping = class_mapping if class_mapping else {"plastic": ["soft_plastic", "rigid_plastic", "hard_plastic"]}
+    effective_mapping = class_mapping if class_mapping else {"plastic": ["soft_plastic", "hard_plastic", "plastic"]}
     
     new_classes = set(base_dataset.classes)
     for target, sources in effective_mapping.items():
@@ -1519,6 +1595,12 @@ def build_scheduler(
 
 def steps_per_epoch_for_dataset(dataset: Dataset, batch_size: int, max_batches: int) -> int:
     steps = math.ceil(len(dataset) / max(1, batch_size))
+    return min(steps, max_batches) if max_batches > 0 else steps
+
+
+def steps_per_epoch_for_sampler(sampler: Sampler[int] | None, dataset: Dataset, batch_size: int, max_batches: int) -> int:
+    sample_count = len(sampler) if sampler is not None else len(dataset)
+    steps = math.ceil(sample_count / max(1, batch_size))
     return min(steps, max_batches) if max_batches > 0 else steps
 
 
@@ -2929,20 +3011,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--confidence-gap-penalty-weight", type=float, default=0.0)
     parser.add_argument("--class-loss-weight", action="append", default=[])
     parser.add_argument("--targeted-confusion-penalty", action="append", default=[])
-    weighted_sampling_group = parser.add_mutually_exclusive_group()
-    weighted_sampling_group.add_argument(
+    parser.add_argument(
+        "--sampling-strategy",
+        choices=("balanced", "weighted", "shuffle"),
+        default="balanced",
+        help="Sampling strategy for train and SupCon loaders. Defaults to balanced per-batch class cycling.",
+    )
+    parser.add_argument(
         "--weighted-sampling",
-        action="store_true",
-        dest="weighted_sampling",
-        help="Enable class-balanced weighted random sampling.",
+        action="store_const",
+        const="weighted",
+        dest="sampling_strategy",
+        help="Legacy alias: use class-balanced weighted random sampling with replacement.",
     )
-    weighted_sampling_group.add_argument(
+    parser.add_argument(
         "--no-weighted-sampling",
-        action="store_false",
-        dest="weighted_sampling",
-        help="Disable class-balanced weighted random sampling.",
+        action="store_const",
+        const="shuffle",
+        dest="sampling_strategy",
+        help="Legacy alias: disable class balancing and use shuffled source-order sampling.",
     )
-    parser.set_defaults(weighted_sampling=True)
     parser.add_argument("--weights", choices=("default", "none"), default="default")
     parser.add_argument("--augment-repeats", type=int, default=16)
     parser.add_argument("--augment-gaussian-sigmas", type=float, default=0.5)
@@ -3208,16 +3296,15 @@ def run_experiment(args: argparse.Namespace) -> int:
             },
         )
 
-    train_sampler = (
-        make_weighted_sampler(train_dataset, train_dataset.classes, train_dataset.target_for_index, args.seed + 101)
-        if args.weighted_sampling
-        else make_epoch_sampler(train_dataset, args.seed + 101, shuffle=True)
-    )
-    supcon_sampler = (
-        make_weighted_sampler(supcon_train_dataset, train_dataset.classes, supcon_train_dataset.target_for_index, args.seed + 202)
-        if args.weighted_sampling
-        else make_epoch_sampler(supcon_train_dataset, args.seed + 202, shuffle=True)
-    )
+    if args.sampling_strategy == "balanced":
+        train_sampler = make_balanced_sampler(train_dataset, train_dataset.classes, args.batch_size, args.seed + 101)
+        supcon_sampler = make_balanced_sampler(supcon_train_dataset, train_dataset.classes, args.batch_size, args.seed + 202)
+    elif args.sampling_strategy == "weighted":
+        train_sampler = make_weighted_sampler(train_dataset, train_dataset.classes, train_dataset.target_for_index, args.seed + 101)
+        supcon_sampler = make_weighted_sampler(supcon_train_dataset, train_dataset.classes, supcon_train_dataset.target_for_index, args.seed + 202)
+    else:
+        train_sampler = make_epoch_sampler(train_dataset, args.seed + 101, shuffle=True)
+        supcon_sampler = make_epoch_sampler(supcon_train_dataset, args.seed + 202, shuffle=True)
 
     train_loader = make_loader(train_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False, sampler=train_sampler)
     val_loader = make_loader(val_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False)
@@ -3236,13 +3323,14 @@ def run_experiment(args: argparse.Namespace) -> int:
             "augmentation_bank_train_count": len(train_dataset),
             "augmentation_bank_val_count": len(val_dataset),
             "augmentation_bank_test_count": len(test_dataset),
-            "train_samples_per_epoch": len(train_dataset),
+            "train_samples_per_epoch": len(train_sampler),
             "val_samples_per_eval": len(val_dataset),
             "test_samples_per_eval": len(test_dataset),
             "train_steps_per_epoch": len(train_loader),
             "supcon_steps_per_epoch": len(supcon_train_loader),
             "val_steps_per_eval": len(val_loader),
             "test_steps_per_eval": len(test_loader),
+            "sampling_strategy": args.sampling_strategy,
             "eval_every_epochs": args.eval_every_epochs,
             "supcon_early_stopping_patience": args.supcon_early_stopping_patience,
             "head_early_stopping_patience": args.head_early_stopping_patience,
@@ -3314,7 +3402,7 @@ def run_experiment(args: argparse.Namespace) -> int:
     supcon_scheduler = build_scheduler(
         base_optimizer_for_scheduler(supcon_optimizer),
         max_epochs=args.supcon_epochs,
-        steps_per_epoch=steps_per_epoch_for_dataset(supcon_train_dataset, args.batch_size, args.max_train_batches),
+        steps_per_epoch=steps_per_epoch_for_sampler(supcon_sampler, supcon_train_dataset, args.batch_size, args.max_train_batches),
         warmup_epochs=args.warmup_epochs,
         warmup_steps=args.warmup_steps,
     )
@@ -3351,7 +3439,7 @@ def run_experiment(args: argparse.Namespace) -> int:
         supcon_completed = True
 
     if not supcon_completed:
-        supcon_steps_full_epoch = steps_per_epoch_for_dataset(supcon_train_dataset, args.batch_size, args.max_train_batches)
+        supcon_steps_full_epoch = steps_per_epoch_for_sampler(supcon_sampler, supcon_train_dataset, args.batch_size, args.max_train_batches)
         supcon_scaler = build_grad_scaler(device, args)
         if resume_state.get("stage") == "supcon" and "scaler_state_dict" in resume_state:
             supcon_scaler.load_state_dict(resume_state["scaler_state_dict"])
@@ -3608,7 +3696,7 @@ def run_experiment(args: argparse.Namespace) -> int:
         scheduler = build_scheduler(
             base_optimizer_for_scheduler(optimizer),
             max_epochs=phase.max_epochs,
-            steps_per_epoch=steps_per_epoch_for_dataset(train_dataset, args.batch_size, args.max_train_batches),
+            steps_per_epoch=steps_per_epoch_for_sampler(train_sampler, train_dataset, args.batch_size, args.max_train_batches),
             warmup_epochs=args.warmup_epochs,
             warmup_steps=args.warmup_steps,
         )
@@ -3683,7 +3771,7 @@ def run_experiment(args: argparse.Namespace) -> int:
             start_index = start_phase_epoch_step * args.batch_size if same_resume_phase and epoch == start_phase_epoch else 0
             train_sampler.set_epoch(augmentation_epoch_cursor)
             train_sampler.set_start_index(start_index)
-            phase_steps_full_epoch = steps_per_epoch_for_dataset(train_dataset, args.batch_size, args.max_train_batches)
+            phase_steps_full_epoch = steps_per_epoch_for_sampler(train_sampler, train_dataset, args.batch_size, args.max_train_batches)
             phase_steps_per_epoch = max(0, phase_steps_full_epoch - (start_phase_epoch_step if same_resume_phase and epoch == start_phase_epoch else 0))
             epoch_steps_done = start_phase_epoch_step if same_resume_phase and epoch == start_phase_epoch else 0
             epoch_samples_seen = 0
@@ -4143,7 +4231,7 @@ def run_experiment(args: argparse.Namespace) -> int:
         "source_train_count": train_dataset.source_count(),
         "source_val_count": val_dataset.source_count(),
         "source_test_count": test_dataset.source_count(),
-        "train_samples_per_epoch": len(train_dataset),
+        "train_samples_per_epoch": len(train_sampler),
         "val_samples_per_eval": len(val_dataset),
         "test_samples_per_eval": len(test_dataset),
         "augmentation_bank_train_count": len(train_dataset),
@@ -4151,6 +4239,7 @@ def run_experiment(args: argparse.Namespace) -> int:
         "augmentation_bank_test_count": len(test_dataset),
         "augment_repeats": args.augment_repeats,
         "augment_gaussian_sigmas": args.augment_gaussian_sigmas,
+        "sampling_strategy": args.sampling_strategy,
         "train_class_counts": class_counts(train_dataset),
         "val_class_counts": class_counts(val_dataset),
         "test_class_counts": class_counts(test_dataset),

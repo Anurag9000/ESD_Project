@@ -16,7 +16,7 @@ source .venv/bin/activate
 
 ## 2. Training Execution
 
-The training process is automated via deterministic shell scripts.
+The training process is automated via deterministic shell scripts and now defaults to balanced per-batch class cycling for train and SupCon loaders.
 
 ### Full Pipeline Orchestration
 Executes SupCon pre-training, Progressive Unfreezing, and Recursive Refinement (Loss + Accuracy).
@@ -30,7 +30,8 @@ python scripts/train_efficientnet_b0_progressive.py \
   --dataset-root Dataset_Final \
   --batch-size 224 \
   --precision mixed \
-  --optimizer sam
+  --optimizer sam \
+  --sampling-strategy balanced
 ```
 
 ---

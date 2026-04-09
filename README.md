@@ -7,9 +7,9 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 ### Machine Learning Engine
 - **Backbone:** EfficientNet-B0 (5.3M Parameters).
 - **Corpus:** 1,045,679 verified images (WSS-1.04M).
-- **Taxonomy:** 15 granular classes, dynamically mappable to custom classification heads.
+- **Taxonomy:** Granular waste classes, dynamically mappable to custom runtime groupings.
 - **Orchestration:** Multi-phase training involving SupCon pre-training, 20-module Progressive Unfreezing, and Recursive Metric Refinement.
-- **Balancing:** Automatic **Weighted Random Sampling** enabled by default to handle severe class imbalances.
+- **Balancing:** Automatic **balanced per-batch class cycling** enabled by default to keep batches as class-uniform as possible while exploring new source images before repeats.
 
 ### SmartBin Android Fleet Dashboard
 - **Framework:** Native Kotlin, Jetpack Compose, Material 3.
@@ -24,7 +24,7 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 | Metric | Specification |
 | :--- | :--- |
 | **Current Taxonomy** | 15 granular material classes (battery, ceramic, cardboard, etc.) |
-| **Class Balancing** | **Weighted Random Sampling (Default: ON)** |
+| **Class Balancing** | **Balanced Per-Batch Cycling (Default)** |
 | **Unfreeze Step** | **20 modules (Default)** |
 | **Optimization** | AdamW (Base) or SAM (Sharpness-Aware Minimization) |
 | **Training Precision** | Mixed Precision (FP16) via `torch.amp` |
@@ -46,7 +46,7 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 ./run_training.sh \
   --eval-every-epochs 0.1 \
   --optimizer adamw \
-  --class-mapping '{"plastic": ["plastic", "hard_plastic", "rigid_plastic", "soft_plastic"]}'
+  --class-mapping '{"plastic": ["plastic", "hard_plastic", "soft_plastic"]}'
 ```
 
 ### Android Dashboard

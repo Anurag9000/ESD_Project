@@ -10,7 +10,7 @@ The classification engine utilizes a highly efficient feature extractor tuned fo
 - **Parameters:** ~5.3 Million.
 - **Precision:** FP16 Mixed Precision.
 - **Optimization Strategy:** AdamW or SAM.
-- **Class Balancing:** **Weighted Random Sampling** is utilized by default. This balances class exposure in expectation across training and reduces bias toward high-volume categories like `organic`.
+- **Class Balancing:** **Balanced per-batch class cycling** is utilized by default. Each batch is made as class-uniform as possible, and each class is sampled from shuffled per-class source-image queues before repeating items.
 
 ---
 
