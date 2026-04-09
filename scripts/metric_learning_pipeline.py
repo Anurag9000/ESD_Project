@@ -3288,7 +3288,16 @@ def run_experiment(args: argparse.Namespace) -> int:
     start_supcon_validation_index = 0
     supcon_completed = bool(args.skip_supcon)
 
-    if resume_state.get("stage") == "supcon" and "optimizer_state_dict" in resume_state and "scheduler_state_dict" in resume_state:
+    if args.skip_supcon or resume_from_best_phase:
+        supcon_completed = True
+        log_json_event(
+            log_path,
+            {
+                "event": "supcon_skipped",
+                "reason": "resume_from_best_phase" if resume_from_best_phase else "flag",
+            },
+        )
+    elif resume_state.get("stage") == "supcon" and "optimizer_state_dict" in resume_state and "scheduler_state_dict" in resume_state:
         supcon_optimizer.load_state_dict(resume_state["optimizer_state_dict"])
         supcon_scheduler.load_state_dict(resume_state["scheduler_state_dict"])
         start_supcon_epoch = int(resume_state.get("epoch", 1))
@@ -3300,15 +3309,6 @@ def run_experiment(args: argparse.Namespace) -> int:
         supcon_completed = False
     elif resume_state.get("stage") == "classifier":
         supcon_completed = True
-    elif args.skip_supcon or resume_from_best_phase:
-        supcon_completed = True
-        log_json_event(
-            log_path,
-            {
-                "event": "supcon_skipped",
-                "reason": "resume_from_best_phase" if resume_from_best_phase else "flag",
-            },
-        )
 
     if not supcon_completed:
         supcon_steps_full_epoch = steps_per_epoch_for_dataset(supcon_train_dataset, args.batch_size, args.max_train_batches)
