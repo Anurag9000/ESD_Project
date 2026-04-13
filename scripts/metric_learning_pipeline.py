@@ -2215,11 +2215,20 @@ def evaluate_classifier(
     model.eval()
     total_loss = 0.0
     total_seen = 0
+    total_correct = 0.0
+    total_raw_correct = 0.0
     all_logits = []
     all_targets = []
     eval_context = dict(eval_context or {})
+    total_batches = min(len(loader), max_batches) if max_batches > 0 else len(loader)
     with torch.no_grad():
-        for eval_step, (images, labels) in enumerate(limited_batches(loader, max_batches), start=1):
+        progress = tqdm(
+            enumerate(limited_batches(loader, max_batches), start=1),
+            total=total_batches,
+            desc=f"eval/{split}",
+            leave=False,
+        )
+        for eval_step, (images, labels) in progress:
             images = move_images_to_device(images, device, args) if args is not None else images.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
             with torch.amp.autocast("cuda", enabled=args is not None and autocast_enabled(device, args)):
@@ -2227,10 +2236,22 @@ def evaluate_classifier(
                 margin_logits = model.classify(embeddings, labels)
                 logits = model.classify(embeddings, labels=None)
                 loss, _, _, _ = classifier_loss_from_logits(margin_logits, logits, labels, args)
+            
+            threshold = args.confidence_threshold if args is not None else 0.8
+            qualified_correct, raw_correct = confidence_qualified_correct_count(logits, labels, threshold)
+            
             total_loss += loss.item() * labels.size(0)
             total_seen += labels.size(0)
+            total_correct += qualified_correct
+            total_raw_correct += raw_correct
+            
             all_logits.append(logits.detach().cpu().float().numpy())
             all_targets.append(labels.detach().cpu().numpy())
+            
+            running_loss = total_loss / max(1, total_seen)
+            running_acc = total_correct / max(1, total_seen)
+            running_raw_acc = total_raw_correct / max(1, total_seen)
+            progress.set_postfix(step=eval_step, seen=total_seen, loss=f"{running_loss:.4f}", acc=f"{running_acc:.4f}", raw_acc=f"{running_raw_acc:.4f}")
             if eval_step % log_every_eval_steps == 0:
                 log_json_event(
                     log_path,
@@ -2241,7 +2262,9 @@ def evaluate_classifier(
                         "eval_step": eval_step,
                         "batch_size": labels.size(0),
                         "samples_seen": total_seen,
-                        "running_loss": total_loss / max(1, total_seen),
+                        "running_loss": running_loss,
+                        "running_acc": running_acc,
+                        "running_raw_acc": running_raw_acc,
                         **eval_context,
                     },
                 )
@@ -2266,16 +2289,37 @@ def collect_logits_and_labels(
     model.eval()
     logits_list: list[torch.Tensor] = []
     labels_list: list[torch.Tensor] = []
+    total_batches = min(len(loader), max_batches) if max_batches > 0 else len(loader)
     with torch.no_grad():
         total_seen = 0
-        for eval_step, (images, labels) in enumerate(limited_batches(loader, max_batches), start=1):
+        total_correct = 0.0
+        total_raw_correct = 0.0
+        progress = tqdm(
+            enumerate(limited_batches(loader, max_batches), start=1),
+            total=total_batches,
+            desc=f"eval/{split}",
+            leave=False,
+        )
+        for eval_step, (images, labels) in progress:
             images = move_images_to_device(images, device, args) if args is not None else images.to(device, non_blocking=True)
             with torch.amp.autocast("cuda", enabled=args is not None and autocast_enabled(device, args)):
                 embeddings = model.encode(images)
                 logits = model.classify(embeddings, labels=None)
+            
+            threshold = args.confidence_threshold if args is not None else 0.8
+            qualified_correct, raw_correct = confidence_qualified_correct_count(logits, labels.to(logits.device), threshold)
+            
             logits_list.append(logits.cpu())
             labels_list.append(labels.cpu())
+            
             total_seen += labels.size(0)
+            total_correct += qualified_correct
+            total_raw_correct += raw_correct
+            
+            running_acc = total_correct / max(1, total_seen)
+            running_raw_acc = total_raw_correct / max(1, total_seen)
+            progress.set_postfix(step=eval_step, seen=total_seen, acc=f"{running_acc:.4f}", raw_acc=f"{running_raw_acc:.4f}")
+            
             if eval_step % log_every_eval_steps == 0:
                 log_json_event(
                     log_path,
@@ -2286,6 +2330,8 @@ def collect_logits_and_labels(
                         "eval_step": eval_step,
                         "batch_size": labels.size(0),
                         "samples_seen": total_seen,
+                        "running_acc": running_acc,
+                        "running_raw_acc": running_raw_acc,
                     },
                 )
     logits = torch.cat(logits_list, dim=0).numpy()
@@ -3066,6 +3112,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warmup-steps", type=int, default=1024)
     parser.add_argument("--sam-rho", type=float, default=0.05)
     parser.add_argument("--grad-accum-steps", type=int, default=1)
+    parser.add_argument(
+        "--skip-final-test",
+        action="store_true",
+        help=(
+            "Skip the final test-set evaluation pass at the end of a training run. "
+            "Recommended for all phase hand-offs; a test pass can be run at any time "
+            "via evaluate_saved_classifier.py on any saved checkpoint."
+        ),
+    )
     return parser
 
 
@@ -4177,35 +4232,42 @@ def run_experiment(args: argparse.Namespace) -> int:
     )
     release_training_memory(device, val_loader)
     log_json_event(log_path, {"event": "final_evaluation_finished", "split": "val", "eval_batches": val_eval_batches})
-    log_json_event(log_path, {"event": "final_evaluation_started", "split": "test", "eval_batches": test_eval_batches})
-    test_logits, test_targets = collect_logits_and_labels(
-        model,
-        test_loader,
-        device,
-        args.max_eval_batches,
-        log_path,
-        args.log_eval_every_steps,
-        "test",
-        args,
-    )
-    release_training_memory(device, test_loader)
-    log_json_event(log_path, {"event": "final_evaluation_finished", "split": "test", "eval_batches": test_eval_batches})
+
+    if not args.skip_final_test:
+        log_json_event(log_path, {"event": "final_evaluation_started", "split": "test", "eval_batches": test_eval_batches})
+        test_logits, test_targets = collect_logits_and_labels(
+            model,
+            test_loader,
+            device,
+            args.max_eval_batches,
+            log_path,
+            args.log_eval_every_steps,
+            "test",
+            args,
+        )
+        release_training_memory(device, test_loader)
+        log_json_event(log_path, {"event": "final_evaluation_finished", "split": "test", "eval_batches": test_eval_batches})
 
     val_metrics = compute_classification_metrics(val_logits, val_targets, train_dataset.classes, args.confidence_threshold)
-    test_metrics = compute_classification_metrics(test_logits, test_targets, train_dataset.classes, args.confidence_threshold)
-    test_correct_confidence = compute_correct_confidence_by_class(test_logits, test_targets, train_dataset.classes)
+    if not args.skip_final_test:
+        test_metrics = compute_classification_metrics(test_logits, test_targets, train_dataset.classes, args.confidence_threshold)
+        test_correct_confidence = compute_correct_confidence_by_class(test_logits, test_targets, train_dataset.classes)  # noqa: F841
+    else:
+        test_metrics = {}
+        log_json_event(log_path, {"event": "final_test_evaluation_skipped", "reason": "--skip-final-test flag set"})
     save_confusion_matrix_plot(
         output_dir / "validation_confusion_matrix.png",
         np.asarray(val_metrics["confusion_matrix"], dtype=np.int64),
         train_dataset.classes,
         "Validation Confusion Matrix",
     )
-    save_confusion_matrix_plot(
-        output_dir / "test_confusion_matrix.png",
-        np.asarray(test_metrics["confusion_matrix"], dtype=np.int64),
-        train_dataset.classes,
-        "Test Confusion Matrix",
-    )
+    if not args.skip_final_test:
+        save_confusion_matrix_plot(
+            output_dir / "test_confusion_matrix.png",
+            np.asarray(test_metrics["confusion_matrix"], dtype=np.int64),
+            train_dataset.classes,
+            "Test Confusion Matrix",
+        )
 
     final_checkpoint = {
         "model_state_dict": model.state_dict(),

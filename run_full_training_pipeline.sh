@@ -65,6 +65,7 @@ python scripts/run_recursive_refinement.py \
   --patience 5 \
   --head-epochs 0 \
   --resume-phase-index 1 \
+  -- --skip-final-test \
   "${FILTERED_ARGS[@]}"
 
 RAWACC_OUTPUT_DIR="$RUN_ROOT/rawacc_refine"
@@ -110,4 +111,31 @@ python scripts/run_recursive_refinement.py \
   --patience 5 \
   --head-epochs 0 \
   --resume-phase-index 1 \
+  -- --skip-final-test \
   "${FILTERED_ARGS[@]}"
+
+# ─── Final test-set evaluation on the best accepted model ────────────────────
+# Runs ONCE at the very end of the entire pipeline (after all recursive
+# refinement is complete). Full 16-aug stochastic test pass — no skipping.
+FINAL_CHECKPOINT="$RAWACC_OUTPUT_DIR/accepted_best.pt"
+if [[ ! -f "$FINAL_CHECKPOINT" ]]; then
+  FINAL_CHECKPOINT="$LOSS_OUTPUT_DIR/accepted_best.pt"
+fi
+if [[ ! -f "$FINAL_CHECKPOINT" ]]; then
+  FINAL_CHECKPOINT="$INITIAL_CHECKPOINT"
+fi
+
+FINAL_TEST_OUTPUT_DIR="$RUN_ROOT/final_test_evaluation"
+echo "" >& 2
+echo "=== Pipeline complete. Running final test-set evaluation ==="  >& 2
+echo "    Checkpoint : $FINAL_CHECKPOINT"  >& 2
+echo "    Output dir : $FINAL_TEST_OUTPUT_DIR"  >& 2
+
+python scripts/evaluate_saved_classifier.py \
+  --checkpoint "$FINAL_CHECKPOINT" \
+  --output-dir "$FINAL_TEST_OUTPUT_DIR" \
+  --dataset-root "$DATASET_ROOT" \
+  --batch-size 224 \
+  --splits test
+
+echo "=== Final test evaluation written to $FINAL_TEST_OUTPUT_DIR ===" >& 2
