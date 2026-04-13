@@ -49,5 +49,3 @@ Dataset_Final.zip
 Dataset_Mock/
 Results/demo_run_*/
 logs/demo_run_*/
-scripts/confmat_purge.py
-scripts/eval_splits_no_aug.py
