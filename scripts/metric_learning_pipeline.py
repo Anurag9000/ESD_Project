@@ -1218,33 +1218,56 @@ def build_auto_split_datasets(
     base_dataset.class_to_idx = new_class_to_idx
     base_dataset.targets = [s[1] for s in base_dataset.samples]
 
-    by_class: dict[int, list[tuple[str, int]]] = {index: [] for index in range(len(base_dataset.classes))}
+    # ── Source-level stratified split ────────────────────────────────────────
+    # Within each class, group images by their semantic source prefix (derived
+    # from filename). Each source batch is split independently at the ratio
+    # boundary, so every source contributes its proportional share of images
+    # to train, val, and test. This prevents any single dominant source from
+    # flooding val/test while others are under-represented.
+    import re as _re
+
+    def _source_prefix(path: str) -> str:
+        stem = Path(path).stem
+        parts = _re.split(r'[^a-zA-Z0-9]', stem)
+        for p in parts:
+            word = _re.sub(r'\d+', '', p)
+            if word:
+                return word.lower()
+        return stem[:8].lower()
+
+    by_class: dict[int, dict[str, list[tuple[str, int]]]] = {
+        index: {} for index in range(len(base_dataset.classes))
+    }
     for path, target in base_dataset.samples:
-        by_class[int(target)].append((path, int(target)))
+        src = _source_prefix(path)
+        by_class[int(target)].setdefault(src, []).append((path, int(target)))
 
     rng = random.Random(args.seed)
     train_samples: list[tuple[str, int]] = []
     val_samples: list[tuple[str, int]] = []
     test_samples: list[tuple[str, int]] = []
     split_counts: dict[str, dict[str, int]] = {"train": {}, "val": {}, "test": {}}
-    for class_index, samples in by_class.items():
-        shuffled = list(samples)
-        rng.shuffle(shuffled)
-        train_count, val_count, test_count = allocate_split_counts(len(shuffled), ratios)
-        train_chunk = shuffled[:train_count]
-        val_chunk = shuffled[train_count : train_count + val_count]
-        test_chunk = shuffled[train_count + val_count : train_count + val_count + test_count]
-        train_samples.extend(train_chunk)
-        val_samples.extend(val_chunk)
-        test_samples.extend(test_chunk)
+
+    for class_index, sources in by_class.items():
         class_name = base_dataset.classes[class_index]
-        split_counts["train"][class_name] = len(train_chunk)
-        split_counts["val"][class_name] = len(val_chunk)
-        split_counts["test"][class_name] = len(test_chunk)
+        cls_train, cls_val, cls_test = 0, 0, 0
+        for src_name, src_samples in sorted(sources.items()):
+            shuffled = list(src_samples)
+            rng.shuffle(shuffled)
+            tr_n, va_n, te_n = allocate_split_counts(len(shuffled), ratios)
+            train_samples.extend(shuffled[:tr_n])
+            val_samples.extend(shuffled[tr_n : tr_n + va_n])
+            test_samples.extend(shuffled[tr_n + va_n : tr_n + va_n + te_n])
+            cls_train += tr_n
+            cls_val   += va_n
+            cls_test  += te_n
+        split_counts["train"][class_name] = cls_train
+        split_counts["val"][class_name]   = cls_val
+        split_counts["test"][class_name]  = cls_test
 
     manifest = {
         "dataset_root": str(root),
-        "split_mode": "auto_stratified_from_flat_root",
+        "split_mode": "source_stratified_within_class",
         "seed": int(args.seed),
         "split_ratios": {"train": ratios[0], "val": ratios[1], "test": ratios[2]},
         "class_names": list(base_dataset.classes),
@@ -3113,12 +3136,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sam-rho", type=float, default=0.05)
     parser.add_argument("--grad-accum-steps", type=int, default=1)
     parser.add_argument(
-        "--skip-final-test",
+        "--run-final-test",
         action="store_true",
+        default=False,
         help=(
-            "Skip the final test-set evaluation pass at the end of a training run. "
-            "Recommended for all phase hand-offs; a test pass can be run at any time "
-            "via evaluate_saved_classifier.py on any saved checkpoint."
+            "Run a final test-set evaluation pass at the end of training. "
+            "OFF by default — the test set is a sacred holdout and must never "
+            "be touched during any phase of training or phase hand-offs. "
+            "Enable only when you explicitly want a final one-time test report. "
+            "A test pass can also be run at any time via evaluate_saved_classifier.py."
         ),
     )
     return parser
@@ -4233,7 +4259,7 @@ def run_experiment(args: argparse.Namespace) -> int:
     release_training_memory(device, val_loader)
     log_json_event(log_path, {"event": "final_evaluation_finished", "split": "val", "eval_batches": val_eval_batches})
 
-    if not args.skip_final_test:
+    if args.run_final_test:
         log_json_event(log_path, {"event": "final_evaluation_started", "split": "test", "eval_batches": test_eval_batches})
         test_logits, test_targets = collect_logits_and_labels(
             model,
@@ -4249,19 +4275,19 @@ def run_experiment(args: argparse.Namespace) -> int:
         log_json_event(log_path, {"event": "final_evaluation_finished", "split": "test", "eval_batches": test_eval_batches})
 
     val_metrics = compute_classification_metrics(val_logits, val_targets, train_dataset.classes, args.confidence_threshold)
-    if not args.skip_final_test:
+    if args.run_final_test:
         test_metrics = compute_classification_metrics(test_logits, test_targets, train_dataset.classes, args.confidence_threshold)
         test_correct_confidence = compute_correct_confidence_by_class(test_logits, test_targets, train_dataset.classes)  # noqa: F841
     else:
         test_metrics = {}
-        log_json_event(log_path, {"event": "final_test_evaluation_skipped", "reason": "--skip-final-test flag set"})
+        log_json_event(log_path, {"event": "final_test_evaluation_skipped", "reason": "--run-final-test not set (default: protected holdout)"})
     save_confusion_matrix_plot(
         output_dir / "validation_confusion_matrix.png",
         np.asarray(val_metrics["confusion_matrix"], dtype=np.int64),
         train_dataset.classes,
         "Validation Confusion Matrix",
     )
-    if not args.skip_final_test:
+    if args.run_final_test:
         save_confusion_matrix_plot(
             output_dir / "test_confusion_matrix.png",
             np.asarray(test_metrics["confusion_matrix"], dtype=np.int64),
