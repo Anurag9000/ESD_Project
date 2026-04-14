@@ -1,31 +1,26 @@
 #!/usr/bin/env python3
 """
-Dataset Source Audit Tool
-=========================
-For every class in Dataset_Final, groups images by their source-batch prefix
-(everything before the last underscore+hex/number suffix), then randomly
-samples 10 images from each batch into a structured audit folder.
+Dataset Source Audit Tool — Flat Output
+========================================
+Samples 10 images per source-batch per class into a FLAT per-class folder.
+Every sampled file is renamed as:  <source-batch-name>_sample_NNN.jpg
 
 Output layout:
     dataset_audit/
         metal/
-            bottles-and-cans/        ← source batch name
-                sample_001.jpg
-                sample_002.jpg
-                ...
-            count-coins-image-dataset/
-                sample_001.jpg
-                ...
+            bottles-and-cans_sample_001.jpg
+            bottles-and-cans_sample_002.jpg
+            count-coins-image-dataset_sample_001.jpg
+            ...
         plastic/
             ...
 
 Usage:
     python scripts/audit_dataset_by_source.py
-    python scripts/audit_dataset_by_source.py --dataset Dataset_Final --out dataset_audit --n 10
+    python scripts/audit_dataset_by_source.py --n 15 --classes metal plastic
 """
 
 import argparse
-import os
 import random
 import re
 import shutil
@@ -33,68 +28,52 @@ from collections import defaultdict
 from pathlib import Path
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Prefix extraction logic
-# ──────────────────────────────────────────────────────────────────────────────
-
 def extract_source_prefix(filename: str) -> str:
     """
-    Given a filename like:
-        bottles-and-cans_008edc25.jpg          → 'bottles-and-cans'
-        biodegradable1234_0.jpg                → 'biodegradable1234'
-        crop_0_abc123.jpg                      → 'crop_0'
-        202512-paper100.jpg                    → '202512-paper100.jpg'  (no separable prefix)
-        20240626_162343.jpg                    → '20240626'
-
-    Rule: strip the file extension, then split on underscore from the RIGHT.
-    If the rightmost segment looks like a hash (hex) or pure number, it is
-    considered a suffix and dropped. Otherwise the whole stem is the prefix.
+    Extremely aggressive grouping: Parses strictly until the very first 
+    underscore, hyphen, or space to collapse all subgroups 
+    (e.g., 'garbage_classification_v2' -> 'garbage').
     """
-    stem = Path(filename).stem  # remove extension
-
-    # Split on the LAST underscore
-    parts = stem.rsplit('_', 1)
-    if len(parts) == 2:
-        suffix = parts[1]
-        # treat as a suffix if it is purely hex OR purely numeric
-        if re.fullmatch(r'[0-9a-fA-F]{4,}', suffix) or re.fullmatch(r'\d+', suffix):
-            return parts[0]
-
-    # No strippable suffix → whole stem is the source key
-    return stem
+    stem = Path(filename).stem
+    
+    # Grab the very first chunk of letters/numbers before any delimiter
+    match = re.match(r'^([a-zA-Z0-9]+)', stem)
+    if match:
+        return match.group(1).lower()
+        
+    # Fallback if filename starts with weird characters
+    return stem[:8].lower()
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Main
-# ──────────────────────────────────────────────────────────────────────────────
+def safe_name(s: str, max_len: int = 80) -> str:
+    """Replace characters that are bad in filenames, and truncate to max_len."""
+    cleaned = re.sub(r'[^\w\-]', '_', s)
+    return cleaned[:max_len]
+
 
 def main():
-    parser = argparse.ArgumentParser(description="Audit dataset by source batch")
-    parser.add_argument("--dataset", default="Dataset_Final",
-                        help="Root dataset directory (default: Dataset_Final)")
-    parser.add_argument("--out", default="dataset_audit",
-                        help="Output audit directory (default: dataset_audit)")
-    parser.add_argument("--n", type=int, default=10,
-                        help="Number of sample images per source batch (default: 10)")
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--classes", nargs="*",
-                        help="Limit to specific classes (default: all)")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", default="Dataset_Final")
+    parser.add_argument("--out",     default="dataset_audit")
+    parser.add_argument("--n",       type=int, default=10)
+    parser.add_argument("--seed",    type=int, default=42)
+    parser.add_argument("--classes", nargs="*")
     args = parser.parse_args()
 
     random.seed(args.seed)
     dataset_root = Path(args.dataset)
-    out_root = Path(args.out)
+    out_root     = Path(args.out)
 
     if not dataset_root.is_dir():
         print(f"ERROR: dataset dir not found: {dataset_root}")
         return
 
     IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+    SKIP       = {"hard_plastic", "soft_plastic"}
 
     all_classes = sorted([
         d.name for d in dataset_root.iterdir()
-        if d.is_dir() and not d.name.startswith(".")
-        and d.name not in {"auto_split_manifest.json"}
+        if d.is_dir() and not d.name.startswith(".") and d.name not in SKIP
     ])
 
     if args.classes:
@@ -108,41 +87,38 @@ def main():
         if not class_dir.is_dir():
             continue
 
-        # Group files by source prefix
-        source_groups: dict[str, list[Path]] = defaultdict(list)
+        # Group images by source-batch prefix
+        groups: dict[str, list[Path]] = defaultdict(list)
         for f in class_dir.iterdir():
             if f.suffix.lower() in IMAGE_EXTS and not f.name.startswith("."):
-                prefix = extract_source_prefix(f.name)
-                source_groups[prefix].append(f)
+                groups[extract_source_prefix(f.name)].append(f)
 
-        print(f"\n{'='*60}")
-        print(f"  Class: {class_name}  ({len(source_groups)} source batches, "
-              f"{sum(len(v) for v in source_groups.values())} images total)")
-        print(f"{'='*60}")
+        # One flat output folder per class — NO subfolders
+        out_dir = out_root / class_name
+        out_dir.mkdir(parents=True, exist_ok=True)
 
-        for source_name, files in sorted(source_groups.items()):
-            # Sample up to N images randomly
+        print(f"\n{'='*55}")
+        print(f"  {class_name.upper()}  ({len(groups)} batches, "
+              f"{sum(len(v) for v in groups.values())} images)")
+        print(f"{'='*55}")
+
+        for source, files in sorted(groups.items()):
             sample = random.sample(files, min(args.n, len(files)))
-
-            out_dir = out_root / class_name / source_name
-            out_dir.mkdir(parents=True, exist_ok=True)
-
-            for i, src_file in enumerate(sorted(sample), 1):
-                dst = out_dir / f"sample_{i:03d}{src_file.suffix.lower()}"
-                shutil.copy2(src_file, dst)
-
-            print(f"  [{len(files):>6} imgs]  {source_name:<60} → sampled {len(sample)}")
+            prefix = safe_name(source)
+            for i, src in enumerate(sorted(sample), 1):
+                dst = out_dir / f"{prefix}_sample_{i:03d}{src.suffix.lower()}"
+                shutil.copy2(src, dst)
+            print(f"  [{len(files):>6}]  {source}  →  {len(sample)} samples")
             total_sources += 1
             total_sampled += len(sample)
 
-    print(f"\n{'='*60}")
-    print(f"  DONE")
-    print(f"  Total source batches : {total_sources}")
-    print(f"  Total images sampled : {total_sampled}")
-    print(f"  Audit folder         : {out_root.resolve()}")
-    print(f"{'='*60}")
-    print(f"\nOpen '{out_root}/' in your file manager to visually inspect each batch.")
-    print("For each batch that looks contaminated, note the source name and tell me.")
+    print(f"\n{'='*55}")
+    print(f"  DONE — {total_sources} batches, {total_sampled} images")
+    print(f"  Location: {out_root.resolve()}")
+    print(f"{'='*55}")
+    print("\nEach file inside a class folder is named:")
+    print("  <source-batch-name>_sample_NNN.jpg")
+    print("\nTell me any source-batch name that looks contaminated and I will purge it.")
 
 
 if __name__ == "__main__":
