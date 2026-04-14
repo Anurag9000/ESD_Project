@@ -10,8 +10,8 @@ This file serves as the definitive context for AI agents operating within the ES
 
 ## 2. Definitive State
 - **Core Model:** EfficientNet-B0 (5.3M params).
-- **Core Dataset:** WSS-1.04M (1,045,679 verified images).
-- **Taxonomy:** 15 Material Classes (Industrial Standard).
+- **Core Dataset:** WSS-691K (691,015 decontaminated images).
+- **Taxonomy:** 10 Material Classes — battery, clothes, ewaste, glass, hard_plastic, metal, organic, paper, shoes, soft_plastic. NO plastic, NO cardboard (merged into paper), NO medical, NO ceramic.
 - **Mobile Stack:** Jetpack Compose, OSM (MapLibre), WebSockets.
 
 ## 3. Mandatory Constraints

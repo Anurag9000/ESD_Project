@@ -1189,8 +1189,8 @@ def build_auto_split_datasets(
     ratios = parse_auto_split_ratios(args.auto_split_ratios)
     base_dataset = datasets.ImageFolder(root)
     
-    # Use provided mapping or default plastic alias
-    effective_mapping = class_mapping if class_mapping else {"plastic": ["soft_plastic", "hard_plastic", "plastic"]}
+    # No default class mapping needed - hard_plastic and soft_plastic are distinct classes
+    effective_mapping = class_mapping if class_mapping else {}
     
     new_classes = set(base_dataset.classes)
     for target, sources in effective_mapping.items():

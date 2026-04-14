@@ -6,8 +6,8 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 
 ### Machine Learning Engine
 - **Backbone:** EfficientNet-B0 (5.3M Parameters).
-- **Corpus:** 1,045,679 verified images (WSS-1.04M).
-- **Taxonomy:** Granular waste classes, dynamically mappable to custom runtime groupings.
+- **Corpus:** 691,015 verified images (WSS-691K, post-decontamination).
+- **Taxonomy:** **10 material classes** — battery, clothes, ewaste, glass, hard_plastic, metal, organic, paper, shoes, soft_plastic.
 - **Orchestration:** Multi-phase training involving SupCon pre-training, 20-module Progressive Unfreezing, and Recursive Metric Refinement.
 - **Balancing:** Automatic **balanced per-batch class cycling** enabled by default to keep batches as class-uniform as possible while exploring new source images before repeats.
 
@@ -23,7 +23,8 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 
 | Metric | Specification |
 | :--- | :--- |
-| **Current Taxonomy** | 15 granular material classes (battery, ceramic, cardboard, etc.) |
+| **Current Taxonomy** | **10 material classes** (battery, clothes, ewaste, glass, hard_plastic, metal, organic, paper, shoes, soft_plastic) |
+| **Total Images** | **691,015 (post-decontamination)** |
 | **Class Balancing** | **Balanced Per-Batch Cycling (Default)** |
 | **Unfreeze Step** | **20 modules (Default)** |
 | **Optimization** | AdamW (Base) or SAM (Sharpness-Aware Minimization) |
@@ -33,8 +34,8 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 ---
 
 ## 3. Documentation Index
-- **`ARCHITECTURE_AND_PLAN.md`**: Technical specification of the model and training pipeline.
-- **`DATASET_SPECIFICATION.md`**: Detailed breakdown of the 1.04M image corpus and class definitions.
+- **`ARCHITECTURE_AND_PLAN.md`**: Technical specification of the model and training pipeline including the 10-class index table.
+- **`DATASET_SPECIFICATION.md`**: Detailed breakdown of the 691K image corpus and class definitions post-decontamination.
 - **`PYTORCH_SETUP.md`**: Environment configuration and execution manual.
 - **`SmartBin_Android/docs/`**: Mobile-specific architectural and product specifications.
 
@@ -42,11 +43,11 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 
 ### Standard Production Training
 ```bash
-# Execute the full lifecycle with 10% validation steps and merged plastics
+# Execute the full lifecycle with 10% validation steps
+# Classes auto-detected from Dataset_Final/ subfolders
 ./run_training.sh \
   --eval-every-epochs 0.1 \
-  --optimizer adamw \
-  --class-mapping '{"plastic": ["plastic", "hard_plastic", "soft_plastic"]}'
+  --optimizer adamw
 ```
 
 ### Android Dashboard
