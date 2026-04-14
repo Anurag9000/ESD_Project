@@ -5,10 +5,10 @@ from torchvision.models import efficientnet_b0
 
 class SmartBinModel(nn.Module):
     """
-    Custom Metric Learning EfficientNet-B0 architecture used in the ESD project.
-    10 classes: battery, clothes, ewaste, glass, hard_plastic, metal, organic, paper, shoes, soft_plastic
+    Custom Metric Learning EfficientNet-B0 architecture — 8-class configuration.
+    Classes: clothes, ewaste, glass, hard_plastic, metal, organic, paper, soft_plastic
     """
-    def __init__(self, num_classes=10, embedding_dim=128):
+    def __init__(self, num_classes=8, embedding_dim=128):
         super().__init__()
         # 1. Base Backbone (EfficientNet-B0)
         self.backbone = efficientnet_b0(weights=None)
