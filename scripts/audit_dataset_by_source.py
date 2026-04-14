@@ -63,7 +63,8 @@ def main():
     parser.add_argument("--classes", nargs="*")
     args = parser.parse_args()
 
-    random.seed(args.seed)
+    import time
+    random.seed(time.time()) # True randomness for every audit run
     dataset_root = Path(args.dataset)
     out_root     = Path(args.out)
 
