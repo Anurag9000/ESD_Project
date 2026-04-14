@@ -69,11 +69,9 @@ def main():
         return
 
     IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
-    SKIP       = {"hard_plastic", "soft_plastic"}
-
     all_classes = sorted([
         d.name for d in dataset_root.iterdir()
-        if d.is_dir() and not d.name.startswith(".") and d.name not in SKIP
+        if d.is_dir() and not d.name.startswith(".")
     ])
 
     if args.classes:
