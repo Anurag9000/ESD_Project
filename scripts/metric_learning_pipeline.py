@@ -1118,11 +1118,11 @@ def build_datasets(
         test_dataset = DeterministicAugmentedImageFolder(
             root / "test",
             args.image_size,
-            args.augment_repeats,
+            1,  # no repeat multiplier on test — evaluate each image exactly once
             "test",
             args.seed,
             args.augment_gaussian_sigmas,
-            apply_augmentation=True,
+            apply_augmentation=False,  # test is always clean — no augmentation
             class_mapping=class_mapping,
             dataset_root=root,
             enable_runtime_bad_sample_cleanup=args.runtime_bad_sample_cleanup,
@@ -1285,11 +1285,11 @@ def build_auto_split_datasets(
     test_dataset = DeterministicAugmentedImageFolder(
         None,
         args.image_size,
-        args.augment_repeats,
+        1,  # no repeat multiplier on test — evaluate each image exactly once
         "test",
         args.seed,
         args.augment_gaussian_sigmas,
-        apply_augmentation=True,
+        apply_augmentation=False,  # test is always clean — no augmentation
         base_dataset=base_dataset,
         samples=test_samples,
         dataset_root=root,
