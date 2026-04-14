@@ -30,18 +30,21 @@ from pathlib import Path
 
 def extract_source_prefix(filename: str) -> str:
     """
-    Extremely aggressive grouping: Parses strictly until the very first 
-    underscore, hyphen, or space to collapse all subgroups 
-    (e.g., 'garbage_classification_v2' -> 'garbage').
+    Ultra-aggressive 'word-only' grouping:
+    Splits by non-alphanumeric, strips all digits, and takes the first 
+    resulting non-empty word. This collapses versions and numbered files 
+    (e.g., 'plastic123', 'plastic234', 'trash-v2' -> 'plastic', 'trash').
     """
     stem = Path(filename).stem
-    
-    # Grab the very first chunk of letters/numbers before any delimiter
-    match = re.match(r'^([a-zA-Z0-9]+)', stem)
-    if match:
-        return match.group(1).lower()
-        
-    # Fallback if filename starts with weird characters
+    # Split by any character that isn't a letter or number
+    parts = re.split(r'[^a-zA-Z0-9]', stem)
+    for p in parts:
+        # Remove all digits from the part
+        word = re.sub(r'\d+', '', p)
+        if word:
+            return word.lower()
+            
+    # Fallback to first 8 chars if no pure words found
     return stem[:8].lower()
 
 
