@@ -3117,7 +3117,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-eval-batches", type=int, default=0)
     parser.add_argument("--log-every-steps", type=int, default=1)
     parser.add_argument("--log-eval-every-steps", type=int, default=1)
-    parser.add_argument("--eval-every-epochs", type=float, default=0.5)
+    parser.add_argument("--eval-every-epochs", type=float, default=0.01)
     parser.add_argument(
         "--runtime-bad-sample-cleanup",
         action="store_true",
