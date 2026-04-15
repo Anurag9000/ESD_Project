@@ -2792,21 +2792,14 @@ import csv
 from datetime import datetime
 
 
-def append_to_csv(csv_path: Path, data: dict[str, Any]):
+def append_to_csv(csv_path: Path, data: dict[str, Any]) -> None:
     file_exists = csv_path.exists()
-    import csv
-    # Flatten dict for CSV
-    flat_data = {}
+    flat_data: dict[str, Any] = {}
     for k, v in data.items():
-        if isinstance(v, (list, dict)):
-            import json
-            flat_data[k] = json.dumps(v)
-        else:
-            flat_data[k] = v
-    
+        flat_data[k] = json.dumps(v) if isinstance(v, (list, dict)) else v
     keys = list(flat_data.keys())
-    with open(csv_path, "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=keys)
+    with open(csv_path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=keys, extrasaction="ignore", restval="")
         if not file_exists:
             writer.writeheader()
         writer.writerow(flat_data)
@@ -4382,8 +4375,10 @@ def run_experiment(args: argparse.Namespace) -> int:
             "Test Confusion Matrix",
         )
 
+    # cpu_state_dict: detach + move to CPU + clone — consistent with all other
+    # checkpoint saves in this file and safe for map_location-free loading.
     final_checkpoint = {
-        "model_state_dict": model.state_dict(),
+        "model_state_dict": cpu_state_dict(model),
         "class_names": train_dataset.classes,
         "class_to_idx": train_dataset.class_to_idx,
         "args": vars(args),
