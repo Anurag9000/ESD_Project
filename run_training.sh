@@ -8,7 +8,20 @@ source .venv/bin/activate
 
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
-RUN_STAMP="${RUN_STAMP:-$(date +%Y%m%d_%H%M%S)}"
+# ── AUTO-RESUME LOGIC ──
+# If no RUN_STAMP is set in the environment, detect the most recent one automatically
+if [[ -z "${RUN_STAMP:-}" ]]; then
+  LATEST_RUN=$(ls -td Results/efficientnet_b0_all_classes_* 2>/dev/null | head -1 || true)
+  if [[ -n "$LATEST_RUN" ]]; then
+    # Extract the timestamp part
+    RUN_STAMP=$(basename "$LATEST_RUN" | sed 's/efficientnet_b0_all_classes_//')
+    echo "🔄 Found previous run: $RUN_STAMP. Enforcing automatic resume."
+  else
+    RUN_STAMP="$(date +%Y%m%d_%H%M%S)"
+    echo "🚀 Starting new run: $RUN_STAMP"
+  fi
+fi
+
 RUN_ROOT="${RUN_ROOT:-Results/efficientnet_b0_all_classes_${RUN_STAMP}}"
 LOG_ROOT="${LOG_ROOT:-logs/efficientnet_b0_all_classes_${RUN_STAMP}}"
 PROGRESSIVE_OUTPUT_DIR="$RUN_ROOT/progressive"
@@ -36,11 +49,21 @@ done
 
 mkdir -p "$RUN_ROOT" "$LOG_ROOT"
 
+AUTO_RESUME_ARGS=()
+if [[ -f "$PROGRESSIVE_OUTPUT_DIR/step_last.pt" ]]; then
+  echo "🔄 Auto-resuming from EXACT LAST STEP: $PROGRESSIVE_OUTPUT_DIR/step_last.pt"
+  AUTO_RESUME_ARGS=(--resume-checkpoint "$PROGRESSIVE_OUTPUT_DIR/step_last.pt")
+elif [[ -f "$PROGRESSIVE_OUTPUT_DIR/last.pt" ]]; then
+  echo "🔄 Auto-resuming from LAST COMPLETED EPOCH: $PROGRESSIVE_OUTPUT_DIR/last.pt"
+  AUTO_RESUME_ARGS=(--resume-checkpoint "$PROGRESSIVE_OUTPUT_DIR/last.pt")
+fi
+
 python scripts/train_efficientnet_b0_progressive.py \
   --dataset-root "$DATASET_ROOT" \
   --weighted-sampling \
   --output-dir "$PROGRESSIVE_OUTPUT_DIR" \
   --log-file "$PROGRESSIVE_LOG_FILE" \
+  "${AUTO_RESUME_ARGS[@]}" \
   "${FILTERED_ARGS[@]}"
 
 PROGRESSIVE_BEST_CHECKPOINT="$PROGRESSIVE_OUTPUT_DIR/best.pt"
