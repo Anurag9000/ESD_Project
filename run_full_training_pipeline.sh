@@ -65,7 +65,6 @@ python scripts/run_recursive_refinement.py \
   --patience 5 \
   --head-epochs 0 \
   --resume-phase-index 1 \
-  -- --skip-final-test \
   "${FILTERED_ARGS[@]}"
 
 RAWACC_OUTPUT_DIR="$RUN_ROOT/rawacc_refine"
@@ -98,8 +97,8 @@ python scripts/run_recursive_refinement.py \
   --base-output-dir "$RAWACC_OUTPUT_DIR" \
   --base-log-file "$RAWACC_LOG_FILE" \
   --initial-checkpoint "$RAWACC_BASE_CHECKPOINT" \
-  --metric val_raw_acc \
-  --threshold 0.0005 \
+   --metric val_loss \
+  --threshold 0.0001 \
   --initial-head-lr "$RAWACC_HEAD_LR" \
   --initial-backbone-lr "$RAWACC_BACKBONE_LR" \
   --dataset-root "$DATASET_ROOT" \
@@ -111,7 +110,6 @@ python scripts/run_recursive_refinement.py \
   --patience 5 \
   --head-epochs 0 \
   --resume-phase-index 1 \
-  -- --skip-final-test \
   "${FILTERED_ARGS[@]}"
 
 # ─── Final test-set evaluation on the best accepted model ────────────────────
