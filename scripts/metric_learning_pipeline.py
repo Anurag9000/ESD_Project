@@ -3509,6 +3509,18 @@ def run_experiment(args: argparse.Namespace) -> int:
     elif resume_state.get("stage") == "supcon" and "optimizer_state_dict" in resume_state and "scheduler_state_dict" in resume_state:
         supcon_optimizer.load_state_dict(resume_state["optimizer_state_dict"])
         supcon_scheduler.load_state_dict(resume_state["scheduler_state_dict"])
+        # ── LR override: apply CLI-specified LRs on top of restored state ──
+        # load_state_dict() restores the OLD saved LRs, so we explicitly
+        # overwrite with the current args after loading. Momentum statistics
+        # (Adam m/v) are still reused from the checkpoint for warm continuation.
+        supcon_lr_override = [args.supcon_head_lr, args.supcon_backbone_lr]
+        for pg, new_lr in zip(supcon_optimizer.param_groups, supcon_lr_override):
+            pg["lr"] = new_lr
+        log_json_event(log_path, {
+            "event": "supcon_lr_overridden",
+            "supcon_head_lr": args.supcon_head_lr,
+            "supcon_backbone_lr": args.supcon_backbone_lr,
+        })
         start_supcon_epoch = int(resume_state.get("epoch", 1))
         start_supcon_epoch_step = int(resume_state.get("epoch_step_completed", 0))
         start_supcon_validation_index = int(resume_state.get("validation_index", 0))
