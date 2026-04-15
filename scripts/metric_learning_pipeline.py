@@ -3106,7 +3106,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--precision", choices=("mixed", "32", "64"), default="mixed")
     parser.add_argument("--adam-beta1", type=float, default=0.9)
     parser.add_argument("--adam-beta2", type=float, default=0.999)
-    parser.add_argument("--label-smoothing", type=float, default=0.0)
+    # label_smoothing=0.1 is mandatory for the imbalanced 8-class setup.
+    # organic=168K (55%), metal=55K (18%), ewaste=2K (0.7%). Hard labels (0.0) make
+    # the model fanatically confident on dominant classes, hurting calibration
+    # and recall on rare classes (ewaste, soft_plastic, glass). 0.1 distributes
+    # 1.25% probability mass across all 8 classes, preventing overconfident outputs.
+    parser.add_argument("--label-smoothing", type=float, default=0.1)
     parser.add_argument("--confidence-gap-penalty-weight", type=float, default=0.0)
     parser.add_argument("--class-loss-weight", action="append", default=[])
     parser.add_argument("--targeted-confusion-penalty", action="append", default=[])
@@ -3165,7 +3170,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-eval-batches", type=int, default=0)
     parser.add_argument("--log-every-steps", type=int, default=1)
     parser.add_argument("--log-eval-every-steps", type=int, default=1)
-    parser.add_argument("--eval-every-epochs", type=float, default=0.01)
+    # eval_every_epochs=0.1 runs validation every 10% of an epoch (96 train steps).
+    # At 0.01 (100 evals/epoch × 275 val steps = 27,500 val steps) vs 962 train steps,
+    # validation was 28.6× more compute than training — pathologically inverted.
+    # At 0.1: 2,750 val steps/epoch vs 962 train steps = 2.9× overhead. Correct.
+    parser.add_argument("--eval-every-epochs", type=float, default=0.1)
     parser.add_argument(
         "--runtime-bad-sample-cleanup",
         action="store_true",
@@ -3177,7 +3186,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--confidence-threshold", type=float, default=0.80)
     parser.add_argument("--supcon-early-stopping-patience", type=int, default=5)
     parser.add_argument("--head-early-stopping-patience", type=int, default=5)
-    parser.add_argument("--stage-early-stopping-patience", type=int, default=5)
+    # stage_early_stopping_patience=10 at eval_every_epochs=0.1 means
+    # the model must show no improvement for 1 full epoch before a CE progressive
+    # phase is terminated. Adam m/v statistics need at least 1 epoch to adapt
+    # to newly unfrozen parameters — patience=5 (0.5 epoch) fires too early.
+    parser.add_argument("--stage-early-stopping-patience", type=int, default=10)
     parser.add_argument("--early-stopping-min-delta", type=float, default=1e-4)
     parser.add_argument("--warmup-epochs", type=int, default=0)
     parser.add_argument("--warmup-steps", type=int, default=1024)
