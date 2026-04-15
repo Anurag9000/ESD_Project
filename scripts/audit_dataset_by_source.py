@@ -63,8 +63,6 @@ def main():
     parser.add_argument("--classes", nargs="*")
     args = parser.parse_args()
 
-    import time
-    random.seed(time.time()) # True randomness for every audit run
     dataset_root = Path(args.dataset)
     out_root     = Path(args.out)
 
@@ -104,8 +102,10 @@ def main():
               f"{sum(len(v) for v in groups.values())} images)")
         print(f"{'='*55}")
 
+        srng = random.SystemRandom()
         for source, files in sorted(groups.items()):
-            sample = random.sample(files, min(args.n, len(files)))
+            files.sort()  # Ensure lexicographical order for stable sampling pool
+            sample = srng.sample(files, min(args.n, len(files)))
             prefix = safe_name(source)
             for i, src in enumerate(sorted(sample), 1):
                 dst = out_dir / f"{prefix}_sample_{i:03d}{src.suffix.lower()}"
