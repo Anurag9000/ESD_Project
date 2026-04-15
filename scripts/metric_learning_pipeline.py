@@ -1322,17 +1322,32 @@ def build_auto_split_datasets(
 
 
 def build_phase_plan(total_modules: int, args: argparse.Namespace) -> list[PhaseSpec]:
+    """Build the ordered list of classifier training phases.
+
+    The permanent freeze boundary is enforced here: the CE progressive loop
+    never unfreezes more than `ce_max_unfreeze_modules` leaf modules, matching
+    the SupCon boundary so low-level texture/pattern encoders (first 90 of 130
+    leaf modules) are never touched by CE gradients.
+    """
     phases: list[PhaseSpec] = []
     if args.classifier_train_mode == "full_model":
         if args.stage_epochs > 0:
             phases.append(PhaseSpec(name="ce_full_model", unfrozen_backbone_modules=total_modules, max_epochs=args.stage_epochs))
         return phases
+    # ── Stage 3: CE head warm-up (backbone fully frozen) ─────────────────────
+    # embedding + embedding_norm + ce_head are trainable; all backbone frozen.
+    # This prevents random ce_head gradients from corrupting contrastive features.
     if args.head_epochs > 0:
         phases.append(PhaseSpec(name="ce_head_only", unfrozen_backbone_modules=0, max_epochs=args.head_epochs))
+    # ── Stage 4: CE progressive unfreezing ────────────────────────────────────
+    # HARD CAP: never exceed ce_max_unfreeze_modules (default=40).
+    # This permanently locks the first 90 leaf modules (edges, textures, patterns)
+    # in both SupCon and CE phases — they are NEVER gradient-updated.
+    effective_max = min(total_modules, getattr(args, "ce_max_unfreeze_modules", total_modules))
     count = 0
     phase_index = 0
-    while count < total_modules and args.stage_epochs > 0:
-        count = min(total_modules, count + args.unfreeze_chunk_size)
+    while count < effective_max and args.stage_epochs > 0:
+        count = min(effective_max, count + args.unfreeze_chunk_size)
         phase_index += 1
         if args.max_progressive_phases and phase_index > args.max_progressive_phases:
             break
@@ -3123,6 +3138,20 @@ def build_parser() -> argparse.ArgumentParser:
     # The first 90 leaf modules (stem, stages 0-5: edges/textures/patterns) stay FROZEN permanently.
     # Frozen: 928,416 params. Trainable during SupCon backbone: 3,079,132 params.
     parser.add_argument("--supcon-unfreeze-backbone-modules", type=int, default=40)
+    # ── Permanent freeze boundary (applies to BOTH SupCon and CE phases) ──────
+    # Default=40 matches --supcon-unfreeze-backbone-modules, ensuring the exact
+    # same 90-module frozen boundary is respected across the entire pipeline.
+    # The first 90 leaf modules (stem, stages 0-5) are NEVER gradient-updated.
+    parser.add_argument(
+        "--ce-max-unfreeze-modules",
+        type=int,
+        default=40,
+        help=(
+            "Hard cap on backbone leaf modules unfrozen during CE progressive training. "
+            "Default=40 matches --supcon-unfreeze-backbone-modules, permanently locking "
+            "the first 90 leaf modules (edges, textures, patterns) in both SupCon and CE phases."
+        ),
+    )
     parser.add_argument("--output-dir", default="Results/metric_learning_experiment")
     parser.add_argument("--log-file", default="logs/metric_learning_experiment.log.jsonl")
     parser.add_argument("--resume-checkpoint", default="")
