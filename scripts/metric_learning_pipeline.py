@@ -1505,10 +1505,20 @@ def classifier_phase_learning_rates(
     if args.classifier_train_mode != "progressive" or total_backbone_modules <= 0 or unfrozen_backbone_modules <= 0:
         return head_lr, backbone_lr
 
+    # BUG FIX: use effective_total (capped at ce_max_unfreeze_modules) as the
+    # denominator, NOT total_backbone_modules (130). Without this, with
+    # ce_max_unfreeze_modules=40, phase ce_last_40 only reached 40/130=30.8%
+    # progress, decaying head LR to only 4.94e-4 instead of the intended 1e-5.
+    # With effective_total=40: ce_last_20 → progress=0.5 → head=1e-4;
+    #                          ce_last_40 → progress=1.0 → head=1e-5=backbone_lr.
+    effective_total = min(total_backbone_modules, getattr(args, "ce_max_unfreeze_modules", total_backbone_modules))
+    if effective_total <= 0:
+        return head_lr, backbone_lr
+
     # As progressively more of the backbone is opened, apply rigorous exponential decay
-    # to the head LR toward the backbone LR. This ensures late phases do not over-update
-    # an already adapted classifier head, stabilizing it before recursive refinement.
-    progress = min(1.0, max(0.0, float(unfrozen_backbone_modules) / float(total_backbone_modules)))
+    # to the head LR toward backbone_lr. This ensures the final phase does not over-update
+    # an already-adapted classifier head, stabilising it before recursive refinement.
+    progress = min(1.0, max(0.0, float(unfrozen_backbone_modules) / float(effective_total)))
     effective_head_lr = head_lr * ((backbone_lr / head_lr) ** progress)
     return max(backbone_lr, effective_head_lr), backbone_lr
 
@@ -3184,7 +3194,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--confidence-threshold", type=float, default=0.80)
-    parser.add_argument("--supcon-early-stopping-patience", type=int, default=5)
+    # supcon_early_stopping_patience=7: at eval_every_epochs=0.1, patience=7 means
+    # 0.7 epoch wait before SupCon is terminated. The warmup spans 1024/962=1.07
+    # epochs. Patience 5 (0.5 epoch) could fire mid-warmup if loss fluctuates at
+    # the LR ramp peak. 7 windows = 0.7 epoch safely overlaps the warmup zone.
+    parser.add_argument("--supcon-early-stopping-patience", type=int, default=7)
     parser.add_argument("--head-early-stopping-patience", type=int, default=5)
     # stage_early_stopping_patience=10 at eval_every_epochs=0.1 means
     # the model must show no improvement for 1 full epoch before a CE progressive
