@@ -5,59 +5,141 @@ This document defines the current architectural specifications and training meth
 ## 1. Model Specifications
 
 - **Architecture:** EfficientNet-B0
-- **Parameters:** ~5.3 Million
-- **Precision:** FP16 Mixed Precision
-- **Optimization Strategy:** AdamW or SAM
+- **Parameters:** ~5.3 Million (backbone: 4.0M, head: 1.3M)
+- **Precision:** FP16 Mixed Precision via `torch.amp`
+- **Optimization:** AdamW with per-stage learning rate groups
 - **Output Classes:** **8**
-- **Class Balancing:** Balanced per-batch class cycling (default). Each batch is made as class-uniform as possible, sampling from shuffled per-class queues before repeating.
 
 ---
 
 ## 2. Class Taxonomy (8 Classes — Ground Reality)
 
-| Index | Class Name | Image Count | Description |
-| :--- | :--- | :--- | :--- |
-| 0 | `clothes` | 40,295 | Textiles, apparel, woven fabrics |
-| 1 | `ewaste` | 2,147 | Electronic components, PCBs, hardware |
-| 2 | `glass` | 9,997 | Silica-based containers (clear/pigmented) |
-| 3 | `hard_plastic` | 15,297 | Rigid polymers, containers, bottles |
-| 4 | `metal` | 55,628 | Ferrous/non-ferrous metals, aluminum |
-| 5 | `organic` | 168,439 | Biodegradable: food, vegetation |
-| 6 | `paper` | 11,126 | Cellulose flat material, cardboard |
-| 7 | `soft_plastic` | 5,079 | Flexible films, bags, thin sheets |
+| Index | Class Name    | Image Count | Description                              |
+| :---- | :------------ | :---------- | :--------------------------------------- |
+| 0     | `clothes`     | 40,295      | Textiles, apparel, woven fabrics         |
+| 1     | `ewaste`      | 2,147       | Electronic components, PCBs, hardware    |
+| 2     | `glass`       | 9,997       | Silica-based containers (clear/pigmented)|
+| 3     | `hard_plastic`| 15,297      | Rigid polymers, containers, bottles      |
+| 4     | `metal`       | 55,628      | Ferrous/non-ferrous metals, aluminum     |
+| 5     | `organic`     | 168,439     | Biodegradable: food, vegetation          |
+| 6     | `paper`       | 11,126      | Cellulose flat material, cardboard       |
+| 7     | `soft_plastic`| 5,079       | Flexible films, bags, thin sheets        |
 
-> **Note:** `battery` and `shoes` have been permanently eliminated. 100% of shoe images were sub-200px thumbnails (zero training value). Only 29 battery images survived the 200px resolution floor — insufficient for any meaningful learning.
-
----
-
-## 3. Multi-Stage Training Pipeline
-
-### Phase I: Supervised Contrastive Pre-training (SupCon)
-- **Objective:** Optimize embedding space clusters.
-- **State:** Backbone frozen by default to preserve ImageNet-derived spatial features.
-
-### Phase II: Progressive 20-Module Unfreezing
-- **Process:** Iteratively unfreezes 20-module slices of the backbone.
-- **Validation Frequency:** 0.1 (10%) of epoch to capture peak performance.
-- **Phase Rejection:** If a phase degrades validation loss, weights are restored and the pipeline proceeds to the next slice.
-
-### Phase III: Recursive Refinement
-- **Mechanism:** Automatic learning rate halving upon validation plateau.
-- **End-State:** Deployment-ready `best.pt` with maximized categorical separation.
+> **Eliminated:** `battery` (only 29 images survived the 200px floor) and `shoes` (100% sub-200px thumbnails, zero training value).
 
 ---
 
-## 4. Resolution Quality Policy
-- **Minimum Image Size:** 200×200px (strictly enforced on physical disk)
-- **Rationale:** EfficientNet-B0 targets 224×224. Any image below 200px requires >1.12x upscaling, which is safe. Images previously at 60-136px (all shoes, most batteries) required 2-4x upscaling, producing hallucinated texture artifacts that caused the model to learn thumbnail blur patterns instead of material features.
+## 3. Six-Stage Training Pipeline
+
+The pipeline follows the research-validated principle: **Contrastive representation learning first, then supervised fine-tuning on top.** This maximises inter-class separation in the embedding space before any cross-entropy decision boundaries are drawn.
+
+### Stage 1 — SupCon Head Warm-up (Frozen Backbone)
+| Parameter            | Value  |
+| :------------------- | :----- |
+| **Trainable:**       | `embedding` (1280→128) + `embedding_norm` + `projection_head` (128→128) |
+| **Frozen:**          | Entire EfficientNet-B0 backbone (130 leaf modules, 4.0M params) |
+| **Loss:**            | Supervised Contrastive (SupCon, temperature=0.07) |
+| **Head LR:**         | `3e-3` |
+| **Backbone LR:**     | `0.0` (frozen) |
+| **Stopping:**        | Early stopping patience=5 on SupCon val_loss |
+| **Goal:**            | Orient the randomly-initialised projection head into a stable contrastive attractor before touching backbone weights |
+
+### Stage 2 — SupCon Progressive Backbone Unfreezing
+| Parameter            | Value  |
+| :------------------- | :----- |
+| **Trainable:**       | Top 40 leaf modules (of 130 total): stage-6 MBConv [6.0–6.3] + stage-7 [7.0] + final Conv [8] = **3,079,132 params** |
+| **Frozen forever:**  | First 90 leaf modules (stem, stages 0–5: edges, textures, patterns) = **928,416 params** |
+| **Loss:**            | Supervised Contrastive (SupCon) — same objective |
+| **Head LR:**         | `3e-3` |
+| **Backbone LR:**     | `5e-5` (safely conservative — tilts high-level semantic features toward waste taxonomy) |
+| **Stopping:**        | Early stopping patience=5 on SupCon val_loss per unfreezing step |
+| **Goal:**            | Adapt the high-level semantic representations specifically to distinguish waste categories (ewaste vs soft_plastic vs organic etc) while keeping universally-useful low-level encoders intact |
+
+### Stage 3 — CE Head Warm-up (Backbone Re-frozen)
+| Parameter            | Value  |
+| :------------------- | :----- |
+| **Trainable:**       | `ce_head` (128→8) + `embedding` + `embedding_norm` |
+| **Frozen:**          | Entire backbone (all 130 leaf modules) + projection_head |
+| **Loss:**            | Cross-Entropy (label_smoothing=0.0 default) |
+| **Head LR:**         | `1e-3` |
+| **Backbone LR:**     | `0.0` (frozen) |
+| **Duration:**        | `head_epochs=5` epochs max, patience=5 |
+| **Goal:**            | **Critical safety gate.** The `ce_head` is randomly initialised. Without this warm-up, random CE gradients would backpropagate into the carefully arranged contrastive embedding space and corrupt it. This phase stabilises the CE hyperplanes between the tight SupCon clusters before any backbone gradients flow. |
+
+### Stage 4 — CE Progressive Backbone Unfreezing
+| Parameter            | Value  |
+| :------------------- | :----- |
+| **Trainable:**       | Top-N leaf modules, growing by `unfreeze_chunk_size=20` per phase (up to all 130) + head |
+| **Loss:**            | Cross-Entropy |
+| **Head LR:**         | Exponentially decays from `1e-3` → `1e-5` as backbone fraction grows (see `classifier_phase_learning_rates`) |
+| **Backbone LR:**     | `1e-5` (micro-adjustments only — SupCon already did the heavy lifting) |
+| **Stopping:**        | Early stopping patience=5 on `val_loss` per unfreezing phase |
+| **Phase rejection:** | If a phase fails to beat the global best, its weights are NOT used to initialise the next phase (global best is restored) |
+| **Goal:**            | Final supervised alignment. The backbone makes minimal adjustments toward maximising categorical cross-entropy probability, while the CE head refines the decision boundaries between SupCon-created clusters |
+
+### Stage 5 — Recursive val_loss Refinement
+- Runs `run_recursive_refinement.py` with `metric=val_loss`, `threshold=1e-4`.
+- Automatically halves learning rates on plateau and repeats until loss stops improving.
+- Produces `accepted_best.pt`.
+
+### Stage 6 — Recursive val_acc Refinement
+- Same mechanism as Stage 5 but optimises for raw validation accuracy.
+- LRs bootstrapped from Stage 5 final state (halved further).
+- Produces final deployment-ready `accepted_best.pt`.
 
 ---
 
-## 5. Integrity and Visualization
-- **Confusion Matrix:** Auto-generated PNG on every new phase best.
-- **Exhaustive Logging:** Every training step recorded in synchronized CSV files.
+## 4. Backbone Module Map (EfficientNet-B0)
+
+| Top-level Module | Type                  | Params     | SupCon Stage | Notes |
+| :--------------- | :-------------------- | :--------- | :----------- | :---- |
+| `features[0]`    | Conv2dNormActivation  | 928        | ❄️ FROZEN    | Stem — raw pixels → edges |
+| `features[1]`    | Sequential (MBConv)   | 1,448      | ❄️ FROZEN    | Basic textures |
+| `features[2]`    | Sequential (MBConv)   | 16,714     | ❄️ FROZEN    | Texture gradients |
+| `features[3]`    | Sequential (MBConv)   | 46,640     | ❄️ FROZEN    | Patterns |
+| `features[4]`    | Sequential (MBConv)   | 242,930    | ❄️ FROZEN    | Object parts |
+| `features[5]`    | Sequential (MBConv)   | 543,148    | ❄️ FROZEN    | Mid-level semantics |
+| `features[6]`    | Sequential (MBConv×4) | 2,026,348  | 🔥 UNFROZEN  | High-level semantics (richest) |
+| `features[7]`    | Sequential (MBConv)   | 717,232    | 🔥 UNFROZEN  | Abstract waste features |
+| `features[8]`    | Conv2dNormActivation  | 412,160    | 🔥 UNFROZEN  | Final projection conv |
+
+> The 90-module freeze boundary was selected by diagnostic analysis of the full 130-leaf-module tree. It permanently protects universally-useful visual primitives (edges, textures, patterns) that would degrade if touched by task-specific gradients.
 
 ---
 
-## 6. Deferred Work
-- **Grad-CAM Localization:** Classifier-side heatmap generation with approximate bounding box extraction. Explicitly deferred.
+## 5. Checkpointing Strategy
+
+| Event           | File              | Location |
+| :-------------- | :---------------- | :------- |
+| Every step      | `step_last.pt`    | Phase output dir |
+| Every epoch     | `last.pt`         | Phase output dir |
+| Phase-best val  | `best_phase_N.pt` | Phase output dir |
+| New global best | `best.pt`         | Phase output dir |
+
+Resume is fully automatic: re-running `./run_training.sh --batch-size 224` detects the most recent run stamp and injects `--resume-checkpoint step_last.pt` automatically.
+
+---
+
+## 6. Dataset and Resolution Policy
+
+- **Corpus:** WSS-308K — 308,008 verified images, all ≥200×200px
+- **Minimum Size:** 200px (strictly enforced on physical disk)
+- **Split Ratios:** 70% train / 20% val / 10% test
+- **Augmentation:** 16× deterministic split-safe augmentation (train only; val/test use raw images)
+- **Class Balancing:** Weighted Random Sampling is **mandatory** (enforced via `--weighted-sampling`)
+- **Augmentation types:** Random crops, flips, colour jitter, Gaussian blur, shadow, glare, motion blur, defocus, resolution degradation, truncation, smudging
+
+---
+
+## 7. Automated Validation Artefacts
+
+- **Confusion Matrix:** Auto-generated PNG on every new phase-best checkpoint. Filename: `phase_N_best_confusion_matrix.png`
+- **Training CSV:** `train_metrics.csv` — every training step logged
+- **Validation CSV:** `val_metrics.csv` — every validation window logged
+- **JSONL Log:** Full structured event stream, one JSON object per event
+
+---
+
+## 8. Deferred Work
+
+- **Grad-CAM Localisation:** Classifier-side heatmap generation with approximate bounding box extraction. Explicitly deferred to post-training.

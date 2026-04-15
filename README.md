@@ -8,8 +8,8 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 - **Backbone:** EfficientNet-B0 (5.3M Parameters)
 - **Corpus:** 308,008 verified images (WSS-308K, post-decontamination + 200px resolution floor)
 - **Taxonomy:** **8 material classes** — clothes, ewaste, glass, hard_plastic, metal, organic, paper, soft_plastic
-- **Orchestration:** Multi-phase training: SupCon pre-training → 20-module Progressive Unfreezing → Recursive Metric Refinement
-- **Balancing:** Balanced per-batch class cycling (default)
+- **Orchestration:** 6-stage pipeline: SupCon Head → SupCon Backbone → CE Head Warmup → CE Progressive Unfreezing → Recursive val_loss → Recursive val_acc
+- **Balancing:** Weighted Random Sampling (mandatory, enforced in all training scripts)
 
 ### SmartBin Android Fleet Dashboard
 - **Framework:** Native Kotlin, Jetpack Compose, Material 3
@@ -21,33 +21,44 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 
 ## 2. Platform Summary
 
-| Metric | Specification |
-| :--- | :--- |
+| Metric               | Specification                                                                 |
+| :------------------- | :---------------------------------------------------------------------------- |
 | **Current Taxonomy** | **8 material classes** (clothes, ewaste, glass, hard_plastic, metal, organic, paper, soft_plastic) |
-| **Total Images** | **308,008 verified (≥200px floor, post-decontamination)** |
-| **Class Balancing** | Balanced Per-Batch Cycling (Default) |
-| **Unfreeze Step** | 20 modules (Default) |
-| **Optimization** | AdamW (Base) or SAM |
-| **Training Precision** | Mixed Precision (FP16) via `torch.amp` |
-| **Mobile State** | Clean Architecture / MVVM / Hilt |
+| **Total Images**     | **308,008 verified (≥200px floor, post-decontamination)**                     |
+| **Class Balancing**  | Weighted Random Sampling (mandatory)                                          |
+| **Unfreeze Step**    | 20 leaf modules per CE phase                                                  |
+| **Optimization**     | AdamW (Base) or SAM                                                           |
+| **Training Precision**| Mixed Precision (FP16) via `torch.amp`                                       |
+| **Mobile State**     | Clean Architecture / MVVM / Hilt                                              |
 
 ---
 
 ## 3. Documentation Index
-- **`ARCHITECTURE_AND_PLAN.md`**: Model specs, 8-class index table, training pipeline, resolution policy.
+- **`ARCHITECTURE_AND_PLAN.md`**: Full 6-stage pipeline specification, per-stage LRs, backbone module map, checkpointing strategy.
 - **`DATASET_SPECIFICATION.md`**: 308K corpus breakdown per class with decontamination history.
 - **`PYTORCH_SETUP.md`**: Environment configuration and execution manual.
 - **`SmartBin_Android/docs/`**: Mobile-specific architectural and product specifications.
 
 ## 4. Execution Manual
 
-### Standard Production Training
+### Standard Production Training (Fresh Run)
 ```bash
-# Execute the full lifecycle with 10% validation steps
-# Classes auto-detected from Dataset_Final/ subfolders (8 classes)
-./run_training.sh \
-  --eval-every-epochs 0.1 \
-  --optimizer adamw
+cd /home/anurag-basistha/Projects/ESD
+source .venv/bin/activate
+
+# Launches the full 6-stage lifecycle automatically.
+# All hyperparameters are encoded as research-validated defaults.
+./run_training.sh --batch-size 224
+```
+
+### Resume After Interruption (Exact Same Command)
+```bash
+cd /home/anurag-basistha/Projects/ESD
+source .venv/bin/activate
+
+# Automatically detects the most recent run, finds step_last.pt or last.pt,
+# and resumes from the exact last training step — no flags needed.
+./run_training.sh --batch-size 224
 ```
 
 ### Android Dashboard

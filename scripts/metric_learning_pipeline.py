@@ -3036,8 +3036,15 @@ def parse_targeted_confusion_penalty_specs(specs: list[str], class_to_idx: dict[
 
 def build_parser() -> argparse.ArgumentParser:
     description = (
-        "Metric-learning EfficientNet B0 training with deterministic 16x split-safe augmentation, "
-        "SupCon warmup, cross-entropy classification, progressive unfreezing, and paper-style metrics"
+        "EfficientNet-B0 6-stage optimised training pipeline: "
+        "(1) SupCon head warm-up [frozen backbone, head_lr=3e-3] → "
+        "(2) SupCon progressive backbone unfreezing [top-40 semantic leaf modules, backbone_lr=5e-5] → "
+        "(3) CE head warm-up [backbone re-frozen, head_lr=1e-3, head_epochs=5] → "
+        "(4) CE progressive backbone unfreezing [20 leaf modules/step, backbone_lr=1e-5, exponential head decay] → "
+        "(5) Recursive val_loss refinement → "
+        "(6) Recursive val_acc refinement. "
+        "Checkpoints saved at every step, every validation, and every phase transition. "
+        "Deterministic 16x split-safe augmentation. Paper-style confusion matrix + CSV metrics."
     )
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--dataset-root", default="Dataset_Final")
@@ -3067,10 +3074,18 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--supcon-temperature", type=float, default=0.07)
-    parser.add_argument("--supcon-head-lr", type=float, default=3e-4)
-    parser.add_argument("--supcon-backbone-lr", type=float, default=1e-4)
+    # Stage 1 (frozen backbone head warm-up) + Stage 2 (top-40 semantic backbone modules):
+    # Head at 3e-3 is 10x standard — needed for rapid cluster formation from a random projection head.
+    # Backbone at 5e-5 is safely conservative: gently tilts high-level semantic features toward the
+    # waste taxonomy without disturbing ImageNet-learned textures locked in the first 90 leaf modules.
+    parser.add_argument("--supcon-head-lr", type=float, default=3e-3)
+    parser.add_argument("--supcon-backbone-lr", type=float, default=5e-5)
+    # Stage 3 (CE head warmup, backbone fully frozen): head_lr=1e-3 initialises the ce_head quickly.
+    # Stage 4 (CE progressive unfreezing): backbone_lr=1e-5 applies micro-adjustments only —
+    # the SupCon phase already did the heavy lifting. Head LR decays exponentially from 1e-3
+    # toward backbone_lr as more modules are thawed (see classifier_phase_learning_rates).
     parser.add_argument("--head-lr", type=float, default=1e-3)
-    parser.add_argument("--backbone-lr", type=float, default=1e-4)
+    parser.add_argument("--backbone-lr", type=float, default=1e-5)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--optimizer", choices=["sam", "adamw"], default="adamw")
     parser.add_argument("--precision", choices=("mixed", "32", "64"), default="mixed")
@@ -3103,7 +3118,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--weights", choices=("default", "none"), default="default")
     parser.add_argument("--augment-repeats", type=int, default=16)
     parser.add_argument("--augment-gaussian-sigmas", type=float, default=0.5)
-    parser.add_argument("--supcon-unfreeze-backbone-modules", type=int, default=0)
+    # Stage 2: unfreeze the top 40 leaf modules (out of 130 total) during SupCon.
+    # This covers: stage-6 MBConv blocks [6.0-6.3] + stage-7 [7.0] + final Conv [8].
+    # The first 90 leaf modules (stem, stages 0-5: edges/textures/patterns) stay FROZEN permanently.
+    # Frozen: 928,416 params. Trainable during SupCon backbone: 3,079,132 params.
+    parser.add_argument("--supcon-unfreeze-backbone-modules", type=int, default=40)
     parser.add_argument("--output-dir", default="Results/metric_learning_experiment")
     parser.add_argument("--log-file", default="logs/metric_learning_experiment.log.jsonl")
     parser.add_argument("--resume-checkpoint", default="")
