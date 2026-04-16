@@ -12,6 +12,8 @@ import logging
 import math
 import os
 import random
+import subprocess
+import sys
 import warnings
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -2849,6 +2851,128 @@ def save_training_checkpoint(path: Path, payload: dict[str, Any]) -> None:
     torch.save(payload, path)
 
 
+def save_supcon_best_checkpoint(
+    path: Path,
+    *,
+    model_state_dict: dict[str, torch.Tensor],
+    class_names: list[str],
+    class_to_idx: dict[str, int],
+    args: argparse.Namespace,
+    history: list[dict[str, Any]],
+    train_progress: dict[str, Any],
+    best_val_loss: float,
+    best_val_acc: float,
+    best_val_raw_acc: float,
+    best_classifier_state: dict[str, torch.Tensor],
+    supcon_best_state: dict[str, torch.Tensor],
+    supcon_best_loss: float,
+    supcon_best_epoch: int,
+    supcon_wait: int,
+    augmentation_epoch_cursor: int,
+) -> None:
+    payload = {
+        "model_state_dict": model_state_dict,
+        "class_names": class_names,
+        "class_to_idx": class_to_idx,
+        "args": vars(args),
+        "history": history,
+        "train_progress": train_progress,
+        "best_val_loss": best_val_loss,
+        "best_val_acc": best_val_acc,
+        "best_val_raw_acc": best_val_raw_acc,
+        "best_classifier_state": best_classifier_state,
+        "supcon_best_state": supcon_best_state,
+        "supcon_best_loss": supcon_best_loss,
+        "supcon_best_epoch": supcon_best_epoch,
+        "supcon_wait": supcon_wait,
+        "augmentation_epoch_cursor": augmentation_epoch_cursor,
+        "resume": {
+            "stage": "supcon",
+            "epoch": supcon_best_epoch,
+            "epoch_step_completed": 0,
+            "validation_index": 0,
+        },
+    }
+    torch.save(payload, path)
+
+
+def maybe_run_epoch_visualizations(
+    *,
+    checkpoint_path: Path,
+    dataset_root: str,
+    output_dir: Path,
+    epoch_label: str,
+    args: argparse.Namespace,
+    log_path: Path,
+    reason: str,
+) -> None:
+    if not getattr(args, "epoch_visualizations", False):
+        return
+    safe_label = (
+        str(epoch_label)
+        .strip()
+        .replace(" ", "_")
+        .replace("/", "_")
+        .replace(":", "_")
+    )
+    target_dir = output_dir / "visualizations" / safe_label
+    command = [
+        sys.executable,
+        str(Path(__file__).with_name("visualize_epoch.py")),
+        "--checkpoint",
+        str(checkpoint_path),
+        "--dataset-root",
+        str(dataset_root),
+        "--output-dir",
+        str(target_dir),
+        "--epoch",
+        str(epoch_label),
+        "--batch-size",
+        str(args.epoch_visualization_batch_size),
+        "--num-workers",
+        str(args.epoch_visualization_num_workers),
+        "--sample-limit-activations",
+        str(args.epoch_visualization_activation_sample_limit),
+        "--atlas-thumb-size",
+        str(args.epoch_visualization_atlas_thumb_size),
+    ]
+    log_json_event(
+        log_path,
+        {
+            "event": "epoch_visualization_started",
+            "reason": reason,
+            "epoch_label": str(epoch_label),
+            "output_dir": str(target_dir),
+            "checkpoint": str(checkpoint_path),
+        },
+    )
+    try:
+        subprocess.run(command, check=True)
+    except subprocess.CalledProcessError as exc:
+        log_json_event(
+            log_path,
+            {
+                "event": "epoch_visualization_failed",
+                "reason": reason,
+                "epoch_label": str(epoch_label),
+                "output_dir": str(target_dir),
+                "checkpoint": str(checkpoint_path),
+                "returncode": int(exc.returncode),
+            },
+        )
+    else:
+        log_json_event(
+            log_path,
+            {
+                "event": "epoch_visualization_finished",
+                "reason": reason,
+                "epoch_label": str(epoch_label),
+                "output_dir": str(target_dir),
+                "checkpoint": str(checkpoint_path),
+            },
+        )
+
+
 def save_step_checkpoint(
     path: Path,
     model: nn.Module,
@@ -3192,6 +3316,29 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-eval-batches", type=int, default=0)
     parser.add_argument("--log-every-steps", type=int, default=1)
     parser.add_argument("--log-eval-every-steps", type=int, default=1)
+    parser.add_argument(
+        "--epoch-visualizations",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Generate test-set visualizations at startup and after every completed epoch. "
+            "Uses the clean no-augmentation test split."
+        ),
+    )
+    parser.add_argument("--epoch-visualization-batch-size", type=int, default=128)
+    parser.add_argument("--epoch-visualization-num-workers", type=int, default=2)
+    parser.add_argument(
+        "--epoch-visualization-activation-sample-limit",
+        type=int,
+        default=0,
+        help="Number of test images to use for layer activation summaries. Use 0 for all test images.",
+    )
+    parser.add_argument(
+        "--epoch-visualization-atlas-thumb-size",
+        type=int,
+        default=18,
+        help="Thumbnail size for the full test atlas image.",
+    )
     # eval_every_epochs=0.1 runs validation every 10% of an epoch (96 train steps).
     # At 0.01 (100 evals/epoch × 275 val steps = 27,500 val steps) vs 962 train steps,
     # validation was 28.6× more compute than training — pathologically inverted.
@@ -3594,6 +3741,37 @@ def run_experiment(args: argparse.Namespace) -> int:
     start_supcon_validation_index = 0
     supcon_completed = bool(args.skip_supcon)
 
+    save_training_checkpoint(
+        checkpoint_path,
+        {
+            "model_state_dict": cpu_state_dict(model),
+            "class_names": train_dataset.classes,
+            "class_to_idx": train_dataset.class_to_idx,
+            "args": vars(args),
+            "history": history,
+            "best_val_loss": best_val_loss,
+            "best_val_acc": best_val_acc,
+            "best_val_raw_acc": best_val_raw_acc,
+            "best_classifier_state": best_classifier_state,
+            "supcon_best_state": supcon_best_state,
+            "supcon_best_loss": supcon_best_loss,
+            "supcon_best_epoch": supcon_best_epoch,
+            "supcon_wait": supcon_wait,
+            "augmentation_epoch_cursor": augmentation_epoch_cursor,
+            "train_progress": train_progress,
+            "resume": resume_state,
+        },
+    )
+    maybe_run_epoch_visualizations(
+        checkpoint_path=checkpoint_path,
+        dataset_root=args.dataset_root,
+        output_dir=output_dir,
+        epoch_label="startup",
+        args=args,
+        log_path=log_path,
+        reason="run_start",
+    )
+
     if args.skip_supcon or resume_from_best_phase:
         supcon_completed = True
         log_json_event(
@@ -3795,6 +3973,42 @@ def run_experiment(args: argparse.Namespace) -> int:
                     supcon_best_epoch = epoch
                     supcon_best_state = cpu_state_dict(model)
                     supcon_wait = 0
+                    save_supcon_best_checkpoint(
+                        output_dir / "best.pt",
+                        model_state_dict=supcon_best_state,
+                        class_names=train_dataset.classes,
+                        class_to_idx=train_dataset.class_to_idx,
+                        args=args,
+                        history=history,
+                        train_progress=train_progress,
+                        best_val_loss=best_val_loss,
+                        best_val_acc=best_val_acc,
+                        best_val_raw_acc=best_val_raw_acc,
+                        best_classifier_state=best_classifier_state,
+                        supcon_best_state=supcon_best_state,
+                        supcon_best_loss=supcon_best_loss,
+                        supcon_best_epoch=supcon_best_epoch,
+                        supcon_wait=supcon_wait,
+                        augmentation_epoch_cursor=augmentation_epoch_cursor,
+                    )
+                    save_supcon_best_checkpoint(
+                        output_dir / "supcon_best.pt",
+                        model_state_dict=supcon_best_state,
+                        class_names=train_dataset.classes,
+                        class_to_idx=train_dataset.class_to_idx,
+                        args=args,
+                        history=history,
+                        train_progress=train_progress,
+                        best_val_loss=best_val_loss,
+                        best_val_acc=best_val_acc,
+                        best_val_raw_acc=best_val_raw_acc,
+                        best_classifier_state=best_classifier_state,
+                        supcon_best_state=supcon_best_state,
+                        supcon_best_loss=supcon_best_loss,
+                        supcon_best_epoch=supcon_best_epoch,
+                        supcon_wait=supcon_wait,
+                        augmentation_epoch_cursor=augmentation_epoch_cursor,
+                    )
                 else:
                     supcon_wait += 1
 
@@ -3865,6 +4079,15 @@ def run_experiment(args: argparse.Namespace) -> int:
             start_supcon_validation_index = 0
             if stop_supcon:
                 break
+            maybe_run_epoch_visualizations(
+                checkpoint_path=checkpoint_path,
+                dataset_root=args.dataset_root,
+                output_dir=output_dir,
+                epoch_label=f"supcon_epoch_{epoch}",
+                args=args,
+                log_path=log_path,
+                reason="supcon_epoch_complete",
+            )
             augmentation_epoch_cursor += 1
             release_training_memory(device, supcon_train_loader, supcon_val_loader)
         model.load_state_dict(supcon_best_state)
@@ -4285,6 +4508,15 @@ def run_experiment(args: argparse.Namespace) -> int:
             start_phase_validation_index = 0
             if phase_stopped:
                 break
+            maybe_run_epoch_visualizations(
+                checkpoint_path=checkpoint_path,
+                dataset_root=args.dataset_root,
+                output_dir=output_dir,
+                epoch_label=f"{phase.name}_epoch_{epoch}",
+                args=args,
+                log_path=log_path,
+                reason="classifier_epoch_complete",
+            )
             augmentation_epoch_cursor += 1
             release_training_memory(device, train_loader, val_loader)
 
