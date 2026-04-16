@@ -41,3 +41,29 @@ The ESD platform enforces a **Zero-Mistake Data Environment**:
 - **Purity:** Every class is mutually exclusive. Visual audits using `scripts/audit_dataset_by_source.py` (randomized on every run) confirm no class contamination.
 - **Metadata:** All training operations draw strictly from the verified `dataset_metadata.json` registry.
 - **Physical Structure:** `Dataset_Final/<class_name>/<image_name>.ext`
+
+---
+
+## 4. Source Attribution and Provenance
+
+The **WSS-308K** corpus is a curated meta-dataset synthesized from over 40 distinct industrial and academic sub-collections. The following primary sources are cited and acknowledged:
+
+### 4.1. Core Academic Baselines
+- **TrashNet (Stanford University):** The original waste classification baseline; provided fundamental visual patterns for glass, paper, and metal.
+- **TACO (Trash Annotations in Context):** Source for high-fidelity images of litter in diverse, complex out-of-door environments.
+- **Recycleye Waste-v1:** Public research segment of the Recycleye industrial sorting challenge (Glass, Paper, Metal, Plastic).
+- **Garbage Classification (Kaggle/Yang):** 6-class fundamental material distribution.
+
+### 4.2. Domain-Specific Aggregations
+- **Clothing & Textiles:** Aggregated from the **Zalando Store Crawl**, **Biodegradable Fabrics Dataset**, and **E-commerce Clothing Attributes** collections.
+- **E-Waste:** Sourced from the **EWasteNet** research dataset (PCB classification) and custom e-waste vision scrapings.
+- **Organic Matter:** Derived from the **CompostNet** and **Biological Waste** vision projects.
+
+### 4.3. Industrial Synthetic Enhancements
+To improve robustness against deformation and rare perspectives, the following synthetic sets were incorporated:
+- **Greensorter Automated Sorting Set:** (Metal, Plastic, Glass).
+- **Bottle-Synthetic-Images:** Targeted glass container variations.
+- **Tin-and-Steel-Cans-Synthetic:** High-variance metal geometry.
+- **Mechanical-Parts-Boltnut:** Fine-grained metal texture detection.
+
+A full, per-image source registry is maintained in `Dataset_Final/dataset_metadata.json`. Use `scripts/audit_dataset_by_source.py` to generate randomized visual audits for any of these specific provenance sources.
