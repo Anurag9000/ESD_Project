@@ -126,7 +126,9 @@ Resume is fully automatic: re-running `./run_training.sh --batch-size 224` detec
 - **Minimum Size:** 200px (strictly enforced on physical disk)
 - **Split Ratios:** 70% train / 20% val / 10% test
 - **Augmentation:** 16× deterministic split-safe augmentation (train only; val/test use raw images)
-- **Class Balancing:** Weighted Random Sampling is **mandatory** (enforced via `--weighted-sampling`)
+- **Class Balancing:** Balanced per-batch class cycling is the default and mandatory production path.
+- **Interpretability Audit:** At run start and after every completed epoch, the pipeline generates clean no-augmentation test-set visualizations:
+  global t-SNE, per-class t-SNE highlights, all-layer activation summaries, and a full test atlas.
 - **Augmentation types:** Random crops, flips, colour jitter, Gaussian blur, shadow, glare, motion blur, defocus, resolution degradation, truncation, smudging
 
 ---

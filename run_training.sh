@@ -60,7 +60,7 @@ fi
 
 python scripts/train_efficientnet_b0_progressive.py \
   --dataset-root "$DATASET_ROOT" \
-  --weighted-sampling \
+  --sampling-strategy balanced \
   --output-dir "$PROGRESSIVE_OUTPUT_DIR" \
   --log-file "$PROGRESSIVE_LOG_FILE" \
   "${AUTO_RESUME_ARGS[@]}" \

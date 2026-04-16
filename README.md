@@ -9,7 +9,8 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 - **Corpus:** 308,008 verified images (WSS-308K, post-decontamination + 200px resolution floor)
 - **Taxonomy:** **8 material classes** — clothes, ewaste, glass, hard_plastic, metal, organic, paper, soft_plastic
 - **Orchestration:** 6-stage pipeline: SupCon Head → SupCon Backbone → CE Head Warmup → CE Progressive Unfreezing → Recursive val_loss → Recursive val_acc
-- **Balancing:** Weighted Random Sampling (mandatory, enforced in all training scripts)
+- **Balancing:** Balanced per-batch class cycling (default in all training scripts)
+- **Visual Audit:** Startup + end-of-epoch clean test-set visualizations (global t-SNE, per-class t-SNE, all-layer activations, full atlas)
 
 ### SmartBin Android Fleet Dashboard
 - **Framework:** Native Kotlin, Jetpack Compose, Material 3
@@ -25,7 +26,7 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 | :------------------- | :---------------------------------------------------------------------------- |
 | **Current Taxonomy** | **8 material classes** (clothes, ewaste, glass, hard_plastic, metal, organic, paper, soft_plastic) |
 | **Total Images**     | **308,008 verified (≥200px floor, post-decontamination)**                     |
-| **Class Balancing**  | Weighted Random Sampling (mandatory)                                          |
+| **Class Balancing**  | Balanced per-batch class cycling                                              |
 | **Unfreeze Step**    | 20 leaf modules per CE phase                                                  |
 | **Optimization**     | AdamW (Base) or SAM                                                           |
 | **Training Precision**| Mixed Precision (FP16) via `torch.amp`                                       |
@@ -47,7 +48,7 @@ cd /home/anurag-basistha/Projects/ESD
 source .venv/bin/activate
 
 # Launches the full 6-stage lifecycle automatically.
-# All hyperparameters are encoded as research-validated defaults.
+# Also runs startup and per-epoch clean test-set visualizations.
 ./run_training.sh --batch-size 224
 ```
 
@@ -57,7 +58,7 @@ cd /home/anurag-basistha/Projects/ESD
 source .venv/bin/activate
 
 # Automatically detects the most recent run, finds step_last.pt or last.pt,
-# and resumes from the exact last training step — no flags needed.
+# and resumes from the exact last training step.
 ./run_training.sh --batch-size 224
 ```
 

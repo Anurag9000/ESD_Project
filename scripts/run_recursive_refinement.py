@@ -61,7 +61,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--dataset-root", default="Dataset_Final")
     parser.add_argument("--optimizer", default="adamw")
-    parser.add_argument("--weighted-sampling", action="store_true")
+    parser.add_argument("--sampling-strategy", choices=("balanced", "weighted", "shuffle"), default="balanced")
+    parser.add_argument("--weighted-sampling", action="store_true", help="Legacy alias for --sampling-strategy weighted.")
     parser.add_argument("--skip-supcon", action="store_true")
     parser.add_argument("--head-epochs", type=int, default=0)
     parser.add_argument("--resume-phase-index", type=int, default=1)
@@ -237,8 +238,8 @@ def run_training(
         "--resume-phase-index",
         str(args.resume_phase_index),
     ]
-    if args.weighted_sampling:
-        command.append("--weighted-sampling")
+    sampling_strategy = "weighted" if args.weighted_sampling else args.sampling_strategy
+    command.extend(["--sampling-strategy", sampling_strategy])
     if args.skip_supcon:
         command.append("--skip-supcon")
     command.extend(extra_args)

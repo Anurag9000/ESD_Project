@@ -57,7 +57,7 @@ python scripts/run_recursive_refinement.py \
   --initial-head-lr 1e-4 \
   --initial-backbone-lr 5e-5 \
   --dataset-root "$DATASET_ROOT" \
-  --weighted-sampling \
+  --sampling-strategy balanced \
   --skip-supcon \
   --optimizer adamw \
   --batch-size 224 \
@@ -102,7 +102,7 @@ python scripts/run_recursive_refinement.py \
   --initial-head-lr "$RAWACC_HEAD_LR" \
   --initial-backbone-lr "$RAWACC_BACKBONE_LR" \
   --dataset-root "$DATASET_ROOT" \
-  --weighted-sampling \
+  --sampling-strategy balanced \
   --skip-supcon \
   --optimizer adamw \
   --batch-size 224 \
