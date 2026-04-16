@@ -1323,7 +1323,35 @@ def build_auto_split_datasets(
     return train_dataset, val_dataset, test_dataset
 
 
-def build_phase_plan(total_modules: int, args: argparse.Namespace) -> list[PhaseSpec]:
+def build_supcon_phase_plan(total_modules: int, args: argparse.Namespace) -> list[PhaseSpec]:
+    """Build the ordered list of SupCon phases.
+
+    The SupCon stage now mirrors the classifier stage design:
+    - head-only warm-up with a fully frozen backbone
+    - progressive semantic-tail unfreezing in fixed chunks
+    - permanently frozen low-level core modules
+    """
+    phases: list[PhaseSpec] = []
+    if getattr(args, "supcon_head_epochs", 0) > 0:
+        phases.append(PhaseSpec(name="supcon_head_only", unfrozen_backbone_modules=0, max_epochs=args.supcon_head_epochs))
+
+    effective_max = min(
+        total_modules,
+        getattr(args, "supcon_unfreeze_backbone_modules", total_modules),
+        getattr(args, "ce_max_unfreeze_modules", total_modules),
+    )
+    count = 0
+    phase_index = 0
+    while count < effective_max and getattr(args, "supcon_stage_epochs", 0) > 0:
+        count = min(effective_max, count + args.unfreeze_chunk_size)
+        phase_index += 1
+        if args.max_progressive_phases and phase_index > args.max_progressive_phases:
+            break
+        phases.append(PhaseSpec(name=f"supcon_last_{count}_modules", unfrozen_backbone_modules=count, max_epochs=args.supcon_stage_epochs))
+    return phases
+
+
+def build_classifier_phase_plan(total_modules: int, args: argparse.Namespace) -> list[PhaseSpec]:
     """Build the ordered list of classifier training phases.
 
     The permanent freeze boundary is enforced here: the CE progressive loop
@@ -1475,7 +1503,13 @@ def build_optimizer_from_groups(parameter_groups: list[dict[str, Any]], args: ar
     return build_base_optimizer(parameter_groups, args.weight_decay, (args.adam_beta1, args.adam_beta2))
 
 
-def build_supcon_optimizer(model: MetricLearningEfficientNetB0, args: argparse.Namespace) -> Optimizer:
+def build_supcon_optimizer(
+    model: MetricLearningEfficientNetB0,
+    args: argparse.Namespace,
+    *,
+    head_lr: float | None = None,
+    backbone_lr: float | None = None,
+) -> Optimizer:
     head_params = []
     if not isinstance(model.front_end, nn.Identity):
         head_params.extend(parameter for parameter in model.front_end.parameters() if parameter.requires_grad)
@@ -1489,10 +1523,12 @@ def build_supcon_optimizer(model: MetricLearningEfficientNetB0, args: argparse.N
         if parameter.requires_grad and id(parameter) not in head_ids
     ]
     param_groups = []
+    head_group_lr = float(args.supcon_head_lr if head_lr is None else head_lr)
+    backbone_group_lr = float(args.supcon_backbone_lr if backbone_lr is None else backbone_lr)
     if head_params:
-        param_groups.append({"params": head_params, "lr": args.supcon_head_lr, "rho": args.sam_rho})
+        param_groups.append({"params": head_params, "lr": head_group_lr, "rho": args.sam_rho})
     if backbone_params:
-        param_groups.append({"params": backbone_params, "lr": args.supcon_backbone_lr, "rho": args.sam_rho})
+        param_groups.append({"params": backbone_params, "lr": backbone_group_lr, "rho": args.sam_rho})
     return build_optimizer_from_groups(param_groups, args)
 
 
@@ -2973,6 +3009,17 @@ def maybe_run_epoch_visualizations(
         )
 
 
+def phase_artifact_dir(output_dir: Path, phase_name: str) -> Path:
+    safe_name = (
+        str(phase_name)
+        .strip()
+        .replace(" ", "_")
+        .replace("/", "_")
+        .replace(":", "_")
+    )
+    return output_dir / "phases" / safe_name
+
+
 def save_step_checkpoint(
     path: Path,
     model: nn.Module,
@@ -3197,15 +3244,15 @@ def parse_targeted_confusion_penalty_specs(specs: list[str], class_to_idx: dict[
 
 def build_parser() -> argparse.ArgumentParser:
     description = (
-        "EfficientNet-B0 6-stage optimised training pipeline: "
-        "(1) SupCon head warm-up [frozen backbone, head_lr=3e-3] → "
-        "(2) SupCon progressive backbone unfreezing [top-40 semantic leaf modules, backbone_lr=5e-5] → "
-        "(3) CE head warm-up [backbone re-frozen, head_lr=1e-3, head_epochs=5] → "
-        "(4) CE progressive backbone unfreezing [20 leaf modules/step, backbone_lr=1e-5, exponential head decay] → "
+        "EfficientNet-B0 staged training pipeline: "
+        "(1) SupCon head-only warm-up [frozen backbone] → "
+        "(2) SupCon progressive backbone unfreezing [20 leaf modules/step, capped semantic tail] → "
+        "(3) CE head-only warm-up [backbone re-frozen] → "
+        "(4) CE progressive backbone unfreezing [20 leaf modules/step, same frozen-core boundary] → "
         "(5) Recursive val_loss refinement → "
-        "(6) Recursive val_acc refinement. "
-        "Checkpoints saved at every step, every validation, and every phase transition. "
-        "Deterministic 16x split-safe augmentation. Paper-style confusion matrix + CSV metrics."
+        "(6) Recursive val_raw_acc refinement. "
+        "Checkpoints saved at every step, validation, and phase transition. "
+        "Per-epoch clean test-set visual audits are available by default."
     )
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--dataset-root", default="Dataset_Final")
@@ -3215,7 +3262,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prefetch-factor", type=int, default=1)
     parser.add_argument("--embedding-dim", type=int, default=128)
     parser.add_argument("--projection-dim", type=int, default=128)
-    parser.add_argument("--supcon-epochs", type=int, default=100)
+    parser.add_argument("--supcon-epochs", type=int, default=20, help="Legacy alias for --supcon-stage-epochs.")
+    parser.add_argument("--supcon-head-epochs", type=int, default=5)
+    parser.add_argument("--supcon-stage-epochs", type=int, default=-1)
     parser.add_argument("--head-epochs", type=int, default=5)
     parser.add_argument("--stage-epochs", type=int, default=20)
     parser.add_argument("--unfreeze-chunk-size", type=int, default=20)
@@ -3235,16 +3284,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--supcon-temperature", type=float, default=0.07)
-    # Stage 1 (frozen backbone head warm-up) + Stage 2 (top-40 semantic backbone modules):
-    # Head at 3e-3 is 10x standard — needed for rapid cluster formation from a random projection head.
-    # Backbone at 5e-5 is safely conservative: gently tilts high-level semantic features toward the
-    # waste taxonomy without disturbing ImageNet-learned textures locked in the first 90 leaf modules.
+    # SupCon stages:
+    # - head-only warm-up uses 3e-3 to rapidly organise the embedding/projection space
+    # - progressive semantic-tail tuning uses 5e-5 on the backbone to avoid disturbing the frozen core
     parser.add_argument("--supcon-head-lr", type=float, default=3e-3)
     parser.add_argument("--supcon-backbone-lr", type=float, default=5e-5)
-    # Stage 3 (CE head warmup, backbone fully frozen): head_lr=1e-3 initialises the ce_head quickly.
-    # Stage 4 (CE progressive unfreezing): backbone_lr=1e-5 applies micro-adjustments only —
-    # the SupCon phase already did the heavy lifting. Head LR decays exponentially from 1e-3
-    # toward backbone_lr as more modules are thawed (see classifier_phase_learning_rates).
+    # CE stages:
+    # - head-only warm-up uses 1e-3 to initialize the classifier boundary quickly
+    # - progressive CE tuning uses 1e-5 on the backbone; head LR decays toward backbone LR
     parser.add_argument("--head-lr", type=float, default=1e-3)
     parser.add_argument("--backbone-lr", type=float, default=1e-5)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
@@ -3284,15 +3331,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--weights", choices=("default", "none"), default="default")
     parser.add_argument("--augment-repeats", type=int, default=16)
     parser.add_argument("--augment-gaussian-sigmas", type=float, default=0.5)
-    # Stage 2: unfreeze the top 40 leaf modules (out of 130 total) during SupCon.
-    # This covers: stage-6 MBConv blocks [6.0-6.3] + stage-7 [7.0] + final Conv [8].
-    # The first 90 leaf modules (stem, stages 0-5: edges/textures/patterns) stay FROZEN permanently.
-    # Frozen: 928,416 params. Trainable during SupCon backbone: 3,079,132 params.
+    # SupCon and CE both respect the same permanent frozen-core boundary by default.
+    # Only the top semantic tail is eligible for progressive unfreezing.
     parser.add_argument("--supcon-unfreeze-backbone-modules", type=int, default=40)
-    # ── Permanent freeze boundary (applies to BOTH SupCon and CE phases) ──────
-    # Default=40 matches --supcon-unfreeze-backbone-modules, ensuring the exact
-    # same 90-module frozen boundary is respected across the entire pipeline.
-    # The first 90 leaf modules (stem, stages 0-5) are NEVER gradient-updated.
     parser.add_argument(
         "--ce-max-unfreeze-modules",
         type=int,
@@ -3339,11 +3380,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=18,
         help="Thumbnail size for the full test atlas image.",
     )
-    # eval_every_epochs=0.1 runs validation every 10% of an epoch (96 train steps).
-    # At 0.01 (100 evals/epoch × 275 val steps = 27,500 val steps) vs 962 train steps,
-    # validation was 28.6× more compute than training — pathologically inverted.
-    # At 0.1: 2,750 val steps/epoch vs 962 train steps = 2.9× overhead. Correct.
-    parser.add_argument("--eval-every-epochs", type=float, default=0.1)
+    parser.add_argument("--eval-every-epochs", type=float, default=0.01)
     parser.add_argument(
         "--runtime-bad-sample-cleanup",
         action="store_true",
@@ -3353,17 +3390,9 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--confidence-threshold", type=float, default=0.80)
-    # supcon_early_stopping_patience=7: at eval_every_epochs=0.1, patience=7 means
-    # 0.7 epoch wait before SupCon is terminated. The warmup spans 1024/962=1.07
-    # epochs. Patience 5 (0.5 epoch) could fire mid-warmup if loss fluctuates at
-    # the LR ramp peak. 7 windows = 0.7 epoch safely overlaps the warmup zone.
-    parser.add_argument("--supcon-early-stopping-patience", type=int, default=7)
+    parser.add_argument("--supcon-early-stopping-patience", type=int, default=5)
     parser.add_argument("--head-early-stopping-patience", type=int, default=5)
-    # stage_early_stopping_patience=10 at eval_every_epochs=0.1 means
-    # the model must show no improvement for 1 full epoch before a CE progressive
-    # phase is terminated. Adam m/v statistics need at least 1 epoch to adapt
-    # to newly unfrozen parameters — patience=5 (0.5 epoch) fires too early.
-    parser.add_argument("--stage-early-stopping-patience", type=int, default=10)
+    parser.add_argument("--stage-early-stopping-patience", type=int, default=5)
     parser.add_argument("--early-stopping-min-delta", type=float, default=1e-4)
     parser.add_argument("--warmup-epochs", type=int, default=0)
     parser.add_argument("--warmup-steps", type=int, default=1024)
@@ -3518,10 +3547,16 @@ def collapse_logits_and_targets_to_runtime_classes(
 
 
 def run_experiment(args: argparse.Namespace) -> int:
+    if getattr(args, "supcon_stage_epochs", -1) < 0:
+        args.supcon_stage_epochs = int(args.supcon_epochs)
     if args.optimizer == "sam" and args.grad_accum_steps != 1:
         raise ValueError("SAM support in this trainer requires --grad-accum-steps 1")
     if args.unfreeze_chunk_size < 1:
         raise ValueError("--unfreeze-chunk-size must be >= 1")
+    if args.supcon_head_epochs < 0:
+        raise ValueError("--supcon-head-epochs must be >= 0")
+    if args.supcon_stage_epochs < 0:
+        raise ValueError("--supcon-stage-epochs must be >= 0")
     if args.augment_repeats < 1:
         raise ValueError("--augment-repeats must be >= 1")
     if args.augment_gaussian_sigmas <= 0:
@@ -3540,6 +3575,11 @@ def run_experiment(args: argparse.Namespace) -> int:
         raise ValueError("--head-early-stopping-patience must be >= 1")
     if args.stage_early_stopping_patience < 1:
         raise ValueError("--stage-early-stopping-patience must be >= 1")
+    if args.supcon_unfreeze_backbone_modules > args.ce_max_unfreeze_modules:
+        raise ValueError(
+            "--supcon-unfreeze-backbone-modules must be <= --ce-max-unfreeze-modules "
+            "so the permanent frozen-core boundary is respected across the full pipeline."
+        )
 
     seed_everything(args.seed)
     torch.backends.cudnn.benchmark = True
@@ -3656,6 +3696,8 @@ def run_experiment(args: argparse.Namespace) -> int:
             "test_steps_per_eval": len(test_loader),
             "sampling_strategy": args.sampling_strategy,
             "eval_every_epochs": args.eval_every_epochs,
+            "supcon_head_epochs": args.supcon_head_epochs,
+            "supcon_stage_epochs": args.supcon_stage_epochs,
             "supcon_early_stopping_patience": args.supcon_early_stopping_patience,
             "head_early_stopping_patience": args.head_early_stopping_patience,
             "stage_early_stopping_patience": args.stage_early_stopping_patience,
@@ -3722,24 +3764,15 @@ def run_experiment(args: argparse.Namespace) -> int:
         )
 
     supcon_loss = SupConLoss(args.supcon_temperature)
-    thawed_supcon = set_trainability_for_supcon(model, backbone_modules, args.supcon_unfreeze_backbone_modules)
-    supcon_optimizer = build_supcon_optimizer(model, args)
-    supcon_scheduler = build_scheduler(
-        base_optimizer_for_scheduler(supcon_optimizer),
-        max_epochs=args.supcon_epochs,
-        steps_per_epoch=steps_per_epoch_for_sampler(supcon_sampler, supcon_train_dataset, args.batch_size, args.max_train_batches),
-        warmup_epochs=args.warmup_epochs,
-        warmup_steps=args.warmup_steps,
-    )
-    _, supcon_trainable_params = parameter_counts(model)
+    supcon_phases = build_supcon_phase_plan(len(backbone_modules), args)
     supcon_best_loss = float(resume_checkpoint.get("supcon_best_loss", float("inf"))) if resume_checkpoint is not None else float("inf")
     supcon_best_epoch = int(resume_checkpoint.get("supcon_best_epoch", 0)) if resume_checkpoint is not None else 0
     supcon_wait = int(resume_checkpoint.get("supcon_wait", 0)) if resume_checkpoint is not None else 0
-    stop_supcon = False
     start_supcon_epoch = 1
     start_supcon_epoch_step = 0
     start_supcon_validation_index = 0
-    supcon_completed = bool(args.skip_supcon)
+    resume_supcon_phase_index = 1
+    supcon_completed = bool(args.skip_supcon or not supcon_phases)
 
     save_training_checkpoint(
         checkpoint_path,
@@ -3772,171 +3805,113 @@ def run_experiment(args: argparse.Namespace) -> int:
         reason="run_start",
     )
 
-    if args.skip_supcon or resume_from_best_phase:
+    if args.skip_supcon or resume_from_best_phase or not supcon_phases:
         supcon_completed = True
         log_json_event(
             log_path,
             {
                 "event": "supcon_skipped",
-                "reason": "resume_from_best_phase" if resume_from_best_phase else "flag",
+                "reason": (
+                    "resume_from_best_phase"
+                    if resume_from_best_phase
+                    else "no_supcon_phases"
+                    if not supcon_phases
+                    else "flag"
+                ),
             },
         )
-    elif resume_state.get("stage") == "supcon" and "optimizer_state_dict" in resume_state and "scheduler_state_dict" in resume_state:
-        supcon_optimizer.load_state_dict(resume_state["optimizer_state_dict"])
-        supcon_scheduler.load_state_dict(resume_state["scheduler_state_dict"])
-        # ── LR override: apply CLI-specified LRs on top of restored state ──
-        # load_state_dict() restores the OLD saved LRs, so we explicitly
-        # overwrite with the current args after loading. Momentum statistics
-        # (Adam m/v) are still reused from the checkpoint for warm continuation.
-        supcon_lr_override = [args.supcon_head_lr, args.supcon_backbone_lr]
-        for pg, new_lr in zip(supcon_optimizer.param_groups, supcon_lr_override):
-            pg["lr"] = new_lr
-        log_json_event(log_path, {
-            "event": "supcon_lr_overridden",
-            "supcon_head_lr": args.supcon_head_lr,
-            "supcon_backbone_lr": args.supcon_backbone_lr,
-        })
+    elif resume_state.get("stage") == "supcon":
+        resume_supcon_phase_index = resolve_phase_start_index(args, supcon_phases, resume_state)
         start_supcon_epoch = int(resume_state.get("epoch", 1))
         start_supcon_epoch_step = int(resume_state.get("epoch_step_completed", 0))
         start_supcon_validation_index = int(resume_state.get("validation_index", 0))
-        supcon_completed = False
-    elif resume_state.get("stage") == "supcon":
-        log_json_event(log_path, {"event": "resume_fallback", "stage": "supcon", "reason": "missing_optimizer_or_scheduler_state"})
         supcon_completed = False
     elif resume_state.get("stage") == "classifier":
         supcon_completed = True
 
     if not supcon_completed:
-        if resume_eval_needed and resume_state.get("stage") == "supcon":
-            log_json_event(
-                log_path,
-                {
-                    "event": "resume_initial_val_pass",
-                    "stage": "supcon",
-                    "reason": "user_verification",
-                },
+        for supcon_phase_index, supcon_phase in enumerate(supcon_phases, start=1):
+            if supcon_phase_index < resume_supcon_phase_index:
+                continue
+            thawed_supcon = set_trainability_for_supcon(model, backbone_modules, supcon_phase.unfrozen_backbone_modules)
+            supcon_optimizer = build_supcon_optimizer(model, args)
+            supcon_scheduler = build_scheduler(
+                base_optimizer_for_scheduler(supcon_optimizer),
+                max_epochs=supcon_phase.max_epochs,
+                steps_per_epoch=steps_per_epoch_for_sampler(
+                    supcon_sampler, supcon_train_dataset, args.batch_size, args.max_train_batches
+                ),
+                warmup_epochs=args.warmup_epochs,
+                warmup_steps=args.warmup_steps,
             )
-            # Use supcon_val_loader with the newly consistent sampler
-            init_val_loss = evaluate_supcon(
-                model=model,
-                loader=supcon_val_loader,
-                criterion=supcon_loss,
-                device=device,
-                max_batches=args.max_eval_batches,
-                log_path=log_path,
-                log_every_eval_steps=args.log_eval_every_steps,
-                stage="supcon",
-                split="val",
-                eval_context={
-                    "epoch": int(resume_state.get("epoch", 1)),
-                    "validation_index": int(resume_state.get("validation_index", 0)),
-                    "epoch_step": int(resume_state.get("epoch_step_completed", 0)),
-                    "global_train_step": train_progress["global_train_step"],
-                    "is_initial_resume_eval": True,
-                },
-                args=args,
+            supcon_scaler = build_grad_scaler(device, args)
+            _, supcon_trainable_params = parameter_counts(model)
+            phase_best_loss = float("inf")
+            phase_best_epoch = 0
+            phase_best_state = cpu_state_dict(model)
+            phase_wait = 0
+            same_resume_phase = (
+                resume_checkpoint is not None
+                and
+                resume_state.get("stage") == "supcon"
+                and supcon_phase_index == resume_supcon_phase_index
+                and resume_state.get("phase_name") == supcon_phase.name
+                and "optimizer_state_dict" in resume_state
+                and "scheduler_state_dict" in resume_state
             )
-            log_json_event(
-                log_path,
-                {
-                    "event": "resume_initial_val_finished",
-                    "stage": "supcon",
-                    "val_loss": init_val_loss,
-                },
-            )
-            resume_eval_needed = False # Handled
-
-        supcon_steps_full_epoch = steps_per_epoch_for_sampler(supcon_sampler, supcon_train_dataset, args.batch_size, args.max_train_batches)
-        supcon_scaler = build_grad_scaler(device, args)
-        if resume_state.get("stage") == "supcon" and "scaler_state_dict" in resume_state:
-            supcon_scaler.load_state_dict(resume_state["scaler_state_dict"])
-        for epoch in range(start_supcon_epoch, args.supcon_epochs + 1):
-            train_dataset.set_epoch(augmentation_epoch_cursor)
-            val_dataset.set_epoch(0)
-            test_dataset.set_epoch(0)
-            supcon_train_dataset.set_epoch(augmentation_epoch_cursor)
-            supcon_val_dataset.set_epoch(0)
-            start_index = start_supcon_epoch_step * args.batch_size if epoch == start_supcon_epoch else 0
-            supcon_sampler.set_epoch(augmentation_epoch_cursor)
-            supcon_sampler.set_start_index(start_index)
-            supcon_steps_per_epoch = max(0, supcon_steps_full_epoch - (start_supcon_epoch_step if epoch == start_supcon_epoch else 0))
-            epoch_steps_done = start_supcon_epoch_step if epoch == start_supcon_epoch else 0
-            epoch_samples_seen = 0
-            epoch_loss_sum = 0.0
-            validation_index = start_supcon_validation_index if epoch == start_supcon_epoch else 0
-            progress = tqdm(total=supcon_steps_per_epoch, leave=False)
-
-            while epoch_steps_done < supcon_steps_full_epoch:
-                phase_steps_completed = ((epoch - 1) * supcon_steps_full_epoch) + epoch_steps_done
-                step_window = steps_until_next_validation(
-                    phase_steps_completed=phase_steps_completed,
-                    steps_per_epoch=supcon_steps_full_epoch,
-                    eval_every_epochs=args.eval_every_epochs,
-                    steps_remaining_in_epoch=supcon_steps_full_epoch - epoch_steps_done,
-                )
-                step_start_index = epoch_steps_done * args.batch_size
-                supcon_sampler.set_epoch(augmentation_epoch_cursor)
-                supcon_sampler.set_start_index(step_start_index)
-                supcon_iterator = iter(limited_batches(supcon_train_loader, args.max_train_batches))
-                window_train_loss, steps_done, window_samples = train_supcon_steps(
-                    model=model,
-                    batch_iterator=supcon_iterator,
-                    step_limit=step_window,
-                    criterion=supcon_loss,
-                    optimizer=supcon_optimizer,
-                    scaler=supcon_scaler,
-                    scheduler=supcon_scheduler,
-                    device=device,
-                    backbone_modules=backbone_modules,
-                    epoch=epoch,
-                    epoch_step_offset=epoch_steps_done,
-                    log_path=log_path,
-                    log_every_steps=args.log_every_steps,
-                    train_progress=train_progress,
-                    step_checkpoint_path=step_checkpoint_path,
-                    class_names=train_dataset.classes,
-                    class_to_idx=train_dataset.class_to_idx,
-                    args=args,
-                    step_checkpoint_payload={
-                        "history": history,
-                        "best_val_loss": best_val_loss,
-                        "best_val_acc": best_val_acc,
-                        "best_val_raw_acc": best_val_raw_acc,
-                        "supcon_best_state": supcon_best_state,
-                        "supcon_best_loss": supcon_best_loss,
-                        "supcon_best_epoch": supcon_best_epoch,
-                        "supcon_wait": supcon_wait,
-                        "augmentation_epoch_cursor": augmentation_epoch_cursor,
-                    },
-                    step_resume_payload={
-                        "validation_index": validation_index,
-                    },
-                )
-                del supcon_iterator
-                if steps_done == 0:
-                    break
-
-                epoch_steps_done += steps_done
-                epoch_samples_seen += window_samples
-                epoch_loss_sum += window_train_loss * window_samples
-                validation_index += 1
-                progress.update(steps_done)
-                progress.set_postfix(loss=f"{epoch_loss_sum / max(1, epoch_samples_seen):.4f}")
-                release_training_memory(device, supcon_train_loader)
-
+            if same_resume_phase:
+                try:
+                    supcon_optimizer.load_state_dict(resume_state["optimizer_state_dict"])
+                    supcon_scheduler.load_state_dict(resume_state["scheduler_state_dict"])
+                    set_scheduler_base_lrs(
+                        supcon_scheduler,
+                        [
+                            args.supcon_head_lr,
+                            *([args.supcon_backbone_lr] if len(supcon_scheduler.optimizer.param_groups) > 1 else []),
+                        ],
+                    )
+                    if "scaler_state_dict" in resume_state:
+                        supcon_scaler.load_state_dict(resume_state["scaler_state_dict"])
+                    phase_best_loss = float(resume_state.get("phase_best_loss", float("inf")))
+                    phase_best_epoch = int(resume_state.get("phase_best_epoch", 0))
+                    phase_best_state = resume_checkpoint.get("phase_best_state", cpu_state_dict(model))
+                    phase_wait = int(resume_state.get("phase_wait", 0))
+                except ValueError as exc:
+                    same_resume_phase = False
+                    log_json_event(
+                        log_path,
+                        {
+                            "event": "resume_fallback",
+                            "stage": "supcon",
+                            "phase_index": supcon_phase_index,
+                            "phase_name": supcon_phase.name,
+                            "reason": f"incompatible_optimizer_state: {exc}",
+                        },
+                    )
+            elif resume_checkpoint is not None and resume_state.get("stage") == "supcon" and supcon_phase_index == resume_supcon_phase_index:
                 log_json_event(
                     log_path,
                     {
-                        "event": "validation_started",
+                        "event": "resume_fallback",
                         "stage": "supcon",
-                        "epoch": epoch,
-                        "validation_index": validation_index,
-                        "epoch_step": epoch_steps_done,
-                        "global_train_step": train_progress["global_train_step"],
-                        "eval_batches": val_eval_batches,
+                        "phase_index": supcon_phase_index,
+                        "phase_name": supcon_phase.name,
+                        "reason": "missing_optimizer_or_scheduler_state",
                     },
                 )
-                val_loss = evaluate_supcon(
+
+            if resume_eval_needed and same_resume_phase:
+                log_json_event(
+                    log_path,
+                    {
+                        "event": "resume_initial_val_pass",
+                        "stage": "supcon",
+                        "phase_index": supcon_phase_index,
+                        "phase_name": supcon_phase.name,
+                        "reason": "user_verification",
+                    },
+                )
+                init_val_loss = evaluate_supcon(
                     model=model,
                     loader=supcon_val_loader,
                     criterion=supcon_loss,
@@ -3947,149 +3922,370 @@ def run_experiment(args: argparse.Namespace) -> int:
                     stage="supcon",
                     split="val",
                     eval_context={
-                        "epoch": epoch,
-                        "validation_index": validation_index,
-                        "epoch_step": epoch_steps_done,
+                        "phase_index": supcon_phase_index,
+                        "phase_name": supcon_phase.name,
+                        "epoch_in_phase": int(resume_state.get("epoch", 1)),
+                        "validation_index": int(resume_state.get("validation_index", 0)),
+                        "epoch_step": int(resume_state.get("epoch_step_completed", 0)),
                         "global_train_step": train_progress["global_train_step"],
+                        "is_initial_resume_eval": True,
                     },
                     args=args,
                 )
-                release_training_memory(device, supcon_val_loader)
                 log_json_event(
                     log_path,
                     {
-                        "event": "validation_finished",
+                        "event": "resume_initial_val_finished",
                         "stage": "supcon",
-                        "epoch": epoch,
+                        "phase_index": supcon_phase_index,
+                        "phase_name": supcon_phase.name,
+                        "val_loss": init_val_loss,
+                    },
+                )
+                resume_eval_needed = False
+
+            supcon_steps_full_epoch = steps_per_epoch_for_sampler(
+                supcon_sampler, supcon_train_dataset, args.batch_size, args.max_train_batches
+            )
+            for epoch in range(start_supcon_epoch if same_resume_phase else 1, supcon_phase.max_epochs + 1):
+                train_dataset.set_epoch(augmentation_epoch_cursor)
+                val_dataset.set_epoch(0)
+                test_dataset.set_epoch(0)
+                supcon_train_dataset.set_epoch(augmentation_epoch_cursor)
+                supcon_val_dataset.set_epoch(0)
+                start_index = start_supcon_epoch_step * args.batch_size if same_resume_phase and epoch == start_supcon_epoch else 0
+                supcon_sampler.set_epoch(augmentation_epoch_cursor)
+                supcon_sampler.set_start_index(start_index)
+                supcon_steps_per_epoch = max(
+                    0,
+                    supcon_steps_full_epoch - (start_supcon_epoch_step if same_resume_phase and epoch == start_supcon_epoch else 0),
+                )
+                epoch_steps_done = start_supcon_epoch_step if same_resume_phase and epoch == start_supcon_epoch else 0
+                epoch_samples_seen = 0
+                epoch_loss_sum = 0.0
+                validation_index = start_supcon_validation_index if same_resume_phase and epoch == start_supcon_epoch else 0
+                phase_stopped = False
+                progress = tqdm(total=supcon_steps_per_epoch, leave=False)
+
+                while epoch_steps_done < supcon_steps_full_epoch:
+                    phase_steps_completed = ((epoch - 1) * supcon_steps_full_epoch) + epoch_steps_done
+                    step_window = steps_until_next_validation(
+                        phase_steps_completed=phase_steps_completed,
+                        steps_per_epoch=supcon_steps_full_epoch,
+                        eval_every_epochs=args.eval_every_epochs,
+                        steps_remaining_in_epoch=supcon_steps_full_epoch - epoch_steps_done,
+                    )
+                    step_start_index = epoch_steps_done * args.batch_size
+                    supcon_sampler.set_epoch(augmentation_epoch_cursor)
+                    supcon_sampler.set_start_index(step_start_index)
+                    supcon_iterator = iter(limited_batches(supcon_train_loader, args.max_train_batches))
+                    window_train_loss, steps_done, window_samples = train_supcon_steps(
+                        model=model,
+                        batch_iterator=supcon_iterator,
+                        step_limit=step_window,
+                        criterion=supcon_loss,
+                        optimizer=supcon_optimizer,
+                        scaler=supcon_scaler,
+                        scheduler=supcon_scheduler,
+                        device=device,
+                        backbone_modules=backbone_modules,
+                        epoch=epoch,
+                        epoch_step_offset=epoch_steps_done,
+                        log_path=log_path,
+                        log_every_steps=args.log_every_steps,
+                        train_progress=train_progress,
+                        step_checkpoint_path=step_checkpoint_path,
+                        class_names=train_dataset.classes,
+                        class_to_idx=train_dataset.class_to_idx,
+                        args=args,
+                        step_checkpoint_payload={
+                            "history": history,
+                            "best_val_loss": best_val_loss,
+                            "best_val_acc": best_val_acc,
+                            "best_val_raw_acc": best_val_raw_acc,
+                            "best_classifier_state": best_classifier_state,
+                            "supcon_best_state": supcon_best_state,
+                            "supcon_best_loss": supcon_best_loss,
+                            "supcon_best_epoch": supcon_best_epoch,
+                            "supcon_wait": supcon_wait,
+                            "phase_best_state": phase_best_state,
+                            "augmentation_epoch_cursor": augmentation_epoch_cursor,
+                        },
+                        step_resume_payload={
+                            "phase_index": supcon_phase_index,
+                            "phase_name": supcon_phase.name,
+                            "validation_index": validation_index,
+                            "phase_best_loss": phase_best_loss,
+                            "phase_best_epoch": phase_best_epoch,
+                            "phase_wait": phase_wait,
+                        },
+                    )
+                    del supcon_iterator
+                    if steps_done == 0:
+                        break
+
+                    epoch_steps_done += steps_done
+                    epoch_samples_seen += window_samples
+                    epoch_loss_sum += window_train_loss * window_samples
+                    validation_index += 1
+                    progress.update(steps_done)
+                    progress.set_postfix(loss=f"{epoch_loss_sum / max(1, epoch_samples_seen):.4f}")
+                    release_training_memory(device, supcon_train_loader)
+
+                    log_json_event(
+                        log_path,
+                        {
+                            "event": "validation_started",
+                            "stage": "supcon",
+                            "phase_index": supcon_phase_index,
+                            "phase_name": supcon_phase.name,
+                            "epoch_in_phase": epoch,
+                            "validation_index": validation_index,
+                            "epoch_step": epoch_steps_done,
+                            "global_train_step": train_progress["global_train_step"],
+                            "eval_batches": val_eval_batches,
+                        },
+                    )
+                    val_loss = evaluate_supcon(
+                        model=model,
+                        loader=supcon_val_loader,
+                        criterion=supcon_loss,
+                        device=device,
+                        max_batches=args.max_eval_batches,
+                        log_path=log_path,
+                        log_every_eval_steps=args.log_eval_every_steps,
+                        stage="supcon",
+                        split="val",
+                        eval_context={
+                            "phase_index": supcon_phase_index,
+                            "phase_name": supcon_phase.name,
+                            "epoch_in_phase": epoch,
+                            "validation_index": validation_index,
+                            "epoch_step": epoch_steps_done,
+                            "global_train_step": train_progress["global_train_step"],
+                        },
+                        args=args,
+                    )
+                    release_training_memory(device, supcon_val_loader)
+                    log_json_event(
+                        log_path,
+                        {
+                            "event": "validation_finished",
+                            "stage": "supcon",
+                            "phase_index": supcon_phase_index,
+                            "phase_name": supcon_phase.name,
+                            "epoch_in_phase": epoch,
+                            "validation_index": validation_index,
+                            "epoch_step": epoch_steps_done,
+                            "global_train_step": train_progress["global_train_step"],
+                            "eval_batches": val_eval_batches,
+                            "val_loss": val_loss,
+                        },
+                    )
+                    if val_loss < phase_best_loss - args.early_stopping_min_delta:
+                        phase_best_loss = val_loss
+                        phase_best_epoch = epoch
+                        phase_best_state = cpu_state_dict(model)
+                        phase_wait = 0
+                        supcon_phase_dir = phase_artifact_dir(output_dir, supcon_phase.name)
+                        supcon_phase_dir.mkdir(parents=True, exist_ok=True)
+                        torch.save(
+                            {
+                                "model_state_dict": phase_best_state,
+                                "class_names": train_dataset.classes,
+                                "class_to_idx": train_dataset.class_to_idx,
+                                "args": vars(args),
+                                "phase_index": supcon_phase_index,
+                                "phase_name": supcon_phase.name,
+                                "val_loss": val_loss,
+                            },
+                            supcon_phase_dir / "best.pt",
+                        )
+                    else:
+                        phase_wait += 1
+
+                    if val_loss < supcon_best_loss - args.early_stopping_min_delta:
+                        supcon_best_loss = val_loss
+                        supcon_best_epoch = epoch
+                        supcon_best_state = cpu_state_dict(model)
+                        supcon_wait = 0
+                        save_supcon_best_checkpoint(
+                            output_dir / "best.pt",
+                            model_state_dict=supcon_best_state,
+                            class_names=train_dataset.classes,
+                            class_to_idx=train_dataset.class_to_idx,
+                            args=args,
+                            history=history,
+                            train_progress=train_progress,
+                            best_val_loss=best_val_loss,
+                            best_val_acc=best_val_acc,
+                            best_val_raw_acc=best_val_raw_acc,
+                            best_classifier_state=best_classifier_state,
+                            supcon_best_state=supcon_best_state,
+                            supcon_best_loss=supcon_best_loss,
+                            supcon_best_epoch=supcon_best_epoch,
+                            supcon_wait=supcon_wait,
+                            augmentation_epoch_cursor=augmentation_epoch_cursor,
+                        )
+                        save_supcon_best_checkpoint(
+                            output_dir / "supcon_best.pt",
+                            model_state_dict=supcon_best_state,
+                            class_names=train_dataset.classes,
+                            class_to_idx=train_dataset.class_to_idx,
+                            args=args,
+                            history=history,
+                            train_progress=train_progress,
+                            best_val_loss=best_val_loss,
+                            best_val_acc=best_val_acc,
+                            best_val_raw_acc=best_val_raw_acc,
+                            best_classifier_state=best_classifier_state,
+                            supcon_best_state=supcon_best_state,
+                            supcon_best_loss=supcon_best_loss,
+                            supcon_best_epoch=supcon_best_epoch,
+                            supcon_wait=supcon_wait,
+                            augmentation_epoch_cursor=augmentation_epoch_cursor,
+                        )
+                    else:
+                        supcon_wait += 1
+
+                    row = {
+                        "stage": "supcon",
+                        "phase_index": supcon_phase_index,
+                        "phase_name": supcon_phase.name,
+                        "epoch_in_phase": epoch,
                         "validation_index": validation_index,
                         "epoch_step": epoch_steps_done,
                         "global_train_step": train_progress["global_train_step"],
-                        "eval_batches": val_eval_batches,
+                        "phase_max_epochs": supcon_phase.max_epochs,
+                        "unfrozen_backbone_modules": supcon_phase.unfrozen_backbone_modules,
+                        "newly_unfrozen_tail_modules": thawed_supcon[-args.unfreeze_chunk_size :],
+                        "trainable_params": supcon_trainable_params,
+                        "total_params": total_params,
+                        "window_train_loss": window_train_loss,
+                        "epoch_running_train_loss": epoch_loss_sum / max(1, epoch_samples_seen),
                         "val_loss": val_loss,
-                    },
-                )
-                if val_loss < supcon_best_loss - args.early_stopping_min_delta:
-                    supcon_best_loss = val_loss
-                    supcon_best_epoch = epoch
-                    supcon_best_state = cpu_state_dict(model)
-                    supcon_wait = 0
-                    save_supcon_best_checkpoint(
-                        output_dir / "best.pt",
-                        model_state_dict=supcon_best_state,
-                        class_names=train_dataset.classes,
-                        class_to_idx=train_dataset.class_to_idx,
-                        args=args,
-                        history=history,
-                        train_progress=train_progress,
-                        best_val_loss=best_val_loss,
-                        best_val_acc=best_val_acc,
-                        best_val_raw_acc=best_val_raw_acc,
-                        best_classifier_state=best_classifier_state,
-                        supcon_best_state=supcon_best_state,
-                        supcon_best_loss=supcon_best_loss,
-                        supcon_best_epoch=supcon_best_epoch,
-                        supcon_wait=supcon_wait,
-                        augmentation_epoch_cursor=augmentation_epoch_cursor,
-                    )
-                    save_supcon_best_checkpoint(
-                        output_dir / "supcon_best.pt",
-                        model_state_dict=supcon_best_state,
-                        class_names=train_dataset.classes,
-                        class_to_idx=train_dataset.class_to_idx,
-                        args=args,
-                        history=history,
-                        train_progress=train_progress,
-                        best_val_loss=best_val_loss,
-                        best_val_acc=best_val_acc,
-                        best_val_raw_acc=best_val_raw_acc,
-                        best_classifier_state=best_classifier_state,
-                        supcon_best_state=supcon_best_state,
-                        supcon_best_loss=supcon_best_loss,
-                        supcon_best_epoch=supcon_best_epoch,
-                        supcon_wait=supcon_wait,
-                        augmentation_epoch_cursor=augmentation_epoch_cursor,
-                    )
-                else:
-                    supcon_wait += 1
-
-                row = {
-                    "stage": "supcon",
-                    "epoch": epoch,
-                    "validation_index": validation_index,
-                    "epoch_step": epoch_steps_done,
-                    "global_train_step": train_progress["global_train_step"],
-                    "window_train_loss": window_train_loss,
-                    "epoch_running_train_loss": epoch_loss_sum / max(1, epoch_samples_seen),
-                    "val_loss": val_loss,
-                    "best_val_loss": supcon_best_loss,
-                    "checks_without_improvement": supcon_wait,
-                    "patience_unit": "validation_window",
-                    "validation_interval_epochs": args.eval_every_epochs,
-                    "trainable_params": supcon_trainable_params,
-                    "total_params": total_params,
-                    "unfrozen_backbone_modules": args.supcon_unfreeze_backbone_modules,
-                    "newly_unfrozen_tail_modules": thawed_supcon[-args.unfreeze_chunk_size :],
-                }
-                history.append(row)
-                log_json_event(log_path, row)
-                save_training_checkpoint(
-                    checkpoint_path,
-                    {
-                        "model_state_dict": cpu_state_dict(model),
-                        "class_names": train_dataset.classes,
-                        "class_to_idx": train_dataset.class_to_idx,
-                        "args": vars(args),
-                        "history": history,
-                        "train_progress": train_progress,
-                        "best_val_loss": best_val_loss,
-                        "best_val_acc": best_val_acc,
-                        "best_val_raw_acc": best_val_raw_acc,
-                        "best_classifier_state": best_classifier_state,
-                        "supcon_best_state": supcon_best_state,
-                        "supcon_best_loss": supcon_best_loss,
-                        "supcon_best_epoch": supcon_best_epoch,
-                        "supcon_wait": supcon_wait,
-                        "augmentation_epoch_cursor": augmentation_epoch_cursor,
-                        "resume": {
-                            "stage": "supcon",
-                            "epoch": epoch,
-                            "epoch_step_completed": epoch_steps_done,
-                            "validation_index": validation_index,
-                            "optimizer_state_dict": supcon_optimizer.state_dict(),
-                            "scheduler_state_dict": supcon_scheduler.state_dict(),
-                            "scaler_state_dict": supcon_scaler.state_dict(),
-                        },
-                    },
-                )
-                if supcon_wait >= args.supcon_early_stopping_patience:
-                    event = {
-                        "stage": "supcon",
-                        "stopped_early": True,
-                        "best_epoch": supcon_best_epoch,
-                        "best_val_loss": supcon_best_loss,
-                        "stopped_at_epoch_step": epoch_steps_done,
-                        "global_train_step": train_progress["global_train_step"],
+                        "phase_best_val_loss": phase_best_loss,
+                        "supcon_best_val_loss": supcon_best_loss,
+                        "checks_without_improvement": phase_wait,
+                        "patience_limit": args.supcon_early_stopping_patience,
+                        "patience_unit": "validation_window",
+                        "validation_interval_epochs": args.eval_every_epochs,
+                        "supcon_head_lr": args.supcon_head_lr,
+                        "supcon_backbone_lr": args.supcon_backbone_lr,
                     }
-                    log_json_event(log_path, event)
-                    stop_supcon = True
+                    history.append(row)
+                    log_json_event(log_path, row)
+                    save_training_checkpoint(
+                        checkpoint_path,
+                        {
+                            "model_state_dict": cpu_state_dict(model),
+                            "class_names": train_dataset.classes,
+                            "class_to_idx": train_dataset.class_to_idx,
+                            "args": vars(args),
+                            "history": history,
+                            "train_progress": train_progress,
+                            "best_val_loss": best_val_loss,
+                            "best_val_acc": best_val_acc,
+                            "best_val_raw_acc": best_val_raw_acc,
+                            "best_classifier_state": best_classifier_state,
+                            "supcon_best_state": supcon_best_state,
+                            "supcon_best_loss": supcon_best_loss,
+                            "supcon_best_epoch": supcon_best_epoch,
+                            "supcon_wait": supcon_wait,
+                            "phase_best_state": phase_best_state,
+                            "augmentation_epoch_cursor": augmentation_epoch_cursor,
+                            "resume": {
+                                "stage": "supcon",
+                                "phase_index": supcon_phase_index,
+                                "phase_name": supcon_phase.name,
+                                "epoch": epoch,
+                                "epoch_step_completed": epoch_steps_done,
+                                "validation_index": validation_index,
+                                "phase_best_loss": phase_best_loss,
+                                "phase_best_epoch": phase_best_epoch,
+                                "phase_wait": phase_wait,
+                                "optimizer_state_dict": supcon_optimizer.state_dict(),
+                                "scheduler_state_dict": supcon_scheduler.state_dict(),
+                                "scaler_state_dict": supcon_scaler.state_dict(),
+                            },
+                        },
+                    )
+                    if phase_wait >= args.supcon_early_stopping_patience:
+                        log_json_event(
+                            log_path,
+                            {
+                                "event": "supcon_phase_stopped_early",
+                                "phase_index": supcon_phase_index,
+                                "phase_name": supcon_phase.name,
+                                "best_epoch_in_phase": phase_best_epoch,
+                                "phase_best_val_loss": phase_best_loss,
+                                "stopped_at_epoch_step": epoch_steps_done,
+                                "global_train_step": train_progress["global_train_step"],
+                            },
+                        )
+                        phase_stopped = True
+                        break
+                progress.close()
+                supcon_sampler.set_start_index(0)
+                start_supcon_epoch_step = 0
+                start_supcon_validation_index = 0
+                if phase_stopped:
                     break
-            progress.close()
-            supcon_sampler.set_start_index(0)
+                maybe_run_epoch_visualizations(
+                    checkpoint_path=checkpoint_path,
+                    dataset_root=args.dataset_root,
+                    output_dir=phase_artifact_dir(output_dir, supcon_phase.name),
+                    epoch_label=f"{supcon_phase.name}_epoch_{epoch}",
+                    args=args,
+                    log_path=log_path,
+                    reason="supcon_epoch_complete",
+                )
+                augmentation_epoch_cursor += 1
+                release_training_memory(device, supcon_train_loader, supcon_val_loader)
+
+            model.load_state_dict(phase_best_state)
+            release_training_memory(device, supcon_train_loader, supcon_val_loader)
+            save_training_checkpoint(
+                checkpoint_path,
+                {
+                    "model_state_dict": cpu_state_dict(model),
+                    "class_names": train_dataset.classes,
+                    "class_to_idx": train_dataset.class_to_idx,
+                    "args": vars(args),
+                    "history": history,
+                    "best_val_loss": best_val_loss,
+                    "best_val_acc": best_val_acc,
+                    "best_val_raw_acc": best_val_raw_acc,
+                    "best_classifier_state": best_classifier_state,
+                    "supcon_best_state": supcon_best_state,
+                    "supcon_best_loss": supcon_best_loss,
+                    "supcon_best_epoch": supcon_best_epoch,
+                    "supcon_wait": supcon_wait,
+                    "phase_best_state": phase_best_state,
+                    "augmentation_epoch_cursor": augmentation_epoch_cursor,
+                    "train_progress": train_progress,
+                    "resume": {
+                        "stage": "supcon",
+                        "phase_index": supcon_phase_index + 1,
+                        "phase_name": None,
+                        "epoch": 1,
+                        "epoch_step_completed": 0,
+                        "validation_index": 0,
+                    },
+                },
+            )
+            start_supcon_epoch = 1
             start_supcon_epoch_step = 0
             start_supcon_validation_index = 0
-            if stop_supcon:
-                break
-            maybe_run_epoch_visualizations(
-                checkpoint_path=checkpoint_path,
-                dataset_root=args.dataset_root,
-                output_dir=output_dir,
-                epoch_label=f"supcon_epoch_{epoch}",
-                args=args,
-                log_path=log_path,
-                reason="supcon_epoch_complete",
-            )
-            augmentation_epoch_cursor += 1
-            release_training_memory(device, supcon_train_loader, supcon_val_loader)
+            resume_supcon_phase_index = supcon_phase_index + 1
+            resume_state = {
+                "stage": "supcon",
+                "phase_index": supcon_phase_index + 1,
+                "phase_name": None,
+                "epoch": 1,
+                "epoch_step_completed": 0,
+                "validation_index": 0,
+            }
         model.load_state_dict(supcon_best_state)
         release_training_memory(device, supcon_train_loader, supcon_val_loader)
     else:
@@ -4097,7 +4293,7 @@ def run_experiment(args: argparse.Namespace) -> int:
         start_supcon_validation_index = 0
 
     classifier_criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
-    phases = build_phase_plan(len(backbone_modules), args)
+    phases = build_classifier_phase_plan(len(backbone_modules), args)
     resume_phase_index = resolve_phase_start_index(args, phases, resume_state)
     start_phase_epoch = int(resume_state.get("epoch", 1)) if resume_state.get("stage") == "classifier" and not resume_from_best_phase else 1
     start_phase_epoch_step = int(resume_state.get("epoch_step_completed", 0)) if resume_state.get("stage") == "classifier" and not resume_from_best_phase else 0
@@ -4154,13 +4350,15 @@ def run_experiment(args: argparse.Namespace) -> int:
         )
         _, trainable_params = parameter_counts(model)
         same_resume_phase = (
+            resume_checkpoint is not None
+            and
             resume_state.get("stage") == "classifier"
             and phase_index == resume_phase_index
             and resume_state.get("phase_name") == phase.name
             and "optimizer_state_dict" in resume_state
             and "scheduler_state_dict" in resume_state
         )
-        if resume_state.get("stage") == "classifier" and phase_index == resume_phase_index and not same_resume_phase:
+        if resume_checkpoint is not None and resume_state.get("stage") == "classifier" and phase_index == resume_phase_index and not same_resume_phase:
             log_json_event(
                 log_path,
                 {
@@ -4376,26 +4574,31 @@ def run_experiment(args: argparse.Namespace) -> int:
                     phase_best_epoch = epoch
                     phase_best_state = cpu_state_dict(model)
                     phase_wait = 0
+                    classifier_phase_dir = phase_artifact_dir(output_dir, phase.name)
+                    classifier_phase_dir.mkdir(parents=True, exist_ok=True)
                     
                     # AUTO-GENERATION: Confusion Matrix for Step-Best
                     if "confusion_matrix" in val_metrics:
                         save_confusion_matrix_plot(
-                            output_dir / f"phase_{phase_index}_best_confusion_matrix.png",
+                            classifier_phase_dir / "best_confusion_matrix.png",
                             np.asarray(val_metrics["confusion_matrix"], dtype=np.int64),
                             train_dataset.classes,
                             f"Phase {phase_index} Best Validation Confusion Matrix",
                         )
 
-                    torch.save({
-                         "model_state_dict" : cpu_state_dict(model),
-                         "class_names" : train_dataset.classes,
-                         "class_to_idx" : train_dataset.class_to_idx,
-                         "args" : vars(args),
-                         "phase_index" : phase_index,
-                         "phase_name" : phase.name,
-                         "val_loss" : val_loss,
-                         "val_raw_acc" : val_raw_acc,
-                    }, output_dir / f"best_phase_{phase_index}.pt" )
+                    torch.save(
+                        {
+                            "model_state_dict": cpu_state_dict(model),
+                            "class_names": train_dataset.classes,
+                            "class_to_idx": train_dataset.class_to_idx,
+                            "args": vars(args),
+                            "phase_index": phase_index,
+                            "phase_name": phase.name,
+                            "val_loss": val_loss,
+                            "val_raw_acc": val_raw_acc,
+                        },
+                        classifier_phase_dir / "best.pt",
+                    )
 
                 else:
                     phase_wait += 1
@@ -4511,7 +4714,7 @@ def run_experiment(args: argparse.Namespace) -> int:
             maybe_run_epoch_visualizations(
                 checkpoint_path=checkpoint_path,
                 dataset_root=args.dataset_root,
-                output_dir=output_dir,
+                output_dir=phase_artifact_dir(output_dir, phase.name),
                 epoch_label=f"{phase.name}_epoch_{epoch}",
                 args=args,
                 log_path=log_path,
@@ -4718,7 +4921,9 @@ def run_experiment(args: argparse.Namespace) -> int:
         "effective_test_class_counts": effective_class_counts(test_dataset),
         "supcon": {
             "temperature": args.supcon_temperature,
-            "max_epochs": args.supcon_epochs,
+            "phase_plan": [asdict(phase) for phase in supcon_phases],
+            "head_epochs": args.supcon_head_epochs,
+            "stage_epochs": args.supcon_stage_epochs,
             "best_val_loss": supcon_best_loss,
             "best_epoch": supcon_best_epoch,
             "unfrozen_backbone_modules": args.supcon_unfreeze_backbone_modules,
@@ -4730,7 +4935,7 @@ def run_experiment(args: argparse.Namespace) -> int:
             "best_val_raw_acc": best_val_raw_acc,
         },
         "optimization": {
-            "optimizer": "AdamW + SAM",
+            "optimizer": args.optimizer,
             "scheduler": "Linear warmup + cosine decay",
             "sam_rho": args.sam_rho,
             "weight_decay": args.weight_decay,

@@ -16,12 +16,27 @@ source .venv/bin/activate
 
 ## 2. Training Execution
 
-The training process is automated via deterministic shell scripts and now defaults to balanced per-batch class cycling for train, val, test, and SupCon loaders.
+The training process is automated via deterministic shell scripts and now defaults to:
+- balanced per-batch class cycling for train, val, test, and SupCon loaders
+- validation every `0.01` epoch
+- patience `5` across SupCon, CE head, CE progressive, and recursive refinement
+- warmup + cosine decay annealing
+- startup and per-epoch clean test-set visual audits
 
 ### Full Pipeline Orchestration
-Executes SupCon pre-training, Progressive Unfreezing, and Recursive Refinement (Loss + Accuracy), with startup and end-of-epoch clean test-set visualization suites.
+Executes the staged pipeline:
+1. `supcon_head_only`
+2. `supcon_last_20_modules`
+3. `supcon_last_40_modules`
+4. `ce_head_only`
+5. `ce_last_20_modules`
+6. `ce_last_40_modules`
+7. recursive `val_loss` cleanup
+8. recursive `val_raw_acc` refinement
+
+Each phase writes into its own folder under `Results/<run>/progressive/phases/<phase_name>/`.
 ```bash
-./run_full_training_pipeline.sh
+./run_training.sh --batch-size 224
 ```
 
 ### Manual Execution (Standardized Params)
@@ -30,10 +45,37 @@ python scripts/train_efficientnet_b0_progressive.py \
   --dataset-root Dataset_Final \
   --batch-size 224 \
   --precision mixed \
-  --optimizer sam \
+  --optimizer adamw \
   --sampling-strategy balanced \
+  --eval-every-epochs 0.01 \
+  --supcon-head-epochs 5 \
+  --supcon-stage-epochs 20 \
+  --head-epochs 5 \
+  --stage-epochs 20 \
   --epoch-visualizations
 ```
+
+### Default Hyperparameters
+| Parameter | Value |
+| :-- | :-- |
+| `batch_size` | `224` |
+| `optimizer` | `adamw` |
+| `scheduler` | `warmup + cosine decay` |
+| `sampling_strategy` | `balanced` |
+| `supcon_head_lr` | `3e-3` |
+| `supcon_backbone_lr` | `5e-5` |
+| `head_lr` | `1e-3` |
+| `backbone_lr` | `1e-5` |
+| `weight_decay` | `1e-4` |
+| `label_smoothing` | `0.1` |
+| `warmup_steps` | `1024` |
+| `unfreeze_chunk_size` | `20` |
+| `supcon_unfreeze_backbone_modules` | `40` |
+| `ce_max_unfreeze_modules` | `40` |
+| `eval_every_epochs` | `0.01` |
+| `supcon_early_stopping_patience` | `5` |
+| `head_early_stopping_patience` | `5` |
+| `stage_early_stopping_patience` | `5` |
 
 ---
 

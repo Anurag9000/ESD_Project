@@ -8,7 +8,7 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 - **Backbone:** EfficientNet-B0 (5.3M Parameters)
 - **Corpus:** 308,008 verified images (WSS-308K, post-decontamination + 200px resolution floor)
 - **Taxonomy:** **8 material classes** — clothes, ewaste, glass, hard_plastic, metal, organic, paper, soft_plastic
-- **Orchestration:** 6-stage pipeline: SupCon Head → SupCon Backbone → CE Head Warmup → CE Progressive Unfreezing → Recursive val_loss → Recursive val_acc
+- **Orchestration:** 8-stage pipeline: SupCon Head → SupCon Last-20 → SupCon Last-40 → CE Head → CE Last-20 → CE Last-40 → Recursive val_loss → Recursive val_raw_acc
 - **Balancing:** Balanced per-batch class cycling (default in all training scripts)
 - **Visual Audit:** Startup + end-of-epoch clean test-set visualizations (global t-SNE, per-class t-SNE, all-layer activations, full atlas)
 
@@ -27,15 +27,15 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 | **Current Taxonomy** | **8 material classes** (clothes, ewaste, glass, hard_plastic, metal, organic, paper, soft_plastic) |
 | **Total Images**     | **308,008 verified (≥200px floor, post-decontamination)**                     |
 | **Class Balancing**  | Balanced per-batch class cycling                                              |
-| **Unfreeze Step**    | 20 leaf modules per CE phase                                                  |
-| **Optimization**     | AdamW (Base) or SAM                                                           |
+| **Unfreeze Step**    | 20 leaf modules per SupCon and CE progressive phase                           |
+| **Optimization**     | AdamW + warmup-cosine decay (default)                                         |
 | **Training Precision**| Mixed Precision (FP16) via `torch.amp`                                       |
 | **Mobile State**     | Clean Architecture / MVVM / Hilt                                              |
 
 ---
 
 ## 3. Documentation Index
-- **`ARCHITECTURE_AND_PLAN.md`**: Full 6-stage pipeline specification, per-stage LRs, backbone module map, checkpointing strategy.
+- **`ARCHITECTURE_AND_PLAN.md`**: Full staged pipeline specification, per-stage LRs, backbone module map, checkpointing strategy.
 - **`DATASET_SPECIFICATION.md`**: 308K corpus breakdown per class with decontamination history.
 - **`PYTORCH_SETUP.md`**: Environment configuration and execution manual.
 - **`SmartBin_Android/docs/`**: Mobile-specific architectural and product specifications.
@@ -47,8 +47,11 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 cd /home/anurag-basistha/Projects/ESD
 source .venv/bin/activate
 
-# Launches the full 6-stage lifecycle automatically.
-# Also runs startup and per-epoch clean test-set visualizations.
+# Launches the full staged lifecycle automatically.
+# Defaults now include:
+# - eval every 0.01 epoch
+# - patience 5 across SupCon, CE head, CE stages, and recursive stages
+# - startup + per-epoch clean test-set visualizations
 ./run_training.sh --batch-size 224
 ```
 

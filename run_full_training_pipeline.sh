@@ -61,6 +61,7 @@ python scripts/run_recursive_refinement.py \
   --skip-supcon \
   --optimizer adamw \
   --batch-size 224 \
+  --eval-every-epochs 0.01 \
   --stage-epochs 30 \
   --patience 5 \
   --head-epochs 0 \
@@ -97,7 +98,7 @@ python scripts/run_recursive_refinement.py \
   --base-output-dir "$RAWACC_OUTPUT_DIR" \
   --base-log-file "$RAWACC_LOG_FILE" \
   --initial-checkpoint "$RAWACC_BASE_CHECKPOINT" \
-   --metric val_loss \
+  --metric val_raw_acc \
   --threshold 0.0001 \
   --initial-head-lr "$RAWACC_HEAD_LR" \
   --initial-backbone-lr "$RAWACC_BACKBONE_LR" \
@@ -106,6 +107,7 @@ python scripts/run_recursive_refinement.py \
   --skip-supcon \
   --optimizer adamw \
   --batch-size 224 \
+  --eval-every-epochs 0.01 \
   --stage-epochs 30 \
   --patience 5 \
   --head-epochs 0 \
