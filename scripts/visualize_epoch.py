@@ -283,6 +283,109 @@ def generate_layer_activations(
     print(f"  [ActMaps] Saved → {output_path}")
 
 
+def generate_per_class_sample_activations(
+    model: MetricLearningEfficientNetB0,
+    loader: DataLoader,
+    class_names: list[str],
+    device: torch.device,
+    output_dir: Path,
+    epoch_label: str,
+    samples_per_class: int = 10,
+) -> None:
+    """
+    Pick 10 samples from each class and generate a 4x3 grid for EACH one:
+    - [0,0]: Original Image
+    - [0,1...]: Stages of the backbone
+    """
+    print(f"  [SampleActs] Picking {samples_per_class} samples per class for audit …")
+    model.eval()
+    
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Selection buckets
+    n_cls = len(class_names)
+    buckets: dict[int, list[tuple[torch.Tensor, int]]] = {i: [] for i in range(n_cls)}
+    
+    with torch.no_grad():
+        for images, targets in loader:
+            for i in range(len(images)):
+                t = int(targets[i])
+                if len(buckets[t]) < samples_per_class:
+                    buckets[t].append((images[i], t))
+            if all(len(v) >= samples_per_class for v in buckets.values()):
+                break
+                
+    # Flatten selected samples
+    selected_samples = []
+    for cls_id in range(n_cls):
+        selected_samples.extend(buckets[cls_id])
+        
+    # Setup hooks
+    hooks = {
+        name: _LayerHook(model.backbone.features[idx])
+        for name, idx in _EFFICIENTNET_B0_STAGES.items()
+    }
+    stage_names = list(_EFFICIENTNET_B0_STAGES.keys())
+    
+    print(f"  [SampleActs] Generating {len(selected_samples)} individual maps …")
+    for idx, (img_tensor, target_id) in enumerate(tqdm(selected_samples, desc="  Sample activations", leave=False)):
+        model.eval()
+        with torch.no_grad():
+            img_batch = img_tensor.unsqueeze(0).to(device)
+            emb = model.encode(img_batch)
+            logits = model.classify(emb)
+            probs = F.softmax(logits, dim=1)
+            conf, pred = probs.max(dim=1)
+            pred = int(pred[0])
+            conf = float(conf[0])
+            
+            # Capture activations
+            activations = {name: hook.out[0].mean(dim=0).cpu().float().numpy() for name, hook in hooks.items()}
+            
+        # Draw 4x3 Grid
+        fig = plt.figure(figsize=(18, 22), dpi=100)
+        gs = gridspec.GridSpec(4, 3, hspace=0.3, wspace=0.2)
+        
+        # Original Image
+        ax0 = fig.add_subplot(gs[0, 0])
+        img_np = _denorm(img_tensor.permute(1, 2, 0).numpy())
+        ax0.imshow(img_np)
+        ax0.set_title(f"Original: {class_names[target_id]}", fontsize=12, fontweight="bold")
+        ax0.axis("off")
+        
+        # 9 Stages
+        for s_idx, s_name in enumerate(stage_names):
+            row = (s_idx + 1) // 3
+            col = (s_idx + 1) % 3
+            ax = fig.add_subplot(gs[row, col])
+            amap = activations[s_name]
+            amap = (amap - amap.min()) / (amap.max() - amap.min() + 1e-8)
+            im = ax.imshow(amap, cmap="magma")
+            ax.set_title(f"Stage {s_idx}\n{s_name.split('·')[-1].strip()}", fontsize=10)
+            ax.axis("off")
+            plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            
+        # Stats summary
+        ax_stat = fig.add_subplot(gs[3, 1:])
+        ax_stat.axis("off")
+        color = "green" if pred == target_id else "red"
+        status = "CORRECT" if pred == target_id else "MISCLASSIFIED"
+        stats_text = (
+            f"Ground Truth: {class_names[target_id]}\n"
+            f"Prediction: {class_names[pred]} ({status})\n"
+            f"Confidence: {conf:.2%}\n"
+            f"Epoch: {epoch_label}"
+        )
+        ax_stat.text(0.1, 0.5, stats_text, fontsize=16, color=color, va="center", fontweight="bold")
+        
+        plt.savefig(output_dir / f"{class_names[target_id]}_sample_{idx%samples_per_class}.png", bbox_inches="tight")
+        plt.close(fig)
+        
+    for hook in hooks.values():
+        hook.remove()
+    print(f"  [SampleActs] Saved {len(selected_samples)} samples to {output_dir}")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. Full test-set classification Atlas
 # ─────────────────────────────────────────────────────────────────────────────
@@ -391,7 +494,7 @@ def run(
     batch_size: int = 128,
     num_workers: int = 4,
     sample_limit_activations: int = 0,
-    atlas_thumb_size: int = 18,
+    atlas_thumb_size: int = 48,
     tsne_max_samples: int = 0,
     atlas_max_images: int = 0,
 ) -> None:
@@ -438,6 +541,12 @@ def run(
         sample_limit=sample_limit_activations,
     )
 
+    generate_per_class_sample_activations(
+        model, loader, class_names, device,
+        output_dir / "per_class_samples", epoch_label,
+        samples_per_class=10,
+    )
+
     # ── 3. Full atlas ────────────────────────────────────────────────────────
     generate_test_atlas(
         model, loader, class_names, device,
@@ -478,8 +587,8 @@ def main() -> None:
         help="Max images used to build the activation average. Use 0 for all test images.",
     )
     parser.add_argument(
-        "--atlas-thumb-size", type=int, default=18,
-        help="Thumbnail size for the full test atlas (default 18).",
+        "--atlas-thumb-size", type=int, default=48,
+        help="Thumbnail size for the full test atlas (default 48).",
     )
     parser.add_argument(
         "--tsne-max-samples", type=int, default=0,

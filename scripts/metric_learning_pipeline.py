@@ -3377,7 +3377,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--epoch-visualization-atlas-thumb-size",
         type=int,
-        default=18,
+        default=48,
         help="Thumbnail size for the full test atlas image.",
     )
     parser.add_argument("--eval-every-epochs", type=float, default=0.01)
