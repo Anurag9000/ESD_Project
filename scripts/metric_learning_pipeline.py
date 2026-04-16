@@ -1901,8 +1901,15 @@ def evaluate_supcon(
     total_loss = 0.0
     total_seen = 0
     eval_context = dict(eval_context or {})
+    
+    # Calculate total for tqdm
+    try:
+        total = max_batches if max_batches > 0 else len(loader)
+    except (TypeError, AttributeError):
+        total = None
+
     with torch.no_grad():
-        for eval_step, (view_one, view_two, labels) in enumerate(limited_batches(loader, max_batches), start=1):
+        for eval_step, (view_one, view_two, labels) in enumerate(tqdm(limited_batches(loader, max_batches), total=total, desc=f"Evaluating {split}", leave=False), start=1):
             view_one = move_images_to_device(view_one, device, args) if args is not None else view_one.to(device, non_blocking=True)
             view_two = move_images_to_device(view_two, device, args) if args is not None else view_two.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
@@ -2766,7 +2773,7 @@ def format_console_event(payload: dict[str, Any]) -> str | None:
         if learning_rates:
             pieces.append("lr=" + ",".join(f"{lr:.8g}" for lr in learning_rates))
         return " ".join(piece for piece in pieces if piece)
-    if event in {"validation_finished", "final_evaluation_finished"}:
+    if event in {"validation_finished", "final_evaluation_finished", "resume_initial_val_finished"}:
         pieces = [
             f"[{timestamp}] {event}",
             f"stage={payload.get('stage')}",
@@ -2774,8 +2781,20 @@ def format_console_event(payload: dict[str, Any]) -> str | None:
             f"loss={payload.get('loss'):.6f}" if isinstance(payload.get("loss"), (int, float)) else None,
             f"raw_acc={payload.get('raw_accuracy'):.6f}" if isinstance(payload.get("raw_accuracy"), (int, float)) else None,
             f"acc={payload.get('qualified_accuracy'):.6f}" if isinstance(payload.get("qualified_accuracy"), (int, float)) else None,
+            f"val_loss={payload.get('val_loss'):.6f}" if isinstance(payload.get("val_loss"), (int, float)) else None,
         ]
         return " ".join(piece for piece in pieces if piece)
+    if event == "eval_step":
+        pieces = [
+            f"[{timestamp}] eval_step",
+            f"stage={payload.get('stage')}",
+            f"split={payload.get('split')}",
+            f"step={payload.get('eval_step')}",
+            f"loss={payload.get('running_loss'):.6f}" if isinstance(payload.get("running_loss"), (int, float)) else None,
+        ]
+        return " ".join(piece for piece in pieces if piece)
+    if event == "resume_initial_val_pass":
+        return f"[{timestamp}] resume_initial_val_pass stage={payload.get('stage')} starting verification..."
     if event == "runtime_bad_sample_detected":
         return (
             f"[{timestamp}] runtime_bad_sample_detected split={payload.get('split')} "
@@ -3448,20 +3467,29 @@ def run_experiment(args: argparse.Namespace) -> int:
     if args.sampling_strategy == "balanced":
         train_sampler = make_balanced_sampler(train_dataset, train_dataset.classes, args.batch_size, args.seed + 101)
         supcon_sampler = make_balanced_sampler(supcon_train_dataset, train_dataset.classes, args.batch_size, args.seed + 202)
+        val_sampler = make_balanced_sampler(val_dataset, val_dataset.classes, args.batch_size, args.seed + 303)
+        supcon_val_sampler = make_balanced_sampler(supcon_val_dataset, val_dataset.classes, args.batch_size, args.seed + 404)
+        test_sampler = make_balanced_sampler(test_dataset, test_dataset.classes, args.batch_size, args.seed + 505)
     elif args.sampling_strategy == "weighted":
         train_sampler = make_weighted_sampler(train_dataset, train_dataset.classes, train_dataset.target_for_index, args.seed + 101)
         supcon_sampler = make_weighted_sampler(supcon_train_dataset, train_dataset.classes, supcon_train_dataset.target_for_index, args.seed + 202)
+        val_sampler = make_weighted_sampler(val_dataset, val_dataset.classes, val_dataset.target_for_index, args.seed + 303)
+        supcon_val_sampler = make_weighted_sampler(supcon_val_dataset, val_dataset.classes, supcon_val_dataset.target_for_index, args.seed + 404)
+        test_sampler = make_weighted_sampler(test_dataset, test_dataset.classes, test_dataset.target_for_index, args.seed + 505)
     else:
         train_sampler = make_epoch_sampler(train_dataset, args.seed + 101, shuffle=True)
         supcon_sampler = make_epoch_sampler(supcon_train_dataset, args.seed + 202, shuffle=True)
+        val_sampler = make_epoch_sampler(val_dataset, args.seed + 303, shuffle=False)
+        supcon_val_sampler = make_epoch_sampler(supcon_val_dataset, args.seed + 404, shuffle=False)
+        test_sampler = make_epoch_sampler(test_dataset, args.seed + 505, shuffle=False)
 
     train_loader = make_loader(train_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False, sampler=train_sampler)
-    val_loader = make_loader(val_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False)
-    test_loader = make_loader(test_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False)
+    val_loader = make_loader(val_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False, sampler=val_sampler)
+    test_loader = make_loader(test_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False, sampler=test_sampler)
     supcon_train_loader = make_loader(
         supcon_train_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False, sampler=supcon_sampler
     )
-    supcon_val_loader = make_loader(supcon_val_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False)
+    supcon_val_loader = make_loader(supcon_val_dataset, args.batch_size, args.num_workers, args.prefetch_factor, shuffle=False, sampler=supcon_val_sampler)
     log_json_event(
         log_path,
         {
@@ -3473,8 +3501,8 @@ def run_experiment(args: argparse.Namespace) -> int:
             "augmentation_bank_val_count": len(val_dataset),
             "augmentation_bank_test_count": len(test_dataset),
             "train_samples_per_epoch": len(train_sampler),
-            "val_samples_per_eval": len(val_dataset),
-            "test_samples_per_eval": len(test_dataset),
+            "val_samples_per_eval": len(val_sampler),
+            "test_samples_per_eval": len(test_sampler),
             "train_steps_per_epoch": len(train_loader),
             "supcon_steps_per_epoch": len(supcon_train_loader),
             "val_steps_per_eval": len(val_loader),
@@ -3528,6 +3556,7 @@ def run_experiment(args: argparse.Namespace) -> int:
         else cpu_state_dict(model)
     )
     resume_state = dict(resume_checkpoint.get("resume", {})) if resume_checkpoint is not None else {}
+    resume_eval_needed = resume_checkpoint is not None
     resume_from_best_phase = resume_checkpoint is not None and args.resume_mode != "latest"
     if resume_from_best_phase:
         resume_state = {
@@ -3600,6 +3629,45 @@ def run_experiment(args: argparse.Namespace) -> int:
         supcon_completed = True
 
     if not supcon_completed:
+        if resume_eval_needed and resume_state.get("stage") == "supcon":
+            log_json_event(
+                log_path,
+                {
+                    "event": "resume_initial_val_pass",
+                    "stage": "supcon",
+                    "reason": "user_verification",
+                },
+            )
+            # Use supcon_val_loader with the newly consistent sampler
+            init_val_loss = evaluate_supcon(
+                model=model,
+                loader=supcon_val_loader,
+                criterion=supcon_loss,
+                device=device,
+                max_batches=args.max_eval_batches,
+                log_path=log_path,
+                log_every_eval_steps=args.log_eval_every_steps,
+                stage="supcon",
+                split="val",
+                eval_context={
+                    "epoch": int(resume_state.get("epoch", 1)),
+                    "validation_index": int(resume_state.get("validation_index", 0)),
+                    "epoch_step": int(resume_state.get("epoch_step_completed", 0)),
+                    "global_train_step": train_progress["global_train_step"],
+                    "is_initial_resume_eval": True,
+                },
+                args=args,
+            )
+            log_json_event(
+                log_path,
+                {
+                    "event": "resume_initial_val_finished",
+                    "stage": "supcon",
+                    "val_loss": init_val_loss,
+                },
+            )
+            resume_eval_needed = False # Handled
+
         supcon_steps_full_epoch = steps_per_epoch_for_sampler(supcon_sampler, supcon_train_dataset, args.batch_size, args.max_train_batches)
         supcon_scaler = build_grad_scaler(device, args)
         if resume_state.get("stage") == "supcon" and "scaler_state_dict" in resume_state:
