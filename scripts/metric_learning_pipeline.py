@@ -88,7 +88,9 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
         self.seed = seed
         self.gaussian_sigmas = gaussian_sigmas
         self.apply_augmentation = apply_augmentation
-        self.stochastic_augmentation = apply_augmentation and split_name in {"train", "test"}
+        # Only the training split is allowed to use stochastic augmentations.
+        # Validation and test stay strictly clean.
+        self.stochastic_augmentation = apply_augmentation and split_name == "train"
         self.dataset_root = dataset_root
         self.enable_runtime_bad_sample_cleanup = enable_runtime_bad_sample_cleanup
         self.disabled_paths: set[str] = set()
@@ -158,7 +160,14 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
         self.current_epoch = max(0, int(epoch))
 
     def variant_for_source(self, source_index: int) -> int:
-        return (source_index * 17) % self.augment_repeats
+        if self.augment_repeats <= 1:
+            return 0
+        variant_rng = random.Random(
+            self.seed * 1_000_003
+            + source_index * 9_973
+            + self.current_epoch * 104_729
+        )
+        return variant_rng.randrange(self.augment_repeats)
 
     def _seed_for_variant(self, source_index: int, variant_index: int, view_offset: int = 0) -> int:
         return (
@@ -977,17 +986,38 @@ class BalancedClassEpochSampler(Sampler[int]):
         self,
         classes: list[str],
         class_source_indices: dict[int, list[int]],
+        source_count: int,
+        augment_repeats: int,
         batch_size: int,
         seed: int,
     ) -> None:
         self.classes = list(classes)
         self.class_source_indices = {int(key): list(value) for key, value in class_source_indices.items()}
+        self.source_count = int(source_count)
+        self.augment_repeats = max(1, int(augment_repeats))
         self.batch_size = int(batch_size)
         self.seed = int(seed)
         self.epoch = 0
         self.start_index = 0
-        self.max_class_count = max((len(indices) for indices in self.class_source_indices.values()), default=0)
-        self.num_samples = self.max_class_count * len(self.classes)
+        if not self.classes:
+            raise ValueError("Balanced sampling requires at least one class.")
+        if self.batch_size % len(self.classes) != 0:
+            raise ValueError(
+                "Balanced sampling requires --batch-size to be divisible by the number of classes "
+                "so each batch can contain the same number of samples per class."
+            )
+        self.samples_per_class = self.batch_size // len(self.classes)
+        class_counts = [len(self.class_source_indices.get(class_index, [])) for class_index in range(len(self.classes))]
+        missing_classes = [self.classes[class_index] for class_index, count in enumerate(class_counts) if count <= 0]
+        if missing_classes:
+            raise ValueError(f"Balanced sampling requires at least one sample in every class; missing: {missing_classes}")
+        self.num_batches = min(count // self.samples_per_class for count in class_counts)
+        if self.num_batches <= 0:
+            raise ValueError(
+                "Balanced sampling cannot form a full batch with the available class counts. "
+                f"Need at least {self.samples_per_class} samples per class, got {class_counts}."
+            )
+        self.num_samples = self.num_batches * self.batch_size
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = max(0, int(epoch))
@@ -1007,22 +1037,20 @@ class BalancedClassEpochSampler(Sampler[int]):
             source_indices = list(self.class_source_indices.get(class_index, []))
             if not source_indices:
                 continue
-            stream: list[int] = []
-            pool: list[int] = []
-            while len(stream) < self.max_class_count:
-                if not pool:
-                    pool = list(source_indices)
-                    rng.shuffle(pool)
-                stream.append(pool.pop())
-            per_class_streams[class_index] = stream
+            rng.shuffle(source_indices)
+            per_class_streams[class_index] = source_indices[: self.num_batches * self.samples_per_class]
 
         flat_indices: list[int] = []
-        for row_index in range(self.max_class_count):
+        for batch_index in range(self.num_batches):
             for class_index in class_order:
                 stream = per_class_streams.get(class_index)
                 if stream is None:
                     continue
-                flat_indices.append(stream[row_index])
+                start = batch_index * self.samples_per_class
+                end = start + self.samples_per_class
+                for offset, source_index in enumerate(stream[start:end]):
+                    variant_index = rng.randrange(self.augment_repeats)
+                    flat_indices.append(source_index + (variant_index * self.source_count))
         return iter(flat_indices[self.start_index :])
 
     def __len__(self) -> int:
@@ -1033,13 +1061,16 @@ def make_weighted_sampler(dataset: Dataset, classes: list[str], target_fn, seed:
     counts = {name: 0 for name in classes}
     for index in range(len(dataset)):
         counts[classes[target_fn(index)]] += 1
+    missing_classes = [name for name, count in counts.items() if count <= 0]
+    if missing_classes:
+        raise ValueError(f"Weighted sampling requires at least one sample in every class; missing: {missing_classes}")
     weights = [1.0 / counts[classes[target_fn(index)]] for index in range(len(dataset))]
     return DeterministicEpochSampler(
         len(weights),
         seed,
         shuffle=False,
         weights=torch.as_tensor(weights, dtype=torch.double),
-        replacement=True,
+        replacement=False,
     )
 
 
@@ -1054,7 +1085,15 @@ def make_balanced_sampler(dataset: Dataset, classes: list[str], batch_size: int,
     source_count = int(dataset.source_count())
     for source_index in range(source_count):
         class_source_indices[int(dataset.source_target_for_index(source_index))].append(source_index)
-    return BalancedClassEpochSampler(classes, class_source_indices, batch_size=batch_size, seed=seed)
+    augment_repeats = int(getattr(dataset, "augment_repeats", 1))
+    return BalancedClassEpochSampler(
+        classes,
+        class_source_indices,
+        source_count=source_count,
+        augment_repeats=augment_repeats,
+        batch_size=batch_size,
+        seed=seed,
+    )
 
 
 def make_loader(
@@ -2026,7 +2065,7 @@ def classifier_loss_from_logits(
             true_mask = labels == true_index
             if true_mask.any():
                 targeted_penalty = targeted_penalty + probabilities[true_mask, predicted_index].mean() * weight
-    total_loss = base_loss + targeted_penalty
+    total_loss = base_loss + (args.confidence_gap_penalty_weight * confidence_penalty) + targeted_penalty
     return total_loss, base_loss, confidence_penalty, targeted_penalty
 
 
@@ -2850,16 +2889,40 @@ from datetime import datetime
 
 
 def append_to_csv(csv_path: Path, data: dict[str, Any]) -> None:
-    file_exists = csv_path.exists()
     flat_data: dict[str, Any] = {}
     for k, v in data.items():
         flat_data[k] = json.dumps(v) if isinstance(v, (list, dict)) else v
-    keys = list(flat_data.keys())
-    with open(csv_path, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=keys, extrasaction="ignore", restval="")
-        if not file_exists:
+    if not csv_path.exists():
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=list(flat_data.keys()), extrasaction="ignore", restval="")
             writer.writeheader()
-        writer.writerow(flat_data)
+            writer.writerow(flat_data)
+        return
+
+    with open(csv_path, "r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        existing_rows = list(reader)
+        existing_fields = list(reader.fieldnames or [])
+
+    merged_fields = list(existing_fields)
+    for key in flat_data.keys():
+        if key not in merged_fields:
+            merged_fields.append(key)
+
+    if merged_fields == existing_fields:
+        with open(csv_path, "a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=merged_fields, extrasaction="ignore", restval="")
+            writer.writerow(flat_data)
+        return
+
+    existing_rows.append(flat_data)
+    tmp_path = csv_path.with_suffix(csv_path.suffix + ".tmp")
+    with open(tmp_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=merged_fields, extrasaction="ignore", restval="")
+        writer.writeheader()
+        for row in existing_rows:
+            writer.writerow(row)
+    tmp_path.replace(csv_path)
 
 
 def log_json_event(path: Path, payload: dict[str, Any]) -> None:
@@ -3274,13 +3337,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--classifier-early-stopping-metric", choices=("val_loss", "val_raw_acc"), default="val_loss")
     parser.add_argument(
         "--reject-current-phase-on-global-miss",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=True,
         help=(
-            "Opt-in current-phase rejection only. When enabled, a completed progressive phase that "
-            "fails to beat the global best checkpoint on the selected classifier early-stopping metric "
-            "is not used to initialize the next phase. Future phases still continue normally. Enabled "
-            "by default."
+            "When enabled, a completed progressive phase that fails to beat the global best checkpoint "
+            "on the selected classifier early-stopping metric is not used to initialize the next phase. "
+            "Use --no-reject-current-phase-on-global-miss to disable the rejection gate."
         ),
     )
     parser.add_argument("--supcon-temperature", type=float, default=0.07)
@@ -3654,15 +3716,15 @@ def run_experiment(args: argparse.Namespace) -> int:
     if args.sampling_strategy == "balanced":
         train_sampler = make_balanced_sampler(train_dataset, train_dataset.classes, args.batch_size, args.seed + 101)
         supcon_sampler = make_balanced_sampler(supcon_train_dataset, train_dataset.classes, args.batch_size, args.seed + 202)
-        val_sampler = make_balanced_sampler(val_dataset, val_dataset.classes, args.batch_size, args.seed + 303)
-        supcon_val_sampler = make_balanced_sampler(supcon_val_dataset, val_dataset.classes, args.batch_size, args.seed + 404)
-        test_sampler = make_balanced_sampler(test_dataset, test_dataset.classes, args.batch_size, args.seed + 505)
+        val_sampler = make_epoch_sampler(val_dataset, args.seed + 303, shuffle=False)
+        supcon_val_sampler = make_epoch_sampler(supcon_val_dataset, args.seed + 404, shuffle=False)
+        test_sampler = make_epoch_sampler(test_dataset, args.seed + 505, shuffle=False)
     elif args.sampling_strategy == "weighted":
         train_sampler = make_weighted_sampler(train_dataset, train_dataset.classes, train_dataset.target_for_index, args.seed + 101)
         supcon_sampler = make_weighted_sampler(supcon_train_dataset, train_dataset.classes, supcon_train_dataset.target_for_index, args.seed + 202)
-        val_sampler = make_weighted_sampler(val_dataset, val_dataset.classes, val_dataset.target_for_index, args.seed + 303)
-        supcon_val_sampler = make_weighted_sampler(supcon_val_dataset, val_dataset.classes, supcon_val_dataset.target_for_index, args.seed + 404)
-        test_sampler = make_weighted_sampler(test_dataset, test_dataset.classes, test_dataset.target_for_index, args.seed + 505)
+        val_sampler = make_epoch_sampler(val_dataset, args.seed + 303, shuffle=False)
+        supcon_val_sampler = make_epoch_sampler(supcon_val_dataset, args.seed + 404, shuffle=False)
+        test_sampler = make_epoch_sampler(test_dataset, args.seed + 505, shuffle=False)
     else:
         train_sampler = make_epoch_sampler(train_dataset, args.seed + 101, shuffle=True)
         supcon_sampler = make_epoch_sampler(supcon_train_dataset, args.seed + 202, shuffle=True)

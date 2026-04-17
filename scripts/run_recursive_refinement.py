@@ -43,6 +43,14 @@ def latest_checkpoint(iteration_dir: Path) -> Path:
     return iteration_dir / "last.pt"
 
 
+def evaluation_checkpoint(iteration_dir: Path) -> Path:
+    candidate = best_eval_checkpoint(iteration_dir)
+    if candidate.exists():
+        return candidate
+    candidate = latest_checkpoint(iteration_dir)
+    return candidate
+
+
 def iteration_finished(iteration_dir: Path) -> bool:
     return best_eval_checkpoint(iteration_dir).exists() and latest_checkpoint(iteration_dir).exists()
 
@@ -257,7 +265,7 @@ def finalize_iteration(
     metric: str,
     threshold: float,
 ) -> dict[str, Any]:
-    candidate_checkpoint = latest_checkpoint(iteration_dir)
+    candidate_checkpoint = evaluation_checkpoint(iteration_dir)
     baseline_checkpoint = Path(config["baseline_checkpoint"])
     selected_output = iteration_dir / "accepted_best.pt"
     decision_file = decision_path(iteration_dir)
@@ -288,12 +296,15 @@ def finalize_iteration(
 
 
 def evaluate_iteration(iteration_dir: Path, dataset_root: str, batch_size: int) -> None:
+    checkpoint = evaluation_checkpoint(iteration_dir)
+    if not checkpoint.exists():
+        raise FileNotFoundError(f"No evaluation checkpoint found in {iteration_dir}")
     subprocess.run(
         [
             sys.executable,
             "scripts/evaluate_saved_classifier.py",
             "--checkpoint",
-            str(best_eval_checkpoint(iteration_dir)),
+            str(checkpoint),
             "--output-dir",
             str(iteration_dir / "evaluation_suite"),
             "--dataset-root",

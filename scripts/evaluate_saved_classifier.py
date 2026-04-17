@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +84,15 @@ def main() -> int:
     args = parse_args()
     checkpoint_path = Path(args.checkpoint)
     output_dir = Path(args.output_dir)
+    if output_dir.exists() and any(output_dir.iterdir()):
+        expected_roots = {"evaluation_manifest.json", "evaluation_summary.json", "evaluation.log.jsonl"}
+        existing_names = {entry.name for entry in output_dir.iterdir()}
+        if not existing_names.issubset(expected_roots | {"train", "val", "test"}):
+            raise ValueError(
+                f"Refusing to clear non-empty evaluation directory {output_dir} because it contains unrelated files: "
+                f"{sorted(existing_names)}"
+            )
+        shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     checkpoint = torch.load(checkpoint_path, map_location="cpu")

@@ -50,6 +50,7 @@ The **WSS-308K** corpus is a curated meta-dataset synthesized from over 40 disti
 
 ### 4.1. Core Academic Baselines
 - **TrashNet (Stanford University):** The original waste classification baseline; provided fundamental visual patterns for glass, paper, and metal.
+- **TrashBox (ResearchGate/GitHub):** Integrated multi-class trash corpus with detailed plastic subclasses; now mapped into `paper`, `ewaste`, `glass`, `metal`, `hard_plastic`, and `soft_plastic`.
 - **TACO (Trash Annotations in Context):** Source for high-fidelity images of litter in diverse, complex out-of-door environments.
 - **Recycleye Waste-v1:** Public research segment of the Recycleye industrial sorting challenge (Glass, Paper, Metal, Plastic).
 - **Garbage Classification (Kaggle/Yang):** 6-class fundamental material distribution.

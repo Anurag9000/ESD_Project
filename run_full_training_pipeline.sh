@@ -26,6 +26,7 @@ fi
 mkdir -p "$RUN_ROOT" "$LOG_ROOT"
 
 FILTERED_ARGS=()
+IGNORED_ARGS=()
 SKIP_NEXT=0
 for ARG in "$@"; do
   if [[ "$SKIP_NEXT" -eq 1 ]]; then
@@ -34,15 +35,22 @@ for ARG in "$@"; do
   fi
   case "$ARG" in
     --dataset-root|--batch-size|--output-dir|--log-file|--resume-checkpoint|--resume-mode|--resume-phase-index|--classifier-train-mode|--classifier-early-stopping-metric|--head-lr|--backbone-lr|--head-epochs|--stage-epochs|--stage-early-stopping-patience|--optimizer)
+      IGNORED_ARGS+=("$ARG")
       SKIP_NEXT=1
       ;;
     --dataset-root=*|--batch-size=*|--output-dir=*|--log-file=*|--resume-checkpoint=*|--resume-mode=*|--resume-phase-index=*|--classifier-train-mode=*|--classifier-early-stopping-metric=*|--head-lr=*|--backbone-lr=*|--head-epochs=*|--stage-epochs=*|--stage-early-stopping-patience=*|--optimizer=*)
+      IGNORED_ARGS+=("${ARG%%=*}")
       ;;
     *)
       FILTERED_ARGS+=("$ARG")
       ;;
   esac
 done
+
+if [[ ${#IGNORED_ARGS[@]} -gt 0 ]]; then
+  echo "⚠️ Ignoring wrapper-managed CLI options: ${IGNORED_ARGS[*]}" >&2
+  echo "   Use RUN_ROOT, LOG_ROOT, DATASET_ROOT, or INITIAL_CHECKPOINT to control wrapper-managed paths." >&2
+fi
 
 LOSS_OUTPUT_DIR="$RUN_ROOT/loss_cleanup"
 LOSS_LOG_FILE="$LOG_ROOT/loss_cleanup.log.jsonl"

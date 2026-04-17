@@ -29,6 +29,7 @@ PROGRESSIVE_LOG_FILE="$LOG_ROOT/progressive.log.jsonl"
 DATASET_ROOT="${DATASET_ROOT:-Dataset_Final}"
 
 FILTERED_ARGS=()
+IGNORED_ARGS=()
 SKIP_NEXT=0
 for ARG in "$@"; do
   if [[ "$SKIP_NEXT" -eq 1 ]]; then
@@ -37,15 +38,22 @@ for ARG in "$@"; do
   fi
   case "$ARG" in
     --dataset-root|--batch-size|--output-dir|--log-file)
+      IGNORED_ARGS+=("$ARG")
       SKIP_NEXT=1
       ;;
     --dataset-root=*|--batch-size=*|--output-dir=*|--log-file=*)
+      IGNORED_ARGS+=("${ARG%%=*}")
       ;;
     *)
       FILTERED_ARGS+=("$ARG")
       ;;
   esac
 done
+
+if [[ ${#IGNORED_ARGS[@]} -gt 0 ]]; then
+  echo "⚠️ Ignoring wrapper-managed CLI options: ${IGNORED_ARGS[*]}" >&2
+  echo "   Use RUN_ROOT, LOG_ROOT, or DATASET_ROOT to control the wrapper-managed paths." >&2
+fi
 
 mkdir -p "$RUN_ROOT" "$LOG_ROOT"
 

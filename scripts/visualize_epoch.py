@@ -105,10 +105,11 @@ def generate_tsne_suite(
 ) -> None:
     print("  [t-SNE] Extracting embeddings …")
     model.eval()
+    model_dtype = next(model.parameters()).dtype
     all_emb, all_lbl = [], []
     with torch.no_grad():
         for images, labels in tqdm(loader, desc="  t-SNE embeddings", leave=False):
-            emb = model.encode(images.to(device))  # (B, 128)
+            emb = model.encode(images.to(device=device, dtype=model_dtype))  # (B, 128)
             all_emb.append(emb.cpu().float().numpy())
             all_lbl.extend(labels.tolist())
             if max_samples > 0 and sum(chunk.shape[0] for chunk in all_emb) >= max_samples:
@@ -223,6 +224,7 @@ def generate_layer_activations(
     """
     print(f"  [ActMaps] Hooking all {len(_EFFICIENTNET_B0_STAGES)} backbone stages …")
     model.eval()
+    model_dtype = next(model.parameters()).dtype
 
     hooks = {
         name: _LayerHook(model.backbone.features[idx])
@@ -234,7 +236,7 @@ def generate_layer_activations(
 
     with torch.no_grad():
         for images, _ in tqdm(loader, desc="  LayerActivations", leave=False):
-            model.encode(images.to(device))   # forward — all hooks fire
+            model.encode(images.to(device=device, dtype=model_dtype))   # forward — all hooks fire
 
             for name, hook in hooks.items():
                 if hook.out is None:
@@ -328,10 +330,11 @@ def generate_per_class_sample_activations(
     stage_names = list(_EFFICIENTNET_B0_STAGES.keys())
     
     print(f"  [SampleActs] Generating {len(selected_samples)} individual maps …")
+    model_dtype = next(model.parameters()).dtype
     for idx, (img_tensor, target_id) in enumerate(tqdm(selected_samples, desc="  Sample activations", leave=False)):
         model.eval()
         with torch.no_grad():
-            img_batch = img_tensor.unsqueeze(0).to(device)
+            img_batch = img_tensor.unsqueeze(0).to(device=device, dtype=model_dtype)
             emb = model.encode(img_batch)
             logits = model.classify(emb)
             probs = F.softmax(logits, dim=1)
@@ -408,12 +411,13 @@ def generate_test_atlas(
     """
     print("  [Atlas] Collecting the full test set …")
     model.eval()
+    model_dtype = next(model.parameters()).dtype
 
     entries: list[tuple[int, int, float, np.ndarray]] = []
 
     with torch.no_grad():
         for images, targets in tqdm(loader, desc="  Atlas collect", leave=False):
-            images_gpu = images.to(device)
+            images_gpu = images.to(device=device, dtype=model_dtype)
             emb = model.encode(images_gpu)
             logits = model.classify(emb)
             probs = F.softmax(logits, dim=1)
@@ -510,6 +514,7 @@ def run(
     ckpt_args.dataset_root = str(dataset_root)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    dtype = model_dtype_for_args(ckpt_args)
 
     # Load ONLY the test split (clean, no augmentation)
     _, _, test_dataset, _, _ = build_datasets(ckpt_args)
@@ -523,7 +528,7 @@ def run(
         embedding_dim=ckpt_args.embedding_dim,
         projection_dim=ckpt_args.projection_dim,
         args=ckpt_args,
-    ).to(device=device, dtype=model_dtype_for_args(ckpt_args))
+    ).to(device=device, dtype=dtype)
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
 

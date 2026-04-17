@@ -70,6 +70,10 @@ def main():
         print(f"ERROR: dataset dir not found: {dataset_root}")
         return
 
+    if out_root.exists():
+        shutil.rmtree(out_root)
+    out_root.mkdir(parents=True, exist_ok=True)
+
     IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
     all_classes = sorted([
         d.name for d in dataset_root.iterdir()
@@ -95,6 +99,8 @@ def main():
 
         # One flat output folder per class — NO subfolders
         out_dir = out_root / class_name
+        if out_dir.exists():
+            shutil.rmtree(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
 
         print(f"\n{'='*55}")
@@ -102,7 +108,7 @@ def main():
               f"{sum(len(v) for v in groups.values())} images)")
         print(f"{'='*55}")
 
-        srng = random.SystemRandom()
+        srng = random.Random(args.seed)
         for source, files in sorted(groups.items()):
             files.sort()  # Ensure lexicographical order for stable sampling pool
             sample = srng.sample(files, min(args.n, len(files)))

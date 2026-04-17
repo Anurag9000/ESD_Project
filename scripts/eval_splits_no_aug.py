@@ -4,8 +4,7 @@ eval_splits_no_aug.py — Evaluate the model on train / val / test splits
 with NO augmentation (centre-crop + normalize only).
 
 Uses the EXACT same deterministic split assignment as the training pipeline:
-    seed=42, per-class stratified 70/20/10 shuffle via random.Random,
-    with the plastic → [soft_plastic, hard_plastic, plastic] class mapping.
+    seed=42, per-class source-stratified 70/20/10 shuffle via random.Random.
 
 Outputs per split (written to --output-dir):
     confmat_counts_{split}.csv          raw confusion matrix
@@ -23,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import random
 import warnings
 from datetime import datetime
@@ -96,15 +96,11 @@ def _collate(batch):
 # Split logic — mirrors build_auto_split_datasets() in metric_learning_pipeline
 # ─────────────────────────────────────────────────────────────────────────────
 
-_CLASS_MAPPING: dict[str, list[str]] = {
-    "plastic": ["soft_plastic", "hard_plastic", "plastic"]
-}
-
-
 def build_splits(
     dataset_root: Path,
     seed: int = 42,
     ratios: tuple[float, float, float] = (0.7, 0.2, 0.1),
+    class_mapping: dict[str, list[str]] | None = None,
 ) -> tuple[
     list[tuple[str, int]],
     list[tuple[str, int]],
@@ -112,55 +108,66 @@ def build_splits(
     list[str],
 ]:
     """
-    Mirrors build_auto_split_datasets() exactly — scans disk, applies class
-    mapping, shuffles per-class with the same RNG seed, then splits 70/20/10.
-
-    Returns (train_samples, val_samples, test_samples, class_names).
+    Mirrors build_auto_split_datasets() exactly without writing the manifest.
     """
-    base = datasets.ImageFolder(str(dataset_root))
+    base_dataset = datasets.ImageFolder(str(dataset_root))
 
-    # Build reverse map: source_class → target_class
-    reverse_map: dict[str, str] = {}
-    for target, sources in _CLASS_MAPPING.items():
-        for s in sources:
-            reverse_map[s] = target
+    effective_mapping = class_mapping if class_mapping else {}
 
-    # Derive new class list after merging
-    new_classes_set = set(base.classes)
-    for target, sources in _CLASS_MAPPING.items():
-        for s in sources:
-            new_classes_set.discard(s)
-        new_classes_set.add(target)
-    new_classes = sorted(new_classes_set)
+    new_classes = set(base_dataset.classes)
+    for target, sources in effective_mapping.items():
+        for source_name in sources:
+            if source_name in new_classes:
+                new_classes.remove(source_name)
+        new_classes.add(target)
+
+    new_classes = sorted(list(new_classes))
     new_class_to_idx = {cls: i for i, cls in enumerate(new_classes)}
 
-    # Re-map all samples
-    remapped: list[tuple[str, int]] = []
-    for path, old_target in base.samples:
-        old_class = base.classes[old_target]
+    reverse_map: dict[str, str] = {}
+    for target, sources in effective_mapping.items():
+        for source_name in sources:
+            reverse_map[source_name] = target
+
+    for i in range(len(base_dataset.samples)):
+        path, old_target = base_dataset.samples[i]
+        old_class = base_dataset.classes[old_target]
         new_class = reverse_map.get(old_class, old_class)
-        remapped.append((path, new_class_to_idx[new_class]))
+        base_dataset.samples[i] = (path, new_class_to_idx[new_class])
 
-    # Group by class index
-    by_class: dict[int, list[tuple[str, int]]] = {i: [] for i in range(len(new_classes))}
-    for path, target in remapped:
-        by_class[target].append((path, target))
+    base_dataset.classes = new_classes
+    base_dataset.class_to_idx = new_class_to_idx
+    base_dataset.targets = [sample[1] for sample in base_dataset.samples]
 
-    # Shuffle + split (identical RNG state to training)
+    def source_prefix(path: str) -> str:
+        stem = Path(path).stem
+        parts = re.split(r"[^a-zA-Z0-9]", stem)
+        for part in parts:
+            word = re.sub(r"\d+", "", part)
+            if word:
+                return word.lower()
+        return stem[:8].lower()
+
+    by_class: dict[int, dict[str, list[tuple[str, int]]]] = {index: {} for index in range(len(base_dataset.classes))}
+    for path, target in base_dataset.samples:
+        src = source_prefix(path)
+        by_class[int(target)].setdefault(src, []).append((path, int(target)))
+
     rng = random.Random(seed)
-    train_s: list[tuple[str, int]] = []
-    val_s:   list[tuple[str, int]] = []
-    test_s:  list[tuple[str, int]] = []
+    train_samples: list[tuple[str, int]] = []
+    val_samples: list[tuple[str, int]] = []
+    test_samples: list[tuple[str, int]] = []
 
-    for class_idx in range(len(new_classes)):
-        shuffled = list(by_class[class_idx])
-        rng.shuffle(shuffled)
-        n_train, n_val, n_test = allocate_split_counts(len(shuffled), ratios)
-        train_s.extend(shuffled[:n_train])
-        val_s.extend(shuffled[n_train : n_train + n_val])
-        test_s.extend(shuffled[n_train + n_val : n_train + n_val + n_test])
+    for class_index, sources in by_class.items():
+        for _, src_samples in sorted(sources.items()):
+            shuffled = list(src_samples)
+            rng.shuffle(shuffled)
+            tr_n, va_n, te_n = allocate_split_counts(len(shuffled), ratios)
+            train_samples.extend(shuffled[:tr_n])
+            val_samples.extend(shuffled[tr_n : tr_n + va_n])
+            test_samples.extend(shuffled[tr_n + va_n : tr_n + va_n + te_n])
 
-    return train_s, val_s, test_s, new_classes
+    return train_samples, val_samples, test_samples, list(base_dataset.classes)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -335,12 +342,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--batch-size",   type=int, default=224)
     p.add_argument("--splits",       nargs="+", default=["train", "val", "test"])
     p.add_argument("--seed",         type=int, default=42)
+    p.add_argument("--class-mapping", default="", help="Optional JSON class mapping to mirror checkpoint training.")
     return p.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     output_dir  = Path(args.output_dir)
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     dataset_root = Path(args.dataset_root)
 
@@ -384,10 +394,22 @@ def main() -> int:
 
     # ── Build splits (mirrors pipeline logic exactly) ─────────────────────────
     print(f"  Building splits from disk (seed={args.seed}) …")
+    import json as json_lib
+    checkpoint_class_mapping = json_lib.loads(ckpt_args.get("class_mapping", "")) if ckpt_args.get("class_mapping") else None
+    cli_class_mapping = json_lib.loads(args.class_mapping) if args.class_mapping else None
+    class_mapping = cli_class_mapping if cli_class_mapping is not None else checkpoint_class_mapping
     train_s, val_s, test_s, disk_classes = build_splits(
-        dataset_root, seed=args.seed
+        dataset_root,
+        seed=args.seed,
+        class_mapping=class_mapping,
     )
     print(f"    train={len(train_s):,}  val={len(val_s):,}  test={len(test_s):,}")
+    if disk_classes != class_names:
+        raise ValueError(
+            "Checkpoint class names do not match the dataset split classes.\n"
+            f"checkpoint={class_names}\n"
+            f"dataset={disk_classes}"
+        )
 
     split_map = {"train": train_s, "val": val_s, "test": test_s}
 

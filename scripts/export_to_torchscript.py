@@ -31,8 +31,8 @@ class InferenceESDModel(torch.nn.Module):
 def main():
     ckpt_path = Path("Results/efficientnet_b0_master_run/loss_cleanup/best.pt")
     if not ckpt_path.exists():
-        print(f"Error: Could not find {ckpt_path}")
-        return
+        print(f"Error: Could not find {ckpt_path}", file=sys.stderr)
+        return 1
         
     print(f"Loading {ckpt_path} ...")
     ckpt = torch.load(ckpt_path, map_location="cpu")
@@ -74,6 +74,7 @@ def main():
     print("\n✅ SUCCESS!")
     print(f"Saved standalone TorchScript model to: {out_path}")
     print("This file can be loaded directly using `torch.jit.load()` without needing any class definitions.")
+    return 0
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
