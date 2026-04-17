@@ -65,7 +65,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--initial-head-lr", type=float, required=True)
     parser.add_argument("--initial-backbone-lr", type=float, required=True)
     parser.add_argument("--batch-size", type=int, default=224)
-    parser.add_argument("--stage-epochs", type=int, default=30)
     parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--eval-every-epochs", type=float, default=0.01)
     parser.add_argument("--dataset-root", default="Dataset_Final")
@@ -73,7 +72,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sampling-strategy", choices=("balanced", "weighted", "shuffle"), default="balanced")
     parser.add_argument("--weighted-sampling", action="store_true", help="Legacy alias for --sampling-strategy weighted.")
     parser.add_argument("--skip-supcon", action="store_true")
-    parser.add_argument("--head-epochs", type=int, default=0)
     parser.add_argument("--resume-phase-index", type=int, default=1)
     parser.add_argument("--min-delta", type=float, default=1e-4)
     parser.add_argument("extra_args", nargs=argparse.REMAINDER)
@@ -222,10 +220,6 @@ def run_training(
         args.optimizer,
         "--batch-size",
         str(args.batch_size),
-        "--head-epochs",
-        str(args.head_epochs),
-        "--stage-epochs",
-        str(args.stage_epochs),
         "--stage-early-stopping-patience",
         str(args.patience),
         "--eval-every-epochs",

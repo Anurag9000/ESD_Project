@@ -34,11 +34,11 @@ for ARG in "$@"; do
     continue
   fi
   case "$ARG" in
-    --dataset-root|--batch-size|--output-dir|--log-file|--resume-checkpoint|--resume-mode|--resume-phase-index|--classifier-train-mode|--classifier-early-stopping-metric|--head-lr|--backbone-lr|--head-epochs|--stage-epochs|--stage-early-stopping-patience|--optimizer)
+    --dataset-root|--batch-size|--output-dir|--log-file|--resume-checkpoint|--resume-mode|--resume-phase-index|--classifier-train-mode|--classifier-early-stopping-metric|--head-lr|--backbone-lr|--stage-early-stopping-patience|--optimizer)
       IGNORED_ARGS+=("$ARG")
       SKIP_NEXT=1
       ;;
-    --dataset-root=*|--batch-size=*|--output-dir=*|--log-file=*|--resume-checkpoint=*|--resume-mode=*|--resume-phase-index=*|--classifier-train-mode=*|--classifier-early-stopping-metric=*|--head-lr=*|--backbone-lr=*|--head-epochs=*|--stage-epochs=*|--stage-early-stopping-patience=*|--optimizer=*)
+    --dataset-root=*|--batch-size=*|--output-dir=*|--log-file=*|--resume-checkpoint=*|--resume-mode=*|--resume-phase-index=*|--classifier-train-mode=*|--classifier-early-stopping-metric=*|--head-lr=*|--backbone-lr=*|--stage-early-stopping-patience=*|--optimizer=*)
       IGNORED_ARGS+=("${ARG%%=*}")
       ;;
     *)
@@ -70,9 +70,7 @@ python scripts/run_recursive_refinement.py \
   --optimizer adamw \
   --batch-size 224 \
   --eval-every-epochs 0.01 \
-  --stage-epochs 30 \
   --patience 5 \
-  --head-epochs 0 \
   --resume-phase-index 1 \
   "${FILTERED_ARGS[@]}"
 
@@ -116,9 +114,7 @@ python scripts/run_recursive_refinement.py \
   --optimizer adamw \
   --batch-size 224 \
   --eval-every-epochs 0.01 \
-  --stage-epochs 30 \
   --patience 5 \
-  --head-epochs 0 \
   --resume-phase-index 1 \
   "${FILTERED_ARGS[@]}"
 

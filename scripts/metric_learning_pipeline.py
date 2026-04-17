@@ -64,7 +64,6 @@ logging.basicConfig(level=logging.WARNING)
 class PhaseSpec:
     name: str
     unfrozen_backbone_modules: int
-    max_epochs: int
 
 
 @dataclass(frozen=True)
@@ -1437,8 +1436,7 @@ def build_supcon_phase_plan(total_modules: int, args: argparse.Namespace) -> lis
     - permanently frozen low-level core modules
     """
     phases: list[PhaseSpec] = []
-    if getattr(args, "supcon_head_epochs", 0) > 0:
-        phases.append(PhaseSpec(name="supcon_head_only", unfrozen_backbone_modules=0, max_epochs=args.supcon_head_epochs))
+    phases.append(PhaseSpec(name="supcon_head_only", unfrozen_backbone_modules=0))
 
     effective_max = min(
         total_modules,
@@ -1447,12 +1445,10 @@ def build_supcon_phase_plan(total_modules: int, args: argparse.Namespace) -> lis
     )
     count = 0
     phase_index = 0
-    while count < effective_max and getattr(args, "supcon_stage_epochs", 0) > 0:
+    while count < effective_max:
         count = min(effective_max, count + args.unfreeze_chunk_size)
         phase_index += 1
-        if args.max_progressive_phases and phase_index > args.max_progressive_phases:
-            break
-        phases.append(PhaseSpec(name=f"supcon_last_{count}_modules", unfrozen_backbone_modules=count, max_epochs=args.supcon_stage_epochs))
+        phases.append(PhaseSpec(name=f"supcon_last_{count}_modules", unfrozen_backbone_modules=count))
     return phases
 
 
@@ -1466,14 +1462,12 @@ def build_classifier_phase_plan(total_modules: int, args: argparse.Namespace) ->
     """
     phases: list[PhaseSpec] = []
     if args.classifier_train_mode == "full_model":
-        if args.stage_epochs > 0:
-            phases.append(PhaseSpec(name="ce_full_model", unfrozen_backbone_modules=total_modules, max_epochs=args.stage_epochs))
+        phases.append(PhaseSpec(name="ce_full_model", unfrozen_backbone_modules=total_modules))
         return phases
     # ── Stage 3: CE head warm-up (backbone fully frozen) ─────────────────────
     # embedding + embedding_norm + ce_head are trainable; all backbone frozen.
     # This prevents random ce_head gradients from corrupting contrastive features.
-    if args.head_epochs > 0:
-        phases.append(PhaseSpec(name="ce_head_only", unfrozen_backbone_modules=0, max_epochs=args.head_epochs))
+    phases.append(PhaseSpec(name="ce_head_only", unfrozen_backbone_modules=0))
     # ── Stage 4: CE progressive unfreezing ────────────────────────────────────
     # HARD CAP: never exceed ce_max_unfreeze_modules (default=40).
     # This permanently locks the first 90 leaf modules (edges, textures, patterns)
@@ -1481,12 +1475,10 @@ def build_classifier_phase_plan(total_modules: int, args: argparse.Namespace) ->
     effective_max = min(total_modules, getattr(args, "ce_max_unfreeze_modules", total_modules))
     count = 0
     phase_index = 0
-    while count < effective_max and args.stage_epochs > 0:
+    while count < effective_max:
         count = min(effective_max, count + args.unfreeze_chunk_size)
         phase_index += 1
-        if args.max_progressive_phases and phase_index > args.max_progressive_phases:
-            break
-        phases.append(PhaseSpec(name=f"ce_last_{count}_modules", unfrozen_backbone_modules=count, max_epochs=args.stage_epochs))
+        phases.append(PhaseSpec(name=f"ce_last_{count}_modules", unfrozen_backbone_modules=count))
     return phases
 
 
@@ -1722,22 +1714,18 @@ def move_images_to_device(images: torch.Tensor, device: torch.device, args: argp
 
 
 class WarmupCosineScheduler:
-    def __init__(self, optimizer: Optimizer, max_epochs: int, steps_per_epoch: int, warmup_epochs: int, warmup_steps: int = 0) -> None:
+    def __init__(self, optimizer: Optimizer, steps_per_epoch: int, warmup_epochs: int, warmup_steps: int = 0) -> None:
         self.optimizer = optimizer
-        self.total_steps = max(1, max_epochs * max(1, steps_per_epoch))
-        requested_warmup_steps = max(0, int(warmup_steps)) if warmup_steps > 0 else max(0, warmup_epochs * max(1, steps_per_epoch))
-        self.warmup_steps = min(self.total_steps - 1, requested_warmup_steps) if self.total_steps > 1 else 0
+        self.steps_per_epoch = max(1, steps_per_epoch)
+        requested_warmup_steps = max(0, int(warmup_steps)) if warmup_steps > 0 else max(0, warmup_epochs * self.steps_per_epoch)
+        self.warmup_steps = requested_warmup_steps
         self.base_lrs = [group["lr"] for group in optimizer.param_groups]
         self.step_index = 0
 
     def _factor(self, step: int) -> float:
         if self.warmup_steps > 0 and step < self.warmup_steps:
             return float(step + 1) / float(self.warmup_steps)
-        if self.total_steps <= self.warmup_steps + 1:
-            return 1.0
-        progress = float(step - self.warmup_steps) / float(self.total_steps - self.warmup_steps - 1)
-        progress = min(max(progress, 0.0), 1.0)
-        return 0.5 * (1.0 + math.cos(math.pi * progress))
+        return 1.0
 
     def step(self) -> None:
         factor = self._factor(self.step_index)
@@ -1747,14 +1735,14 @@ class WarmupCosineScheduler:
 
     def state_dict(self) -> dict[str, Any]:
         return {
-            "total_steps": self.total_steps,
+            "steps_per_epoch": self.steps_per_epoch,
             "warmup_steps": self.warmup_steps,
             "base_lrs": self.base_lrs,
             "step_index": self.step_index,
         }
 
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
-        self.total_steps = int(state_dict["total_steps"])
+        self.steps_per_epoch = int(state_dict.get("steps_per_epoch", self.steps_per_epoch))
         self.warmup_steps = int(state_dict["warmup_steps"])
         self.base_lrs = [float(value) for value in state_dict["base_lrs"]]
         self.step_index = int(state_dict["step_index"])
@@ -1772,14 +1760,12 @@ def set_scheduler_base_lrs(scheduler: WarmupCosineScheduler, base_lrs: list[floa
 
 def build_scheduler(
     optimizer: Optimizer,
-    max_epochs: int,
     steps_per_epoch: int,
     warmup_epochs: int,
     warmup_steps: int = 0,
 ) -> WarmupCosineScheduler:
     return WarmupCosineScheduler(
         optimizer,
-        max_epochs=max_epochs,
         steps_per_epoch=steps_per_epoch,
         warmup_epochs=warmup_epochs,
         warmup_steps=warmup_steps,
@@ -3561,13 +3547,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prefetch-factor", type=int, default=1)
     parser.add_argument("--embedding-dim", type=int, default=128)
     parser.add_argument("--projection-dim", type=int, default=128)
-    parser.add_argument("--supcon-epochs", type=int, default=20, help="Legacy alias for --supcon-stage-epochs.")
-    parser.add_argument("--supcon-head-epochs", type=int, default=5)
-    parser.add_argument("--supcon-stage-epochs", type=int, default=-1)
-    parser.add_argument("--head-epochs", type=int, default=5)
-    parser.add_argument("--stage-epochs", type=int, default=20)
     parser.add_argument("--unfreeze-chunk-size", type=int, default=20)
-    parser.add_argument("--max-progressive-phases", type=int, default=0)
     parser.add_argument("--skip-supcon", action="store_true")
     parser.add_argument("--classifier-train-mode", choices=("progressive", "full_model"), default="progressive")
     parser.add_argument("--classifier-early-stopping-metric", choices=("val_loss", "val_raw_acc"), default="val_loss")
@@ -3846,16 +3826,10 @@ def collapse_logits_and_targets_to_runtime_classes(
 
 
 def run_experiment(args: argparse.Namespace) -> int:
-    if getattr(args, "supcon_stage_epochs", -1) < 0:
-        args.supcon_stage_epochs = int(args.supcon_epochs)
     if args.optimizer == "sam" and args.grad_accum_steps != 1:
         raise ValueError("SAM support in this trainer requires --grad-accum-steps 1")
     if args.unfreeze_chunk_size < 1:
         raise ValueError("--unfreeze-chunk-size must be >= 1")
-    if args.supcon_head_epochs < 0:
-        raise ValueError("--supcon-head-epochs must be >= 0")
-    if args.supcon_stage_epochs < 0:
-        raise ValueError("--supcon-stage-epochs must be >= 0")
     if args.augment_repeats < 1:
         raise ValueError("--augment-repeats must be >= 1")
     if args.augment_gaussian_sigmas <= 0:
@@ -3995,8 +3969,6 @@ def run_experiment(args: argparse.Namespace) -> int:
             "test_steps_per_eval": len(test_loader),
             "sampling_strategy": args.sampling_strategy,
             "eval_every_epochs": args.eval_every_epochs,
-            "supcon_head_epochs": args.supcon_head_epochs,
-            "supcon_stage_epochs": args.supcon_stage_epochs,
             "supcon_early_stopping_patience": args.supcon_early_stopping_patience,
             "head_early_stopping_patience": args.head_early_stopping_patience,
             "stage_early_stopping_patience": args.stage_early_stopping_patience,
@@ -4137,7 +4109,6 @@ def run_experiment(args: argparse.Namespace) -> int:
             supcon_optimizer = build_supcon_optimizer(model, args)
             supcon_scheduler = build_scheduler(
                 base_optimizer_for_scheduler(supcon_optimizer),
-                max_epochs=supcon_phase.max_epochs,
                 steps_per_epoch=steps_per_epoch_for_sampler(
                     supcon_sampler, supcon_train_dataset, args.batch_size, args.max_train_batches
                 ),
@@ -4247,7 +4218,8 @@ def run_experiment(args: argparse.Namespace) -> int:
             supcon_steps_full_epoch = steps_per_epoch_for_sampler(
                 supcon_sampler, supcon_train_dataset, args.batch_size, args.max_train_batches
             )
-            for epoch in range(start_supcon_epoch if same_resume_phase else 1, supcon_phase.max_epochs + 1):
+            epoch = start_supcon_epoch if same_resume_phase else 1
+            while True:
                 train_dataset.set_epoch(augmentation_epoch_cursor)
                 val_dataset.set_epoch(0)
                 test_dataset.set_epoch(0)
@@ -4456,7 +4428,6 @@ def run_experiment(args: argparse.Namespace) -> int:
                         "validation_index": validation_index,
                         "epoch_step": epoch_steps_done,
                         "global_train_step": train_progress["global_train_step"],
-                        "phase_max_epochs": supcon_phase.max_epochs,
                         "unfrozen_backbone_modules": supcon_phase.unfrozen_backbone_modules,
                         "newly_unfrozen_tail_modules": thawed_supcon[-args.unfreeze_chunk_size :],
                         "trainable_params": supcon_trainable_params,
@@ -4525,6 +4496,7 @@ def run_experiment(args: argparse.Namespace) -> int:
                         )
                         phase_stopped = True
                         break
+                    epoch += 1
                 progress.close()
                 supcon_sampler.set_start_index(0)
                 start_supcon_epoch_step = 0
@@ -4643,7 +4615,6 @@ def run_experiment(args: argparse.Namespace) -> int:
         scaler = build_grad_scaler(device, args)
         scheduler = build_scheduler(
             base_optimizer_for_scheduler(optimizer),
-            max_epochs=phase.max_epochs,
             steps_per_epoch=steps_per_epoch_for_sampler(train_sampler, train_dataset, args.batch_size, args.max_train_batches),
             warmup_epochs=args.warmup_epochs,
             warmup_steps=args.warmup_steps,
@@ -4714,7 +4685,8 @@ def run_experiment(args: argparse.Namespace) -> int:
             else args.stage_early_stopping_patience
         )
 
-        for epoch in range(start_phase_epoch if same_resume_phase else 1, phase.max_epochs + 1):
+        epoch = start_phase_epoch if same_resume_phase else 1
+        while True:
             train_dataset.set_epoch(augmentation_epoch_cursor)
             val_dataset.set_epoch(0)
             test_dataset.set_epoch(0)
@@ -4933,7 +4905,6 @@ def run_experiment(args: argparse.Namespace) -> int:
                     "validation_index": validation_index,
                     "epoch_step": epoch_steps_done,
                     "global_train_step": train_progress["global_train_step"],
-                    "phase_max_epochs": phase.max_epochs,
                     "unfrozen_backbone_modules": phase.unfrozen_backbone_modules,
                     "newly_unfrozen_tail_modules": thawed[-args.unfreeze_chunk_size :],
                     "trainable_params": trainable_params,
@@ -5023,6 +4994,7 @@ def run_experiment(args: argparse.Namespace) -> int:
                     log_json_event(log_path, event)
                     phase_stopped = True
                     break
+                epoch += 1
             progress.close()
             train_sampler.set_start_index(0)
             start_phase_epoch_step = 0
@@ -5324,8 +5296,6 @@ def run_experiment(args: argparse.Namespace) -> int:
         "supcon": {
             "temperature": args.supcon_temperature,
             "phase_plan": [asdict(phase) for phase in supcon_phases],
-            "head_epochs": args.supcon_head_epochs,
-            "stage_epochs": args.supcon_stage_epochs,
             "best_val_loss": supcon_best_loss,
             "best_epoch": supcon_best_epoch,
             "unfrozen_backbone_modules": args.supcon_unfreeze_backbone_modules,

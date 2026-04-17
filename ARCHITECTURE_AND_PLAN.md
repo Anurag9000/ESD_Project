@@ -41,7 +41,6 @@ The pipeline follows the research-validated principle: **Contrastive representat
 | **Loss:**            | Supervised Contrastive (SupCon, temperature=0.07) |
 | **Head LR:**         | `3e-3` |
 | **Backbone LR:**     | `0.0` (frozen) |
-| **Duration:**        | `supcon_head_epochs=5` max |
 | **Stopping:**        | Early stopping patience=5 on SupCon val_loss |
 | **Goal:**            | Orient the randomly-initialised projection head into a stable contrastive attractor before touching backbone weights |
 
@@ -74,7 +73,7 @@ The pipeline follows the research-validated principle: **Contrastive representat
 | **Loss:**            | Cross-Entropy (label_smoothing=0.0 default) |
 | **Head LR:**         | `1e-3` |
 | **Backbone LR:**     | `0.0` (frozen) |
-| **Duration:**        | `head_epochs=5` epochs max, patience=5 |
+| **Stopping:**        | Early stopping patience=5 on classifier val_loss/val_raw_acc |
 | **Goal:**            | **Critical safety gate.** The `ce_head` is randomly initialised. Without this warm-up, random CE gradients would backpropagate into the carefully arranged contrastive embedding space and corrupt it. This phase stabilises the CE hyperplanes between the tight SupCon clusters before any backbone gradients flow. |
 
 ### Stage 5 — CE Last-20 Modules
