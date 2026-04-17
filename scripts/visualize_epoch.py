@@ -50,6 +50,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from metric_learning_pipeline import (
     IMAGENET_MEAN,
     IMAGENET_STD,
+    DEFAULT_BACKBONE_NAME,
     MetricLearningEfficientNetB0,
     build_datasets,
     model_dtype_for_args,
@@ -520,6 +521,7 @@ def run(
     _, _, test_dataset, _, _ = build_datasets(ckpt_args)
     loader = _make_clean_loader(test_dataset, batch_size, num_workers)
     class_names = test_dataset.classes
+    backbone_name = str(getattr(ckpt_args, "backbone", DEFAULT_BACKBONE_NAME))
 
     # Build model
     model = MetricLearningEfficientNetB0(
@@ -528,6 +530,7 @@ def run(
         embedding_dim=ckpt_args.embedding_dim,
         projection_dim=ckpt_args.projection_dim,
         args=ckpt_args,
+        backbone_name=backbone_name,
     ).to(device=device, dtype=dtype)
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()

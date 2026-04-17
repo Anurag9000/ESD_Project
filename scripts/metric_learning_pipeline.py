@@ -828,11 +828,11 @@ class MetricLearningEfficientNetB0(nn.Module):
         embedding_dim: int,
         projection_dim: int,
         args: argparse.Namespace,
-        backbone_name: str = "efficientnet_b0",
+        backbone_name: str | None = None,
     ) -> None:
         super().__init__()
-        self.backbone_name = backbone_name
-        backbone = create_backbone(backbone_name, weights_mode)
+        self.backbone_name = backbone_name or getattr(args, "backbone", DEFAULT_BACKBONE_NAME)
+        backbone = create_backbone(self.backbone_name, weights_mode)
         self.front_end = nn.Identity()
         self.backbone = backbone
         self.in_features = int(getattr(backbone, "num_features"))
