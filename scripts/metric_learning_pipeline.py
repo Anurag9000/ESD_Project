@@ -3225,12 +3225,12 @@ def save_supcon_best_checkpoint(
     torch.save(payload, path)
 
 
-def maybe_run_epoch_visualizations(
+def maybe_run_phase_visualizations(
     *,
     checkpoint_path: Path,
     dataset_root: str,
     output_dir: Path,
-    epoch_label: str,
+    phase_label: str,
     args: argparse.Namespace,
     log_path: Path,
     reason: str,
@@ -3238,7 +3238,7 @@ def maybe_run_epoch_visualizations(
     if not getattr(args, "epoch_visualizations", False):
         return
     safe_label = (
-        str(epoch_label)
+        str(phase_label)
         .strip()
         .replace(" ", "_")
         .replace("/", "_")
@@ -3255,7 +3255,7 @@ def maybe_run_epoch_visualizations(
         "--output-dir",
         str(target_dir),
         "--epoch",
-        str(epoch_label),
+        str(phase_label),
         "--batch-size",
         str(args.epoch_visualization_batch_size),
         "--num-workers",
@@ -3268,9 +3268,9 @@ def maybe_run_epoch_visualizations(
     log_json_event(
         log_path,
         {
-            "event": "epoch_visualization_started",
+            "event": "phase_visualization_started",
             "reason": reason,
-            "epoch_label": str(epoch_label),
+            "phase_label": str(phase_label),
             "output_dir": str(target_dir),
             "checkpoint": str(checkpoint_path),
         },
@@ -3281,9 +3281,9 @@ def maybe_run_epoch_visualizations(
         log_json_event(
             log_path,
             {
-                "event": "epoch_visualization_failed",
+                "event": "phase_visualization_failed",
                 "reason": reason,
-                "epoch_label": str(epoch_label),
+                "phase_label": str(phase_label),
                 "output_dir": str(target_dir),
                 "checkpoint": str(checkpoint_path),
                 "returncode": int(exc.returncode),
@@ -3293,9 +3293,9 @@ def maybe_run_epoch_visualizations(
         log_json_event(
             log_path,
             {
-                "event": "epoch_visualization_finished",
+                "event": "phase_visualization_finished",
                 "reason": reason,
-                "epoch_label": str(epoch_label),
+                "phase_label": str(phase_label),
                 "output_dir": str(target_dir),
                 "checkpoint": str(checkpoint_path),
             },
@@ -4075,11 +4075,11 @@ def run_experiment(args: argparse.Namespace) -> int:
             "resume": resume_state,
         },
     )
-    maybe_run_epoch_visualizations(
+    maybe_run_phase_visualizations(
         checkpoint_path=checkpoint_path,
         dataset_root=args.dataset_root,
         output_dir=output_dir,
-        epoch_label="startup",
+        phase_label="startup",
         args=args,
         log_path=log_path,
         reason="run_start",
@@ -4511,15 +4511,6 @@ def run_experiment(args: argparse.Namespace) -> int:
                 start_supcon_validation_index = 0
                 if phase_stopped:
                     break
-                maybe_run_epoch_visualizations(
-                    checkpoint_path=checkpoint_path,
-                    dataset_root=args.dataset_root,
-                    output_dir=phase_artifact_dir(output_dir, supcon_phase.name),
-                    epoch_label=f"{supcon_phase.name}_epoch_{epoch}",
-                    args=args,
-                    log_path=log_path,
-                    reason="supcon_epoch_complete",
-                )
                 augmentation_epoch_cursor += 1
                 release_training_memory(device, supcon_train_loader, supcon_val_loader)
 
@@ -4553,6 +4544,15 @@ def run_experiment(args: argparse.Namespace) -> int:
                         "validation_index": 0,
                     },
                 },
+            )
+            maybe_run_phase_visualizations(
+                checkpoint_path=checkpoint_path,
+                dataset_root=args.dataset_root,
+                output_dir=phase_artifact_dir(output_dir, supcon_phase.name),
+                phase_label=f"{supcon_phase.name}_phase",
+                args=args,
+                log_path=log_path,
+                reason="supcon_phase_complete",
             )
             start_supcon_epoch = 1
             start_supcon_epoch_step = 0
@@ -5009,15 +5009,6 @@ def run_experiment(args: argparse.Namespace) -> int:
             start_phase_validation_index = 0
             if phase_stopped:
                 break
-            maybe_run_epoch_visualizations(
-                checkpoint_path=checkpoint_path,
-                dataset_root=args.dataset_root,
-                output_dir=phase_artifact_dir(output_dir, phase.name),
-                epoch_label=f"{phase.name}_epoch_{epoch}",
-                args=args,
-                log_path=log_path,
-                reason="classifier_epoch_complete",
-            )
             augmentation_epoch_cursor += 1
             release_training_memory(device, train_loader, val_loader)
 
@@ -5099,6 +5090,15 @@ def run_experiment(args: argparse.Namespace) -> int:
                     "next_phase_init_source": next_phase_init_source,
                 },
             },
+        )
+        maybe_run_phase_visualizations(
+            checkpoint_path=checkpoint_path,
+            dataset_root=args.dataset_root,
+            output_dir=phase_artifact_dir(output_dir, phase.name),
+            phase_label=f"{phase.name}_phase",
+            args=args,
+            log_path=log_path,
+            reason="classifier_phase_complete",
         )
         log_json_event(
             log_path,
