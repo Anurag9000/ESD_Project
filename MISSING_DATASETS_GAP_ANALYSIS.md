@@ -1,4 +1,4 @@
-# ESD Platform: Missing Datasets Gap Analysis
+# ESD Platform: Missing Datasets Gap Analysis (Restored)
 
 This document identifies the primary large-scale waste datasets that are **not** currently integrated into the **WSS-308K** corpus. Integration of these sources would expand the corpus to ~620,000 images and provide industry-leading granularity.
 
@@ -60,7 +60,7 @@ This document identifies the primary large-scale waste datasets that are **not**
     - Timber
     - Rebar
     - Plastic Tube
-- **Value:** Expands the model taxonomy to **Construction & Demolition (C&D)** waste—a massive sector currently missing from our material list.
+- **Value:** Expands the model taxonomy to **Construction & Demolition (C&D)** waste.
 
 ---
 
@@ -69,7 +69,7 @@ This document identifies the primary large-scale waste datasets that are **not**
 | Dataset | Scale | Specialty |
 | :--- | :--- | :--- |
 | **TrashCan 1.1** | 7,212 | Underwater/Oceanic debris and marine life. |
-| **UAVVaste** | 772 | Drone-based overhead detection (3,716 annotations). |
+| **UAVVaste** | 772 | Drone-based overhead detection. |
 | **SpectralWaste** | 852 | Multimodal (RGB + Hyperspectral) for sorting automation. |
 
 ---

@@ -4029,17 +4029,7 @@ def run_experiment(args: argparse.Namespace) -> int:
                     epoch_loss_sum += window_train_loss * window_samples
                     validation_index += 1
                     progress.update(steps_done)
-                    
-                    # Get current LRs for terminal display
-                    lrs = optimizer_learning_rates(supcon_optimizer)
-                    head_lr = lrs[0]
-                    bbone_lr = lrs[1] if len(lrs) > 1 else 0.0
-                    
-                    progress.set_postfix(
-                        loss=f"{epoch_loss_sum / max(1, epoch_samples_seen):.4f}",
-                        HeadLR=f"{head_lr:.1e}",
-                        BboneLR=f"{bbone_lr:.1e}"
-                    )
+                    progress.set_postfix(loss=f"{epoch_loss_sum / max(1, epoch_samples_seen):.4f}")
                     release_training_memory(device, supcon_train_loader)
 
                     log_json_event(
@@ -4508,17 +4498,9 @@ def run_experiment(args: argparse.Namespace) -> int:
                 epoch_raw_correct_sum += window_train_raw_acc * window_samples
                 validation_index += 1
                 progress.update(steps_done)
-                
-                # Get current LRs for terminal display
-                lrs = optimizer_learning_rates(optimizer)
-                head_lr = lrs[0]
-                bbone_lr = lrs[1] if len(lrs) > 1 else 0.0
-                
                 progress.set_postfix(
                     loss=f"{epoch_loss_sum / max(1, epoch_samples_seen):.4f}",
                     acc=f"{epoch_correct_sum / max(1, epoch_samples_seen):.4f}",
-                    HeadLR=f"{head_lr:.1e}",
-                    BboneLR=f"{bbone_lr:.1e}"
                 )
                 release_training_memory(device, train_loader)
 
