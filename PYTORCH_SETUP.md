@@ -36,14 +36,14 @@ Executes the staged pipeline:
 
 Each phase writes into its own folder under `Results/<run>/progressive/phases/<phase_name>/`.
 ```bash
-./run_training.sh --batch-size 224
+./run_training.sh --backbone convnextv2_nano --num-workers 2 --prefetch-factor 1
 ```
 
 ### Manual Execution (Standardized Params)
 ```bash
 python scripts/train_efficientnet_b0_progressive.py \
   --dataset-root Dataset_Final \
-  --batch-size 224 \
+  --backbone convnextv2_nano \
   --precision mixed \
   --optimizer adamw \
   --sampling-strategy balanced \
@@ -52,6 +52,8 @@ python scripts/train_efficientnet_b0_progressive.py \
   --supcon-stage-epochs 20 \
   --head-epochs 5 \
   --stage-epochs 20 \
+  --num-workers 2 \
+  --prefetch-factor 1 \
   --epoch-visualizations
 ```
 

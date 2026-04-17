@@ -6,7 +6,7 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 
 ### Machine Learning Engine
 - **Backbone:** Configurable; default ConvNeXt V2 Nano FCMAE
-- **Corpus:** 308,008 verified images (WSS-308K, post-decontamination + 200px resolution floor)
+- **Corpus:** 304,258 verified images (WSS-304K, post-decontamination + 224px resolution floor)
 - **Taxonomy:** **8 material classes** — clothes, ewaste, glass, hard_plastic, metal, organic, paper, soft_plastic
 - **Orchestration:** 8-stage pipeline: SupCon Head → SupCon Last-20 → SupCon Last-40 → CE Head → CE Last-20 → CE Last-40 → Recursive val_loss → Recursive val_raw_acc
 - **Balancing:** Balanced per-batch class cycling (default in all training scripts)
@@ -25,7 +25,7 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 | Metric               | Specification                                                                 |
 | :------------------- | :---------------------------------------------------------------------------- |
 | **Current Taxonomy** | **8 material classes** (clothes, ewaste, glass, hard_plastic, metal, organic, paper, soft_plastic) |
-| **Total Images**     | **308,008 verified (≥200px floor, post-decontamination)**                     |
+| **Total Images**     | **304,258 verified (≥224px floor, post-decontamination)**                     |
 | **Class Balancing**  | Balanced per-batch class cycling                                              |
 | **Unfreeze Step**    | 20 leaf modules per SupCon and CE progressive phase                           |
 | **Optimization**     | AdamW + warmup-cosine decay (default)                                         |
@@ -36,7 +36,7 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 
 ## 3. Documentation Index
 - **`ARCHITECTURE_AND_PLAN.md`**: Full staged pipeline specification, per-stage LRs, backbone module map, checkpointing strategy.
-- **`DATASET_SPECIFICATION.md`**: 308K corpus breakdown per class with decontamination history.
+- **`DATASET_SPECIFICATION.md`**: 304K corpus breakdown per class with decontamination history.
 - **`PYTORCH_SETUP.md`**: Environment configuration and execution manual.
 - **`scripts/evaluate_external_holdout.py`**: No-augmentation evaluation on a genuinely unseen dataset root.
 - **`scripts/gradcam_classifier.py`**: Class-specific Grad-CAM overlays for trained checkpoints.
@@ -54,7 +54,7 @@ source .venv/bin/activate
 # - eval every 0.01 epoch
 # - patience 5 across SupCon, CE head, CE stages, and recursive stages
 # - startup + per-epoch clean test-set visualizations
-./run_training.sh --batch-size 224
+./run_training.sh --backbone convnextv2_nano --num-workers 2 --prefetch-factor 1
 ```
 
 ### Resume After Interruption (Exact Same Command)
@@ -64,7 +64,7 @@ source .venv/bin/activate
 
 # Automatically detects the most recent run, finds step_last.pt or last.pt,
 # and resumes from the exact last training step.
-./run_training.sh --batch-size 224
+./run_training.sh --backbone convnextv2_nano --num-workers 2 --prefetch-factor 1
 ```
 
 ### Android Dashboard

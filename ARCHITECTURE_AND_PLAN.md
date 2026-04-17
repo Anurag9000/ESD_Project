@@ -4,8 +4,8 @@ This document defines the current architectural specifications and training meth
 
 ## 1. Model Specifications
 
-- **Architecture:** EfficientNet-B0
-- **Parameters:** ~5.3 Million (backbone: 4.0M, head: 1.3M)
+- **Architecture:** Configurable backbone registry; default `ConvNeXt V2 Nano FCMAE`
+- **Parameters:** Backbone-dependent
 - **Precision:** FP16 Mixed Precision via `torch.amp`
 - **Optimization:** AdamW with per-stage learning rate groups
 - **Output Classes:** **8**
@@ -17,15 +17,15 @@ This document defines the current architectural specifications and training meth
 | Index | Class Name    | Image Count | Description                              |
 | :---- | :------------ | :---------- | :--------------------------------------- |
 | 0     | `clothes`     | 40,295      | Textiles, apparel, woven fabrics         |
-| 1     | `ewaste`      | 2,147       | Electronic components, PCBs, hardware    |
-| 2     | `glass`       | 9,997       | Silica-based containers (clear/pigmented)|
-| 3     | `hard_plastic`| 15,297      | Rigid polymers, containers, bottles      |
-| 4     | `metal`       | 55,628      | Ferrous/non-ferrous metals, aluminum     |
-| 5     | `organic`     | 168,439     | Biodegradable: food, vegetation          |
-| 6     | `paper`       | 11,126      | Cellulose flat material, cardboard       |
-| 7     | `soft_plastic`| 5,079       | Flexible films, bags, thin sheets        |
+| 1     | `ewaste`      | 4,440       | Electronic components, PCBs, hardware    |
+| 2     | `glass`       | 12,055      | Silica-based containers (clear/pigmented)|
+| 3     | `hard_plastic`| 16,677      | Rigid polymers, containers, bottles      |
+| 4     | `metal`       | 57,795      | Ferrous/non-ferrous metals, aluminum     |
+| 5     | `organic`     | 152,745     | Biodegradable: food, vegetation          |
+| 6     | `paper`       | 14,270      | Cellulose flat material, cardboard       |
+| 7     | `soft_plastic`| 5,981       | Flexible films, bags, thin sheets        |
 
-> **Eliminated:** `battery` (only 29 images survived the 200px floor) and `shoes` (100% sub-200px thumbnails, zero training value).
+> **Eliminated:** `battery` (only 29 images survived the 224px floor) and `shoes` (100% sub-224px thumbnails, zero training value).
 
 ---
 
@@ -36,8 +36,8 @@ The pipeline follows the research-validated principle: **Contrastive representat
 ### Stage 1 — SupCon Head Warm-up (Frozen Backbone)
 | Parameter            | Value  |
 | :------------------- | :----- |
-| **Trainable:**       | `embedding` (1280→128) + `embedding_norm` + `projection_head` (128→128) |
-| **Frozen:**          | Entire EfficientNet-B0 backbone (130 leaf modules, 4.0M params) |
+| **Trainable:**       | Embedding projector + projection head on top of the selected backbone |
+| **Frozen:**          | Entire default backbone (exact leaf-module count depends on the selected model) |
 | **Loss:**            | Supervised Contrastive (SupCon, temperature=0.07) |
 | **Head LR:**         | `3e-3` |
 | **Backbone LR:**     | `0.0` (frozen) |
@@ -69,8 +69,8 @@ The pipeline follows the research-validated principle: **Contrastive representat
 ### Stage 4 — CE Head Warm-up (Backbone Re-frozen)
 | Parameter            | Value  |
 | :------------------- | :----- |
-| **Trainable:**       | `ce_head` (128→8) + `embedding` + `embedding_norm` |
-| **Frozen:**          | Entire backbone (all 130 leaf modules) + projection_head |
+| **Trainable:**       | CE head + embedding projector on top of the selected backbone |
+| **Frozen:**          | Entire backbone + projection head |
 | **Loss:**            | Cross-Entropy (label_smoothing=0.0 default) |
 | **Head LR:**         | `1e-3` |
 | **Backbone LR:**     | `0.0` (frozen) |
@@ -111,7 +111,9 @@ The pipeline follows the research-validated principle: **Contrastive representat
 
 ---
 
-## 4. Backbone Module Map (EfficientNet-B0)
+## 4. Backbone Module Map (EfficientNet-B0 reference)
+
+> This module map is retained only as a reference for the `efficientnet_b0` backbone option. The current default training path uses the configurable backbone registry and may select a different pretrained model.
 
 | Top-level Module | Type                  | Params     | SupCon Stage | Notes |
 | :--------------- | :-------------------- | :--------- | :----------- | :---- |
@@ -141,14 +143,14 @@ The pipeline follows the research-validated principle: **Contrastive representat
 | Phase-best confusion matrix | `best_confusion_matrix.png` | `Results/<run>/progressive/phases/<phase_name>/` |
 | Per-epoch visual audit | `visualizations/<epoch_label>/...` | `Results/<run>/progressive/phases/<phase_name>/` |
 
-Resume is fully automatic: re-running `./run_training.sh --batch-size 224` detects the most recent run stamp and injects `--resume-checkpoint step_last.pt` automatically.
+Resume is fully automatic: re-running `./run_training.sh --backbone convnextv2_nano --num-workers 2 --prefetch-factor 1` detects the most recent run stamp and injects `--resume-checkpoint step_last.pt` automatically.
 
 ---
 
 ## 6. Dataset and Resolution Policy
 
-- **Corpus:** WSS-308K — 308,008 verified images, all ≥200×200px
-- **Minimum Size:** 200px (strictly enforced on physical disk)
+- **Corpus:** WSS-304K — 304,258 verified images, all ≥224×224px
+- **Minimum Size:** 224px (strictly enforced on physical disk)
 - **Split Ratios:** 70% train / 20% val / 10% test
 - **Augmentation:** 16× deterministic split-safe augmentation (train only; val/test use raw images)
 - **Class Balancing:** Balanced per-batch class cycling is the default and mandatory production path.
