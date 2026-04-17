@@ -7,11 +7,9 @@ Generates canonical artefacts from the COMPLETE test set (no augmentations):
 
   1. tsne_all_classes.png      — one global t-SNE of every test embedding
   2. per_class_tsne/*.png      — one t-SNE highlight plot per class
-  3. all_layer_activations.png — mean spatial activation for ALL 9 EfficientNet-B0
-                                  backbone feature stages (per-layer = mean over channels)
+  3. all_layer_activations.png — mean spatial activation for the backbone's major
+                                  feature stages (per-layer = mean over channels)
                                   Why per-layer, not per-neuron?
-                                  A single EfficientNet stage has up to 192 channels.
-                                  Per-neuron = thousands of tiny maps = uninterpretable noise.
                                   Per-layer = one summary map per stage = usable signal.
   4. test_full_atlas.png       — full test-set atlas mosaic (every test image)
 
@@ -196,17 +194,35 @@ def generate_tsne_suite(
 # 2. All-layer activations
 # ─────────────────────────────────────────────────────────────────────────────
 
-_EFFICIENTNET_B0_STAGES = {
-    "Stage 0 · Stem (Conv2d)":        0,
-    "Stage 1 · MBConv1 ×1":           1,
-    "Stage 2 · MBConv6 ×2":           2,
-    "Stage 3 · MBConv6 ×2":           3,
-    "Stage 4 · MBConv6 ×3":           4,
-    "Stage 5 · MBConv6 ×3":           5,
-    "Stage 6 · MBConv6 ×4":           6,
-    "Stage 7 · MBConv6 ×1":           7,
-    "Stage 8 · Head Conv (1280ch)":   8,
-}
+def backbone_activation_specs(model: MetricLearningEfficientNetB0) -> list[tuple[str, torch.nn.Module]]:
+    backbone = model.backbone
+    if hasattr(backbone, "features"):
+        return [
+            ("Stage 0 · Stem", backbone.features[0]),
+            ("Stage 1 · Features", backbone.features[1]),
+            ("Stage 2 · Features", backbone.features[2]),
+            ("Stage 3 · Features", backbone.features[3]),
+            ("Stage 4 · Features", backbone.features[4]),
+            ("Stage 5 · Features", backbone.features[5]),
+            ("Stage 6 · Features", backbone.features[6]),
+            ("Stage 7 · Features", backbone.features[7]),
+            ("Stage 8 · Head", backbone.features[8]),
+        ]
+    if hasattr(backbone, "stem") and hasattr(backbone, "stages"):
+        specs: list[tuple[str, torch.nn.Module]] = [("Stage 0 · Stem", backbone.stem)]
+        for idx, stage in enumerate(backbone.stages):
+            specs.append((f"Stage {idx + 1} · ConvNeXt Stage {idx}", stage))
+        if hasattr(backbone, "norm_pre"):
+            specs.append(("Final Norm", backbone.norm_pre))
+        return specs
+    children = [
+        (name, module)
+        for name, module in backbone.named_children()
+        if any(parameter.requires_grad or parameter.numel() > 0 for parameter in module.parameters(recurse=True))
+    ]
+    if not children:
+        raise ValueError("Backbone exposes no hookable child modules for visualization.")
+    return [(f"Stage {idx} · {name}", module) for idx, (name, module) in enumerate(children)]
 
 def generate_layer_activations(
     model: MetricLearningEfficientNetB0,
@@ -223,14 +239,12 @@ def generate_layer_activations(
       - channel dimension (all learned filters)
     resulting in one (H×W) heatmap per stage — a true "What does this stage attend to?"
     """
-    print(f"  [ActMaps] Hooking all {len(_EFFICIENTNET_B0_STAGES)} backbone stages …")
+    stage_specs = backbone_activation_specs(model)
+    print(f"  [ActMaps] Hooking all {len(stage_specs)} backbone stages …")
     model.eval()
     model_dtype = next(model.parameters()).dtype
 
-    hooks = {
-        name: _LayerHook(model.backbone.features[idx])
-        for name, idx in _EFFICIENTNET_B0_STAGES.items()
-    }
+    hooks = {name: _LayerHook(module) for name, module in stage_specs}
 
     accumulators: dict[str, np.ndarray | None] = {name: None for name in hooks}
     counts = {name: 0 for name in hooks}
@@ -257,7 +271,7 @@ def generate_layer_activations(
         hook.remove()
 
     # ── Plot: 3×3 grid ────────────────────────────────────────────────────────
-    n = len(_EFFICIENTNET_B0_STAGES)
+    n = len(stage_specs)
     ncols = 3
     nrows = (n + ncols - 1) // ncols
     fig = plt.figure(figsize=(ncols * 5, nrows * 4 + 1), dpi=130, constrained_layout=True)
@@ -324,11 +338,10 @@ def generate_per_class_sample_activations(
         selected_samples.extend(buckets[cls_id])
         
     # Setup hooks
-    hooks = {
-        name: _LayerHook(model.backbone.features[idx])
-        for name, idx in _EFFICIENTNET_B0_STAGES.items()
-    }
-    stage_names = list(_EFFICIENTNET_B0_STAGES.keys())
+    stage_specs = backbone_activation_specs(model)
+    hooks = {name: _LayerHook(module) for name, module in stage_specs}
+    stage_names = [name for name, _ in stage_specs]
+    stage_count = len(stage_names)
     
     print(f"  [SampleActs] Generating {len(selected_samples)} individual maps …")
     model_dtype = next(model.parameters()).dtype
@@ -346,9 +359,12 @@ def generate_per_class_sample_activations(
             # Capture activations
             activations = {name: hook.out[0].mean(dim=0).cpu().float().numpy() for name, hook in hooks.items()}
             
-        # Draw 4x3 Grid
-        fig = plt.figure(figsize=(18, 22), dpi=100)
-        gs = gridspec.GridSpec(4, 3, hspace=0.3, wspace=0.2)
+        # Draw a dynamic grid that fits the backbone stage count.
+        stage_rows = max(1, math.ceil((1 + stage_count) / 3))
+        ncols = 3
+        nrows = stage_rows + 1  # dedicate the final row to the text summary
+        fig = plt.figure(figsize=(ncols * 6, nrows * 5), dpi=100)
+        gs = gridspec.GridSpec(nrows, ncols, hspace=0.35, wspace=0.25)
         
         # Original Image
         ax0 = fig.add_subplot(gs[0, 0])
@@ -359,8 +375,9 @@ def generate_per_class_sample_activations(
         
         # 9 Stages
         for s_idx, s_name in enumerate(stage_names):
-            row = (s_idx + 1) // 3
-            col = (s_idx + 1) % 3
+            grid_idx = s_idx + 1
+            row = grid_idx // 3
+            col = grid_idx % 3
             ax = fig.add_subplot(gs[row, col])
             amap = activations[s_name]
             amap = (amap - amap.min()) / (amap.max() - amap.min() + 1e-8)
@@ -370,7 +387,7 @@ def generate_per_class_sample_activations(
             plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
             
         # Stats summary
-        ax_stat = fig.add_subplot(gs[3, 1:])
+        ax_stat = fig.add_subplot(gs[stage_rows, :])
         ax_stat.axis("off")
         color = "green" if pred == target_id else "red"
         status = "CORRECT" if pred == target_id else "MISCLASSIFIED"
