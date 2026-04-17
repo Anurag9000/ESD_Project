@@ -9,8 +9,8 @@ source .venv/bin/activate
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 INITIAL_CHECKPOINT="${INITIAL_CHECKPOINT:-}"
-RUN_ROOT="${RUN_ROOT:-Results/efficientnet_b0_master_run}"
-LOG_ROOT="${LOG_ROOT:-logs/efficientnet_b0_master_run}"
+RUN_ROOT="${RUN_ROOT:-Results/convnextv2_nano_master_run}"
+LOG_ROOT="${LOG_ROOT:-logs/convnextv2_nano_master_run}"
 DATASET_ROOT="${DATASET_ROOT:-Dataset_Final}"
 
 if [[ -z "$INITIAL_CHECKPOINT" ]]; then

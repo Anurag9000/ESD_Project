@@ -29,7 +29,7 @@ class InferenceESDModel(torch.nn.Module):
         return self.model.classify(emb)
 
 def main():
-    ckpt_path = Path("Results/efficientnet_b0_master_run/loss_cleanup/best.pt")
+    ckpt_path = Path("Results/convnextv2_nano_master_run/loss_cleanup/best.pt")
     if not ckpt_path.exists():
         print(f"Error: Could not find {ckpt_path}", file=sys.stderr)
         return 1

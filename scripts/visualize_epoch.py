@@ -586,7 +586,7 @@ def main() -> None:
         help="Epoch label to embed in the plot titles (default: 'initial').",
     )
     parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument(
         "--sample-limit-activations", type=int, default=2048,
         help="Max images used to build the activation average. Use 0 for all test images.",

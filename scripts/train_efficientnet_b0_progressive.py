@@ -8,8 +8,8 @@ from metric_learning_pipeline import build_parser, run_experiment
 def main() -> int:
     parser = build_parser()
     parser.set_defaults(
-        output_dir="Results/efficientnet_b0_progressive_all_classes",
-        log_file="logs/efficientnet_b0_progressive_all_classes.log.jsonl",
+        output_dir="Results/convnextv2_nano_progressive_all_classes",
+        log_file="logs/convnextv2_nano_progressive_all_classes.log.jsonl",
     )
     args = parser.parse_args()
     return run_experiment(args)

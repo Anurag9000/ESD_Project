@@ -11,10 +11,10 @@ export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:T
 # ── AUTO-RESUME LOGIC ──
 # If no RUN_STAMP is set in the environment, detect the most recent one automatically
 if [[ -z "${RUN_STAMP:-}" ]]; then
-  LATEST_RUN=$(ls -td Results/efficientnet_b0_all_classes_* 2>/dev/null | head -1 || true)
+  LATEST_RUN=$(ls -td Results/convnextv2_nano_all_classes_* 2>/dev/null | head -1 || true)
   if [[ -n "$LATEST_RUN" ]]; then
     # Extract the timestamp part
-    RUN_STAMP=$(basename "$LATEST_RUN" | sed 's/efficientnet_b0_all_classes_//')
+    RUN_STAMP=$(basename "$LATEST_RUN" | sed 's/convnextv2_nano_all_classes_//')
     echo "🔄 Found previous run: $RUN_STAMP. Enforcing automatic resume."
   else
     RUN_STAMP="$(date +%Y%m%d_%H%M%S)"
@@ -22,8 +22,8 @@ if [[ -z "${RUN_STAMP:-}" ]]; then
   fi
 fi
 
-RUN_ROOT="${RUN_ROOT:-Results/efficientnet_b0_all_classes_${RUN_STAMP}}"
-LOG_ROOT="${LOG_ROOT:-logs/efficientnet_b0_all_classes_${RUN_STAMP}}"
+RUN_ROOT="${RUN_ROOT:-Results/convnextv2_nano_all_classes_${RUN_STAMP}}"
+LOG_ROOT="${LOG_ROOT:-logs/convnextv2_nano_all_classes_${RUN_STAMP}}"
 PROGRESSIVE_OUTPUT_DIR="$RUN_ROOT/progressive"
 PROGRESSIVE_LOG_FILE="$LOG_ROOT/progressive.log.jsonl"
 DATASET_ROOT="${DATASET_ROOT:-Dataset_Final}"

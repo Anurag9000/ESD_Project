@@ -82,9 +82,9 @@ def make_eval_args(checkpoint_args: dict[str, Any], cli_args: argparse.Namespace
         merged["confidence_threshold"] = float(cli_args.confidence_threshold)
     merged.setdefault("image_size", 224)
     merged.setdefault("weights", "default")
-    merged.setdefault("backbone", "efficientnet_b0")
-    merged.setdefault("embedding_dim", 512)
-    merged.setdefault("projection_dim", 256)
+    merged.setdefault("backbone", "convnextv2_nano")
+    merged.setdefault("embedding_dim", 128)
+    merged.setdefault("projection_dim", 128)
     merged.setdefault("precision", "mixed")
     merged.setdefault("log_eval_every_steps", 1000)
     return argparse.Namespace(**merged)
@@ -141,7 +141,7 @@ def main() -> int:
         embedding_dim=int(eval_args.embedding_dim),
         projection_dim=int(eval_args.projection_dim),
         args=eval_args,
-        backbone_name=str(getattr(eval_args, "backbone", "efficientnet_b0")),
+        backbone_name=str(getattr(eval_args, "backbone", "convnextv2_nano")),
     ).to(device=device, dtype=model_dtype_for_args(eval_args))
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()

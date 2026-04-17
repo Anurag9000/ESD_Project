@@ -14,7 +14,7 @@ Outputs per split (written to --output-dir):
 
 Usage (from repo root, venv activated):
     python scripts/eval_splits_no_aug.py \\
-        --checkpoint Results/efficientnet_b0_master_run/loss_cleanup/best.pt \\
+        --checkpoint Results/convnextv2_nano_master_run/loss_cleanup/best.pt \\
         --dataset-root Dataset_Final \\
         --batch-size 224
 """
@@ -438,7 +438,7 @@ def main() -> int:
         embedding_dim=embedding_dim,
         projection_dim=projection_dim,
         args=model_args,
-        backbone_name=str(ckpt_args.get("backbone", "efficientnet_b0")),
+        backbone_name=str(ckpt_args.get("backbone", "convnextv2_nano")),
     ).to(device=device, dtype=model_dtype)
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()

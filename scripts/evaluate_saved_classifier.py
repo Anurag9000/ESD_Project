@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--dataset-root", default="")
     parser.add_argument("--batch-size", type=int, default=224)
-    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--max-eval-batches", type=int, default=0)
     parser.add_argument("--confidence-threshold", type=float, default=None)
     parser.add_argument("--selected-class", action="append", default=[])
@@ -63,9 +63,9 @@ def make_eval_args(checkpoint_args: dict[str, Any], cli_args: argparse.Namespace
     merged.setdefault("seed", 42)
     merged.setdefault("auto_split_ratios", "0.7,0.2,0.1")
     merged.setdefault("weights", "default")
-    merged.setdefault("backbone", "efficientnet_b0")
-    merged.setdefault("embedding_dim", 512)
-    merged.setdefault("projection_dim", 256)
+    merged.setdefault("backbone", "convnextv2_nano")
+    merged.setdefault("embedding_dim", 128)
+    merged.setdefault("projection_dim", 128)
     merged.setdefault("precision", "mixed")
     merged.setdefault("log_eval_every_steps", 1000)
     return argparse.Namespace(**merged)
@@ -126,7 +126,7 @@ def main() -> int:
         embedding_dim=int(eval_args.embedding_dim),
         projection_dim=int(eval_args.projection_dim),
         args=eval_args,
-        backbone_name=str(getattr(eval_args, "backbone", "efficientnet_b0")),
+        backbone_name=str(getattr(eval_args, "backbone", "convnextv2_nano")),
     ).to(device=device, dtype=model_dtype_for_args(eval_args))
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
