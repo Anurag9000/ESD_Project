@@ -1076,7 +1076,10 @@ class BalancedClassEpochSampler(Sampler[int]):
         missing_classes = [self.classes[class_index] for class_index, count in enumerate(class_counts) if count <= 0]
         if missing_classes:
             raise ValueError(f"Balanced sampling requires at least one sample in every class; missing: {missing_classes}")
-        self.num_batches = min(count // self.samples_per_class for count in class_counts)
+        # One epoch should cover the full source corpus, so we size the epoch by
+        # the largest class and let smaller classes repeat only as needed to keep
+        # batches class-balanced.
+        self.num_batches = max(math.ceil(count / self.samples_per_class) for count in class_counts)
         if self.num_batches <= 0:
             raise ValueError(
                 "Balanced sampling cannot form a full batch with the available class counts. "
@@ -1103,7 +1106,12 @@ class BalancedClassEpochSampler(Sampler[int]):
             if not source_indices:
                 continue
             rng.shuffle(source_indices)
-            per_class_streams[class_index] = source_indices[: self.num_batches * self.samples_per_class]
+            target_len = self.num_batches * self.samples_per_class
+            stream: list[int] = []
+            while len(stream) < target_len:
+                stream.extend(source_indices)
+                rng.shuffle(source_indices)
+            per_class_streams[class_index] = stream[:target_len]
 
         flat_indices: list[int] = []
         for batch_index in range(self.num_batches):
