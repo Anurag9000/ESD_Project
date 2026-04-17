@@ -21,22 +21,29 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from torch import nn
 from torch.optim import AdamW, Optimizer
-from torch.utils.checkpoint import checkpoint_sequential
 from torch.utils.data import DataLoader, Dataset, Sampler, get_worker_info
 from torchvision import datasets
-from torchvision.models import EfficientNet_B0_Weights, efficientnet_b0
 from torchvision.transforms import InterpolationMode
 from torchvision.transforms import functional as TF
 from tqdm import tqdm
 
+try:
+    import timm
+except ImportError:  # pragma: no cover - surfaced explicitly when backbone creation is attempted
+    timm = None
+
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
+DEFAULT_BACKBONE_NAME = "convnextv2_nano"
 SPLIT_OFFSETS = {"train": 0, "val": 10_000_000, "test": 20_000_000}
 SHADOW_PROBABILITY = 0.20
 GLARE_PROBABILITY = 0.25
@@ -58,6 +65,56 @@ class PhaseSpec:
     name: str
     unfrozen_backbone_modules: int
     max_epochs: int
+
+
+@dataclass(frozen=True)
+class BackboneSpec:
+    pretrained_name: str
+    scratch_name: str
+    description: str
+
+
+BACKBONE_REGISTRY: dict[str, BackboneSpec] = {
+    "convnextv2_nano": BackboneSpec(
+        pretrained_name="convnextv2_nano.fcmae_ft_in1k",
+        scratch_name="convnextv2_nano",
+        description="ConvNeXt V2 Nano FCMAE",
+    ),
+    "convnextv2_tiny": BackboneSpec(
+        pretrained_name="convnextv2_tiny.fcmae_ft_in1k",
+        scratch_name="convnextv2_tiny",
+        description="ConvNeXt V2 Tiny FCMAE",
+    ),
+    "efficientnet_b0": BackboneSpec(
+        pretrained_name="efficientnet_b0",
+        scratch_name="efficientnet_b0",
+        description="EfficientNet-B0",
+    ),
+    "efficientnetv2_s": BackboneSpec(
+        pretrained_name="efficientnetv2_s",
+        scratch_name="efficientnetv2_s",
+        description="EfficientNetV2-S",
+    ),
+}
+
+
+def ensure_timm_available() -> None:
+    if timm is None:
+        raise ImportError(
+            "timm is required for backbone selection. Install the repo dependencies from requirements-cu128.txt."
+        )
+
+
+def create_backbone(backbone_name: str, weights_mode: str) -> nn.Module:
+    ensure_timm_available()
+    if backbone_name not in BACKBONE_REGISTRY:
+        raise ValueError(
+            f"Unknown backbone {backbone_name!r}. Available options: {sorted(BACKBONE_REGISTRY)}"
+        )
+    spec = BACKBONE_REGISTRY[backbone_name]
+    pretrained = weights_mode == "default"
+    model_name = spec.pretrained_name if pretrained else spec.scratch_name
+    return timm.create_model(model_name, pretrained=pretrained, num_classes=0)
 
 
 class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
@@ -772,15 +829,21 @@ class MetricLearningEfficientNetB0(nn.Module):
         embedding_dim: int,
         projection_dim: int,
         args: argparse.Namespace,
+        backbone_name: str = "efficientnet_b0",
     ) -> None:
         super().__init__()
-        weights = EfficientNet_B0_Weights.DEFAULT if weights_mode == "default" else None
-        backbone = efficientnet_b0(weights=weights)
+        self.backbone_name = backbone_name
+        backbone = create_backbone(backbone_name, weights_mode)
         self.front_end = nn.Identity()
         self.backbone = backbone
-        self.in_features = backbone.classifier[1].in_features
-        self.dropout_p = backbone.classifier[0].p if isinstance(backbone.classifier[0], nn.Dropout) else 0.0
+        self.in_features = int(getattr(backbone, "num_features"))
+        self.dropout_p = float(getattr(backbone, "drop_rate", 0.0) or 0.0)
         self.gradient_checkpointing = True
+        if self.gradient_checkpointing and hasattr(self.backbone, "set_grad_checkpointing"):
+            try:
+                self.backbone.set_grad_checkpointing(True)
+            except TypeError:
+                self.backbone.set_grad_checkpointing(enable=True)
         self.checkpoint_segments = 4
         self.embedding = nn.Linear(self.in_features, embedding_dim, bias=False)
         self.embedding_norm = nn.LayerNorm(embedding_dim)
@@ -793,11 +856,14 @@ class MetricLearningEfficientNetB0(nn.Module):
 
     def forward_backbone(self, x: torch.Tensor) -> torch.Tensor:
         x = self.front_end(x)
-        if self.training and self.gradient_checkpointing:
-            x = checkpoint_sequential(self.backbone.features, self.checkpoint_segments, x, use_reentrant=False)
+        if hasattr(self.backbone, "forward_features"):
+            x = self.backbone.forward_features(x)
         else:
-            x = self.backbone.features(x)
-        x = self.backbone.avgpool(x)
+            x = self.backbone(x)
+        if isinstance(x, (list, tuple)):
+            x = x[-1]
+        if x.ndim == 4:
+            x = F.adaptive_avg_pool2d(x, 1)
         x = torch.flatten(x, 1)
         x = F.dropout(x, p=self.dropout_p, training=self.training)
         return x
@@ -1426,11 +1492,13 @@ def build_classifier_phase_plan(total_modules: int, args: argparse.Namespace) ->
 
 def backbone_leaf_modules(model: MetricLearningEfficientNetB0) -> list[tuple[str, nn.Module]]:
     modules: list[tuple[str, nn.Module]] = []
-    for name, module in model.backbone.features.named_modules():
+    for name, module in model.backbone.named_modules():
         if not name:
             continue
+        if list(module.children()):
+            continue
         if any(True for _ in module.parameters(recurse=False)):
-            modules.append((f"backbone.features.{name}", module))
+            modules.append((f"backbone.{name}", module))
     return modules
 
 
@@ -1439,7 +1507,7 @@ def set_trainability_for_supcon(
     backbone_modules: list[tuple[str, nn.Module]],
     unfrozen_backbone_modules: int,
 ) -> list[str]:
-    for parameter in model.backbone.features.parameters():
+    for parameter in model.backbone.parameters():
         parameter.requires_grad = False
     for parameter in model.embedding.parameters():
         parameter.requires_grad = True
@@ -1457,7 +1525,7 @@ def set_trainability_for_supcon(
         return []
     thawed = backbone_modules[-unfrozen_backbone_modules:]
     for _, module in thawed:
-        for parameter in module.parameters(recurse=False):
+        for parameter in module.parameters(recurse=True):
             parameter.requires_grad = True
     return [name for name, _ in thawed]
 
@@ -1467,7 +1535,7 @@ def set_trainability_for_classifier(
     backbone_modules: list[tuple[str, nn.Module]],
     unfrozen_backbone_modules: int,
 ) -> list[str]:
-    for parameter in model.backbone.features.parameters():
+    for parameter in model.backbone.parameters():
         parameter.requires_grad = False
     for parameter in model.embedding.parameters():
         parameter.requires_grad = True
@@ -1485,7 +1553,7 @@ def set_trainability_for_classifier(
         return []
     thawed = backbone_modules[-unfrozen_backbone_modules:]
     for _, module in thawed:
-        for parameter in module.parameters(recurse=False):
+        for parameter in module.parameters(recurse=True):
             parameter.requires_grad = True
     return [name for name, _ in thawed]
 
@@ -1558,7 +1626,7 @@ def build_supcon_optimizer(
     head_ids = {id(parameter) for parameter in head_params}
     backbone_params = [
         parameter
-        for parameter in model.backbone.features.parameters()
+        for parameter in model.backbone.parameters()
         if parameter.requires_grad and id(parameter) not in head_ids
     ]
     param_groups = []
@@ -1618,7 +1686,7 @@ def build_classifier_optimizer(
     head_ids = {id(parameter) for parameter in head_params}
     backbone_params = [
         parameter
-        for parameter in model.backbone.features.parameters()
+        for parameter in model.backbone.parameters()
         if parameter.requires_grad and id(parameter) not in head_ids
     ]
     param_groups = []
@@ -2610,6 +2678,7 @@ def compute_classification_metrics(
         * max(total_samples * total_samples - float(np.dot(p_sum, p_sum)), 0.0)
     )
     mcc = mcc_num / mcc_den if mcc_den > 0 else 0.0
+    calibration = compute_calibration_metrics(probabilities, targets)
 
     return {
         "num_classes": num_classes,
@@ -2633,9 +2702,170 @@ def compute_classification_metrics(
         "weighted_pr_auc_ovr": weighted_pr_auc,
         "cohen_kappa": float(cohen_kappa),
         "mcc": float(mcc),
+        "calibration": calibration,
         "confusion_matrix": cm.tolist(),
         "per_class": per_class,
     }
+
+
+def compute_calibration_metrics(probabilities: np.ndarray, targets: np.ndarray, num_bins: int = 15) -> dict[str, Any]:
+    if probabilities.size == 0 or targets.size == 0:
+        return {
+            "num_bins": int(num_bins),
+            "expected_calibration_error": 0.0,
+            "maximum_calibration_error": 0.0,
+            "brier_score": 0.0,
+            "negative_log_likelihood": 0.0,
+            "average_confidence": 0.0,
+            "confidence_std": 0.0,
+            "bins": [],
+        }
+
+    confidences = probabilities.max(axis=1)
+    predictions = probabilities.argmax(axis=1)
+    correctness = (predictions == targets).astype(np.float64)
+    bin_edges = np.linspace(0.0, 1.0, num_bins + 1)
+    bin_indices = np.clip(np.digitize(confidences, bin_edges[1:-1], right=False), 0, num_bins - 1)
+
+    bins: list[dict[str, Any]] = []
+    ece = 0.0
+    mce = 0.0
+    sample_count = float(len(confidences))
+    for bin_index in range(num_bins):
+        mask = bin_indices == bin_index
+        count = int(mask.sum())
+        lower = float(bin_edges[bin_index])
+        upper = float(bin_edges[bin_index + 1])
+        midpoint = 0.5 * (lower + upper)
+        if count == 0:
+            bins.append(
+                {
+                    "bin_index": bin_index,
+                    "lower_edge": lower,
+                    "upper_edge": upper,
+                    "midpoint": midpoint,
+                    "count": 0,
+                    "accuracy": None,
+                    "confidence": None,
+                    "gap": None,
+                }
+            )
+            continue
+        bin_accuracy = float(correctness[mask].mean())
+        bin_confidence = float(confidences[mask].mean())
+        gap = abs(bin_accuracy - bin_confidence)
+        ece += (count / sample_count) * gap
+        mce = max(mce, gap)
+        bins.append(
+            {
+                "bin_index": bin_index,
+                "lower_edge": lower,
+                "upper_edge": upper,
+                "midpoint": midpoint,
+                "count": count,
+                "accuracy": bin_accuracy,
+                "confidence": bin_confidence,
+                "gap": gap,
+            }
+        )
+
+    target_one_hot = np.zeros_like(probabilities, dtype=np.float64)
+    target_one_hot[np.arange(len(targets)), targets] = 1.0
+    brier_score = float(np.mean(np.sum((probabilities - target_one_hot) ** 2, axis=1)))
+    nll = float(-np.mean(np.log(np.take_along_axis(probabilities, targets[:, None], axis=1).squeeze(1) + 1e-12)))
+    return {
+        "num_bins": int(num_bins),
+        "expected_calibration_error": float(ece),
+        "maximum_calibration_error": float(mce),
+        "brier_score": brier_score,
+        "negative_log_likelihood": nll,
+        "average_confidence": float(confidences.mean()),
+        "confidence_std": float(confidences.std()),
+        "bins": bins,
+    }
+
+
+def save_reliability_diagram(path: Path, calibration: dict[str, Any], title: str) -> None:
+    bins = calibration.get("bins", [])
+    if not bins:
+        fig, ax = plt.subplots(figsize=(7, 7))
+        ax.text(0.5, 0.5, "No calibration data", ha="center", va="center")
+        ax.set_axis_off()
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return
+
+    valid_bins = [bin_item for bin_item in bins if bin_item.get("count", 0) > 0]
+    if not valid_bins:
+        fig, ax = plt.subplots(figsize=(7, 7))
+        ax.text(0.5, 0.5, "No calibration data", ha="center", va="center")
+        ax.set_axis_off()
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return
+
+    centers = [float(item["midpoint"]) for item in bins]
+    accuracies = [float(item["accuracy"]) if item["accuracy"] is not None else 0.0 for item in bins]
+    confidences = [float(item["confidence"]) if item["confidence"] is not None else 0.0 for item in bins]
+    counts = [int(item["count"]) for item in bins]
+    max_count = max(counts) if counts else 1
+
+    fig, ax = plt.subplots(figsize=(8, 8))
+    ax.plot([0, 1], [0, 1], linestyle="--", color="#888888", linewidth=1.2, label="Perfect calibration")
+    widths = 1.0 / max(1, len(bins))
+    ax.bar(
+        centers,
+        accuracies,
+        width=widths,
+        color="#4C78A8",
+        alpha=0.75,
+        edgecolor="white",
+        linewidth=0.6,
+        label="Accuracy",
+    )
+    ax.plot(centers, confidences, marker="o", color="#F58518", linewidth=2.0, label="Confidence")
+    for center, accuracy, confidence, count in zip(centers, accuracies, confidences, counts):
+        if count <= 0:
+            continue
+        ax.text(
+            center,
+            max(accuracy, confidence) + 0.02,
+            str(count),
+            ha="center",
+            va="bottom",
+            fontsize=7,
+            rotation=90,
+        )
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.05)
+    ax.set_xlabel("Confidence")
+    ax.set_ylabel("Empirical accuracy")
+    ax.set_title(title)
+    ax.grid(True, alpha=0.2)
+    ax.legend(loc="lower right")
+    fig.savefig(path, dpi=160, bbox_inches="tight")
+    plt.close(fig)
+
+
+def save_confidence_histogram(path: Path, probabilities: np.ndarray, title: str) -> None:
+    if probabilities.size == 0:
+        fig, ax = plt.subplots(figsize=(7, 5))
+        ax.text(0.5, 0.5, "No confidence data", ha="center", va="center")
+        ax.set_axis_off()
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return
+
+    confidence = probabilities.max(axis=1)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.hist(confidence, bins=20, range=(0.0, 1.0), color="#54A24B", alpha=0.85, edgecolor="white")
+    ax.set_xlim(0.0, 1.0)
+    ax.set_xlabel("Confidence")
+    ax.set_ylabel("Sample count")
+    ax.set_title(title)
+    ax.grid(True, axis="y", alpha=0.2)
+    fig.savefig(path, dpi=160, bbox_inches="tight")
+    plt.close(fig)
 
 
 def compute_correct_confidence_by_class(
@@ -2931,8 +3161,14 @@ def log_json_event(path: Path, payload: dict[str, Any]) -> None:
     
     # Log to CSV
     csv_name = "train_metrics.csv"
-    if payload.get("event") in ["validation_finished", "eval_step", "final_evaluation_finished"]:
+    split = payload.get("split")
+    event = payload.get("event")
+    if event == "train_step":
+        csv_name = "train_metrics.csv"
+    elif split == "val" and event in {"validation_finished", "eval_step", "final_evaluation_finished"}:
         csv_name = "val_metrics.csv"
+    elif split == "test" and event in {"final_test_evaluation_finished", "eval_step"}:
+        csv_name = "test_metrics.csv"
     append_to_csv(path.parent / csv_name, payload)
     
     # Log to JSONL
@@ -3307,7 +3543,7 @@ def parse_targeted_confusion_penalty_specs(specs: list[str], class_to_idx: dict[
 
 def build_parser() -> argparse.ArgumentParser:
     description = (
-        "EfficientNet-B0 staged training pipeline: "
+        "Configurable backbone staged training pipeline: "
         "(1) SupCon head-only warm-up [frozen backbone] → "
         "(2) SupCon progressive backbone unfreezing [20 leaf modules/step, capped semantic tail] → "
         "(3) CE head-only warm-up [backbone re-frozen] → "
@@ -3315,7 +3551,7 @@ def build_parser() -> argparse.ArgumentParser:
         "(5) Recursive val_loss refinement → "
         "(6) Recursive val_raw_acc refinement. "
         "Checkpoints saved at every step, validation, and phase transition. "
-        "Per-epoch clean test-set visual audits are available by default."
+        "Per-epoch clean test-set visual audits, calibration reports, and optional Grad-CAM exports are available."
     )
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--dataset-root", default="Dataset_Final")
@@ -3357,6 +3593,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--head-lr", type=float, default=1e-3)
     parser.add_argument("--backbone-lr", type=float, default=1e-5)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--backbone", choices=sorted(BACKBONE_REGISTRY), default=DEFAULT_BACKBONE_NAME)
     parser.add_argument("--optimizer", choices=["sam", "adamw"], default="adamw")
     parser.add_argument("--precision", choices=("mixed", "32", "64"), default="mixed")
     parser.add_argument("--adam-beta1", type=float, default=0.9)
@@ -3647,7 +3884,7 @@ def run_experiment(args: argparse.Namespace) -> int:
     torch.backends.cudnn.benchmark = True
     if str(args.precision) in {"32", "mixed"}:
         torch.set_float32_matmul_precision("high")
-    model_name = "efficientnet_b0_metric_learning"
+    model_name = f"{args.backbone}_metric_learning"
 
     requested_output_dir = Path(args.output_dir)
     requested_log_path = Path(args.log_file)
@@ -3778,6 +4015,7 @@ def run_experiment(args: argparse.Namespace) -> int:
         embedding_dim=args.embedding_dim,
         projection_dim=args.projection_dim,
         args=args,
+        backbone_name=args.backbone,
     ).to(device=device, dtype=model_dtype)
     if resume_checkpoint is not None:
         model.load_state_dict(checkpoint_state_for_mode(resume_checkpoint, args.resume_mode))
@@ -4620,6 +4858,15 @@ def run_experiment(args: argparse.Namespace) -> int:
                         "val_loss": val_loss,
                         "val_acc": val_acc,
                         "val_raw_acc": val_raw_acc,
+                        "val_macro_precision": val_metrics["macro_precision"],
+                        "val_macro_recall": val_metrics["macro_recall"],
+                        "val_macro_f1": val_metrics["macro_f1"],
+                        "val_weighted_precision": val_metrics["weighted_precision"],
+                        "val_weighted_recall": val_metrics["weighted_recall"],
+                        "val_weighted_f1": val_metrics["weighted_f1"],
+                        "val_ece": val_metrics["calibration"]["expected_calibration_error"],
+                        "val_brier_score": val_metrics["calibration"]["brier_score"],
+                        "val_nll": val_metrics["calibration"]["negative_log_likelihood"],
                     },
                 )
                 if improved_classifier_selection_metric(
@@ -4700,6 +4947,15 @@ def run_experiment(args: argparse.Namespace) -> int:
                     "val_loss": val_loss,
                     "val_acc": val_acc,
                     "val_raw_acc": val_raw_acc,
+                    "val_macro_precision": val_metrics["macro_precision"],
+                    "val_macro_recall": val_metrics["macro_recall"],
+                    "val_macro_f1": val_metrics["macro_f1"],
+                    "val_weighted_precision": val_metrics["weighted_precision"],
+                    "val_weighted_recall": val_metrics["weighted_recall"],
+                    "val_weighted_f1": val_metrics["weighted_f1"],
+                    "val_ece": val_metrics["calibration"]["expected_calibration_error"],
+                    "val_brier_score": val_metrics["calibration"]["brier_score"],
+                    "val_nll": val_metrics["calibration"]["negative_log_likelihood"],
                     "phase_best_val_loss": phase_best_loss,
                     "phase_best_val_acc": phase_best_acc,
                     "phase_best_val_raw_acc": phase_best_raw_acc,
@@ -4920,12 +5176,44 @@ def run_experiment(args: argparse.Namespace) -> int:
         log_json_event(log_path, {"event": "final_evaluation_finished", "split": "test", "eval_batches": test_eval_batches})
 
     val_metrics = compute_classification_metrics(val_logits, val_targets, train_dataset.classes, args.confidence_threshold)
+    val_probabilities = torch.softmax(torch.from_numpy(val_logits), dim=1).numpy()
     if args.run_final_test:
         test_metrics = compute_classification_metrics(test_logits, test_targets, train_dataset.classes, args.confidence_threshold)
+        test_probabilities = torch.softmax(torch.from_numpy(test_logits), dim=1).numpy()
         test_correct_confidence = compute_correct_confidence_by_class(test_logits, test_targets, train_dataset.classes)  # noqa: F841
     else:
         test_metrics = {}
+        test_probabilities = np.empty((0, len(train_dataset.classes)), dtype=np.float32)
         log_json_event(log_path, {"event": "final_test_evaluation_skipped", "reason": "--run-final-test not set (default: protected holdout)"})
+
+    validation_summary = {
+        "split": "val",
+        "num_samples": val_metrics["num_samples"],
+        "raw_accuracy": val_metrics["raw_accuracy"],
+        "accuracy": val_metrics["accuracy"],
+        "top1_accuracy": val_metrics["top1_accuracy"],
+        "top3_accuracy": val_metrics["top3_accuracy"],
+        "macro_precision": val_metrics["macro_precision"],
+        "macro_recall": val_metrics["macro_recall"],
+        "macro_f1": val_metrics["macro_f1"],
+        "weighted_precision": val_metrics["weighted_precision"],
+        "weighted_recall": val_metrics["weighted_recall"],
+        "weighted_f1": val_metrics["weighted_f1"],
+        "balanced_accuracy": val_metrics["balanced_accuracy"],
+        "calibration": val_metrics["calibration"],
+        "per_class": val_metrics["per_class"],
+    }
+    save_json(output_dir / "validation_summary.json", validation_summary)
+    save_reliability_diagram(
+        output_dir / "validation_reliability_diagram.png",
+        val_metrics["calibration"],
+        "Validation Reliability Diagram",
+    )
+    save_confidence_histogram(
+        output_dir / "validation_confidence_histogram.png",
+        val_probabilities,
+        "Validation Confidence Histogram",
+    )
     save_confusion_matrix_plot(
         output_dir / "validation_confusion_matrix.png",
         np.asarray(val_metrics["confusion_matrix"], dtype=np.int64),
@@ -4933,6 +5221,55 @@ def run_experiment(args: argparse.Namespace) -> int:
         "Validation Confusion Matrix",
     )
     if args.run_final_test:
+        test_summary = {
+            "split": "test",
+            "num_samples": test_metrics["num_samples"],
+            "raw_accuracy": test_metrics["raw_accuracy"],
+            "accuracy": test_metrics["accuracy"],
+            "top1_accuracy": test_metrics["top1_accuracy"],
+            "top3_accuracy": test_metrics["top3_accuracy"],
+            "macro_precision": test_metrics["macro_precision"],
+            "macro_recall": test_metrics["macro_recall"],
+            "macro_f1": test_metrics["macro_f1"],
+            "weighted_precision": test_metrics["weighted_precision"],
+            "weighted_recall": test_metrics["weighted_recall"],
+            "weighted_f1": test_metrics["weighted_f1"],
+            "balanced_accuracy": test_metrics["balanced_accuracy"],
+            "calibration": test_metrics["calibration"],
+            "per_class": test_metrics["per_class"],
+        }
+        save_json(output_dir / "test_summary.json", test_summary)
+        log_json_event(
+            log_path,
+            {
+                "event": "final_test_evaluation_finished",
+                "split": "test",
+                "eval_batches": test_eval_batches,
+                "num_samples": test_metrics["num_samples"],
+                "raw_accuracy": test_metrics["raw_accuracy"],
+                "accuracy": test_metrics["accuracy"],
+                "macro_precision": test_metrics["macro_precision"],
+                "macro_recall": test_metrics["macro_recall"],
+                "macro_f1": test_metrics["macro_f1"],
+                "weighted_precision": test_metrics["weighted_precision"],
+                "weighted_recall": test_metrics["weighted_recall"],
+                "weighted_f1": test_metrics["weighted_f1"],
+                "balanced_accuracy": test_metrics["balanced_accuracy"],
+                "ece": test_metrics["calibration"]["expected_calibration_error"],
+                "brier_score": test_metrics["calibration"]["brier_score"],
+                "nll": test_metrics["calibration"]["negative_log_likelihood"],
+            },
+        )
+        save_reliability_diagram(
+            output_dir / "test_reliability_diagram.png",
+            test_metrics["calibration"],
+            "Test Reliability Diagram",
+        )
+        save_confidence_histogram(
+            output_dir / "test_confidence_histogram.png",
+            test_probabilities,
+            "Test Confidence Histogram",
+        )
         save_confusion_matrix_plot(
             output_dir / "test_confusion_matrix.png",
             np.asarray(test_metrics["confusion_matrix"], dtype=np.int64),
@@ -4950,6 +5287,8 @@ def run_experiment(args: argparse.Namespace) -> int:
         "history": history,
         "validation_metrics": val_metrics,
         "test_metrics": test_metrics,
+        "validation_summary": validation_summary,
+        "test_summary": test_summary if args.run_final_test else {},
         "best_val_loss": best_val_loss,
         "best_val_raw_acc": best_val_raw_acc,
     }
@@ -4957,6 +5296,7 @@ def run_experiment(args: argparse.Namespace) -> int:
 
     metrics = {
         "model_name": model_name,
+        "backbone": args.backbone,
         "device": str(device),
         "output_dir": str(output_dir),
         "log_file": str(log_path),
@@ -5024,5 +5364,7 @@ def run_experiment(args: argparse.Namespace) -> int:
         "history": history,
         "validation_metrics": val_metrics,
         "test_metrics": test_metrics,
+        "validation_summary": validation_summary,
+        "test_summary": test_summary if args.run_final_test else {},
     }
     return 0

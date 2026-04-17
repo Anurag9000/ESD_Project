@@ -21,7 +21,9 @@ from metric_learning_pipeline import (
     model_dtype_for_args,
     release_training_memory,
     save_confusion_matrix_plot,
+    save_confidence_histogram,
     save_json,
+    save_reliability_diagram,
 )
 
 
@@ -61,6 +63,7 @@ def make_eval_args(checkpoint_args: dict[str, Any], cli_args: argparse.Namespace
     merged.setdefault("seed", 42)
     merged.setdefault("auto_split_ratios", "0.7,0.2,0.1")
     merged.setdefault("weights", "default")
+    merged.setdefault("backbone", "efficientnet_b0")
     merged.setdefault("embedding_dim", 512)
     merged.setdefault("projection_dim", 256)
     merged.setdefault("precision", "mixed")
@@ -123,6 +126,7 @@ def main() -> int:
         embedding_dim=int(eval_args.embedding_dim),
         projection_dim=int(eval_args.projection_dim),
         args=eval_args,
+        backbone_name=str(getattr(eval_args, "backbone", "efficientnet_b0")),
     ).to(device=device, dtype=model_dtype_for_args(eval_args))
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
@@ -179,6 +183,7 @@ def main() -> int:
             float(eval_args.confidence_threshold),
         )
         confidence = compute_correct_confidence_by_class(collapsed_logits, collapsed_targets, runtime_class_names)
+        probabilities = torch.softmax(torch.from_numpy(collapsed_logits), dim=1).numpy()
         split_dir = output_dir / split
         split_dir.mkdir(parents=True, exist_ok=True)
         save_json(split_dir / "metrics.json", metrics)
@@ -188,12 +193,32 @@ def main() -> int:
             "num_samples": metrics["num_samples"],
             "raw_accuracy": metrics["raw_accuracy"],
             "accuracy": metrics["accuracy"],
+            "macro_precision": metrics["macro_precision"],
+            "macro_recall": metrics["macro_recall"],
             "macro_f1": metrics["macro_f1"],
+            "weighted_precision": metrics["weighted_precision"],
+            "weighted_recall": metrics["weighted_recall"],
+            "weighted_f1": metrics["weighted_f1"],
+            "balanced_accuracy": metrics["balanced_accuracy"],
+            "expected_calibration_error": metrics["calibration"]["expected_calibration_error"],
+            "maximum_calibration_error": metrics["calibration"]["maximum_calibration_error"],
+            "brier_score": metrics["calibration"]["brier_score"],
+            "negative_log_likelihood": metrics["calibration"]["negative_log_likelihood"],
             "class_names": runtime_class_names,
             "collapse": collapse_info,
             "source_class_counts": class_counts(dataset),
         }
         save_json(split_dir / "summary.json", split_summary)
+        save_reliability_diagram(
+            split_dir / "reliability_diagram.png",
+            metrics["calibration"],
+            f"{split.title()} Reliability Diagram",
+        )
+        save_confidence_histogram(
+            split_dir / "confidence_histogram.png",
+            probabilities,
+            f"{split.title()} Confidence Histogram",
+        )
         save_confusion_matrix_plot(
             split_dir / "confusion_matrix.png",
             torch.tensor(metrics["confusion_matrix"]).numpy(),

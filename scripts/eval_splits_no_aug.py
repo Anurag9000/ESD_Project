@@ -50,6 +50,10 @@ try:
         evaluation_tensor_from_image,
         model_dtype_for_args,
         allocate_split_counts,
+        compute_classification_metrics,
+        save_confidence_histogram,
+        save_json,
+        save_reliability_diagram,
     )
 except ModuleNotFoundError:
     import sys
@@ -59,6 +63,10 @@ except ModuleNotFoundError:
         evaluation_tensor_from_image,
         model_dtype_for_args,
         allocate_split_counts,
+        compute_classification_metrics,
+        save_confidence_histogram,
+        save_json,
+        save_reliability_diagram,
     )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -263,6 +271,8 @@ def evaluate_split(
     )
 
     confmat = np.zeros((n, n), dtype=np.int64)
+    logits_list: list[np.ndarray] = []
+    targets_list: list[np.ndarray] = []
     total_batches = len(loader)
 
     print(f"\n  ── {split_name.upper()} ─────────────────────────────────────────")
@@ -274,8 +284,12 @@ def evaluate_split(
             with torch.amp.autocast("cuda", enabled=use_autocast):
                 emb = model.encode(images)
                 logits = model.classify(emb, labels=None)
-            preds = logits.argmax(dim=1).cpu().numpy()
-            for tl, pl in zip(labels.numpy(), preds):
+            logits_np = logits.detach().cpu().numpy()
+            preds = logits_np.argmax(axis=1)
+            labels_np = labels.numpy()
+            logits_list.append(logits_np)
+            targets_list.append(labels_np)
+            for tl, pl in zip(labels_np, preds):
                 confmat[tl][pl] += 1
             if b_idx % 100 == 0 or b_idx == total_batches:
                 pct = b_idx / total_batches * 100
@@ -286,6 +300,10 @@ def evaluate_split(
     correct = int(np.trace(confmat))
     total   = int(confmat.sum())
     raw_acc = correct / max(1, total) * 100
+    logits_concat = np.concatenate(logits_list, axis=0) if logits_list else np.empty((0, n), dtype=np.float32)
+    targets_concat = np.concatenate(targets_list, axis=0) if targets_list else np.empty((0,), dtype=np.int64)
+    metrics = compute_classification_metrics(logits_concat, targets_concat, class_names, confidence_threshold=0.0)
+    probabilities = torch.softmax(torch.from_numpy(logits_concat), dim=1).numpy() if logits_concat.size else np.empty((0, n), dtype=np.float32)
     print(
         f"     Done ─ Raw Accuracy: \033[1m{raw_acc:.4f}%\033[0m"
         f"  ({correct:,} / {total:,})                    "
@@ -306,10 +324,19 @@ def evaluate_split(
     per_class: dict[str, dict[str, Any]] = {}
     for i, cls in enumerate(class_names):
         rt = int(confmat[i].sum())
+        tp = int(confmat[i][i])
+        fp = int(confmat[:, i].sum() - tp)
+        fn = int(confmat[i].sum() - tp)
+        precision = tp / max(1, tp + fp)
+        recall = tp / max(1, tp + fn)
+        f1 = 2 * precision * recall / max(precision + recall, 1e-12)
         per_class[cls] = {
             "total":   rt,
             "correct": int(confmat[i][i]),
             "acc_pct": round(confmat[i][i] / max(1, rt) * 100, 4),
+            "precision": round(precision, 6),
+            "recall": round(recall, 6),
+            "f1": round(f1, 6),
         }
 
     summary: dict[str, Any] = {
@@ -318,10 +345,33 @@ def evaluate_split(
         "raw_accuracy_pct": round(raw_acc, 6),
         "correct":        correct,
         "wrong":          total - correct,
+        "accuracy": metrics["accuracy"],
+        "macro_precision": metrics["macro_precision"],
+        "macro_recall": metrics["macro_recall"],
+        "macro_f1": metrics["macro_f1"],
+        "weighted_precision": metrics["weighted_precision"],
+        "weighted_recall": metrics["weighted_recall"],
+        "weighted_f1": metrics["weighted_f1"],
+        "balanced_accuracy": metrics["balanced_accuracy"],
+        "expected_calibration_error": metrics["calibration"]["expected_calibration_error"],
+        "maximum_calibration_error": metrics["calibration"]["maximum_calibration_error"],
+        "brier_score": metrics["calibration"]["brier_score"],
+        "negative_log_likelihood": metrics["calibration"]["negative_log_likelihood"],
+        "calibration": metrics["calibration"],
         "per_class":      per_class,
     }
     (output_dir / f"summary_{split_name}.json").write_text(
         json.dumps(summary, indent=2), encoding="utf-8"
+    )
+    save_reliability_diagram(
+        output_dir / f"reliability_diagram_{split_name}.png",
+        metrics["calibration"],
+        f"{split_name.upper()} Reliability Diagram",
+    )
+    save_confidence_histogram(
+        output_dir / f"confidence_histogram_{split_name}.png",
+        probabilities,
+        f"{split_name.upper()} Confidence Histogram",
     )
     return summary
 
@@ -388,6 +438,7 @@ def main() -> int:
         embedding_dim=embedding_dim,
         projection_dim=projection_dim,
         args=model_args,
+        backbone_name=str(ckpt_args.get("backbone", "efficientnet_b0")),
     ).to(device=device, dtype=model_dtype)
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()

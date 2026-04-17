@@ -153,7 +153,7 @@ Resume is fully automatic: re-running `./run_training.sh --batch-size 224` detec
 - **Augmentation:** 16× deterministic split-safe augmentation (train only; val/test use raw images)
 - **Class Balancing:** Balanced per-batch class cycling is the default and mandatory production path.
 - **Interpretability Audit:** At run start and after every completed epoch, the pipeline generates clean no-augmentation test-set visualizations:
-  global t-SNE, per-class t-SNE highlights, all-layer activation summaries, and a full test atlas.
+  global t-SNE, per-class t-SNE highlights, all-layer activation summaries, a full test atlas, calibration plots, and optional Grad-CAM overlays.
 - **Augmentation types:** Random crops, flips, colour jitter, Gaussian blur, shadow, glare, motion blur, defocus, resolution degradation, truncation, smudging
 
 ---
@@ -167,6 +167,6 @@ Resume is fully automatic: re-running `./run_training.sh --batch-size 224` detec
 
 ---
 
-## 8. Deferred Work
+## 8. Completed Additions
 
-- **Grad-CAM Localisation:** Classifier-side heatmap generation with approximate bounding box extraction. Explicitly deferred to post-training.
+- **Grad-CAM Localisation:** Classifier-side heatmap generation for class-specific overlays is available via `scripts/gradcam_classifier.py`.
