@@ -52,7 +52,7 @@ source .venv/bin/activate
 # Launches the full staged lifecycle automatically.
 # Defaults now include:
 # - eval every 0.01 epoch
-# - patience 5 across SupCon, CE head, CE stages, and recursive stages
+# - patience 3 across SupCon, CE head, CE stages, and recursive stages
 # - startup + per-epoch clean test-set visualizations
 ./run_training.sh --backbone convnextv2_nano --num-workers 2 --prefetch-factor 1
 ```

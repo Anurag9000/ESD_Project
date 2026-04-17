@@ -63,10 +63,10 @@ Defaults are the values used when the flag is omitted. Boolean defaults are show
 | `--eval-every-epochs` | `1.0` | Validation cadence in epochs. |
 | `--runtime-bad-sample-cleanup` | `false` | Delete unreadable samples during training and remove metadata entries. |
 | `--confidence-threshold` | `0.80` | Confidence threshold used in threshold-aware accuracy metrics. |
-| `--supcon-early-stopping-patience` | `5` | Patience for SupCon phases. |
-| `--head-early-stopping-patience` | `5` | Patience for classifier head warmup. |
-| `--stage-early-stopping-patience` | `5` | Patience for later classifier phases. |
-| `--early-stopping-min-delta` | `1e-4` | Minimum improvement required to reset patience. |
+| `--supcon-early-stopping-patience` | `3` | Patience for SupCon phases. |
+| `--head-early-stopping-patience` | `3` | Patience for classifier head warmup. |
+| `--stage-early-stopping-patience` | `3` | Patience for later classifier phases. |
+| `--early-stopping-min-delta` | `0.0` | Minimum improvement required to reset patience. |
 | `--warmup-epochs` | `0` | Scheduler warmup measured in epochs. |
 | `--warmup-steps` | `1024` | Scheduler warmup measured in steps. |
 | `--sam-rho` | `0.05` | SAM neighborhood radius. |
@@ -94,7 +94,7 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--initial-head-lr` | required | Initial head learning rate for refinement. |
 | `--initial-backbone-lr` | required | Initial backbone learning rate for refinement. |
 | `--batch-size` | `224` | Batch size forwarded to the trainer. |
-| `--patience` | `5` | Early-stopping patience forwarded to the trainer. |
+| `--patience` | `3` | Early-stopping patience forwarded to the trainer. |
 | `--eval-every-epochs` | `0.01` | Validation cadence forwarded to the trainer. |
 | `--dataset-root` | `Dataset_Final` | Dataset root forwarded to the trainer. |
 | `--optimizer` | `adamw` | Optimizer forwarded to the trainer. |
@@ -102,7 +102,7 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--weighted-sampling` | legacy alias | Sets weighted sampling for refinement. |
 | `--skip-supcon` | `false` | Skip SupCon in recursive refinement. |
 | `--resume-phase-index` | `1` | Resume phase index forwarded to the trainer. |
-| `--min-delta` | `1e-4` | Minimum metric delta required for accept/reject. |
+| `--min-delta` | `0.0` | Minimum metric delta required for accept/reject. |
 
 ## Evaluation: `scripts/evaluate_saved_classifier.py`
 
@@ -187,7 +187,7 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--output-checkpoint` | required | Destination for the accepted checkpoint. |
 | `--decision-json` | required | JSON file recording the accept/reject decision. |
 | `--metric` | required | Decision metric: `val_loss` or `val_raw_acc`. |
-| `--min-delta` | `1e-4` | Minimum improvement required to accept a candidate. |
+| `--min-delta` | `0.0` | Minimum improvement required to accept a candidate. |
 
 ## Recursive Bootstrap Derivation: `scripts/derive_recursive_bootstrap.py`
 
@@ -228,5 +228,4 @@ These are not `argparse` flags, but they control the shell wrappers and the acti
 - `run_training.sh` always injects `--dataset-root "$DATASET_ROOT"` and `--sampling-strategy balanced` into the progressive trainer.
 - `run_training.sh` auto-resumes from `step_last.pt` first, then `last.pt`.
 - `run_full_training_pipeline.sh` ignores user-supplied `--dataset-root`, `--batch-size`, `--output-dir`, `--log-file`, `--resume-checkpoint`, `--resume-mode`, `--resume-phase-index`, `--classifier-train-mode`, `--classifier-early-stopping-metric`, `--head-lr`, `--backbone-lr`, `--stage-early-stopping-patience`, and `--optimizer`.
-- `run_full_training_pipeline.sh` hardcodes the recursive refinement recipe to `batch-size 224`, `eval-every-epochs 0.01`, `patience 5`, `resume-phase-index 1`, `optimizer adamw`, `sampling-strategy balanced`, and `skip-supcon` for both recursive passes.
-
+- `run_full_training_pipeline.sh` hardcodes the recursive refinement recipe to `batch-size 224`, `eval-every-epochs 0.01`, `patience 3`, `resume-phase-index 1`, `optimizer adamw`, `sampling-strategy balanced`, and `skip-supcon` for both recursive passes.

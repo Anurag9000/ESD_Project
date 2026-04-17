@@ -45,7 +45,7 @@ def main() -> int:
     parser.add_argument("--output-checkpoint", required=True)
     parser.add_argument("--decision-json", required=True)
     parser.add_argument("--metric", choices=("val_loss", "val_raw_acc"), required=True)
-    parser.add_argument("--min-delta", type=float, default=1e-4)
+    parser.add_argument("--min-delta", type=float, default=0.0)
     args = parser.parse_args()
 
     candidate_path = Path(args.candidate_checkpoint)

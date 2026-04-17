@@ -65,7 +65,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--initial-head-lr", type=float, required=True)
     parser.add_argument("--initial-backbone-lr", type=float, required=True)
     parser.add_argument("--batch-size", type=int, default=224)
-    parser.add_argument("--patience", type=int, default=5)
+    parser.add_argument("--patience", type=int, default=3)
     parser.add_argument("--eval-every-epochs", type=float, default=0.01)
     parser.add_argument("--dataset-root", default="Dataset_Final")
     parser.add_argument("--optimizer", default="adamw")
@@ -73,7 +73,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weighted-sampling", action="store_true", help="Legacy alias for --sampling-strategy weighted.")
     parser.add_argument("--skip-supcon", action="store_true")
     parser.add_argument("--resume-phase-index", type=int, default=1)
-    parser.add_argument("--min-delta", type=float, default=1e-4)
+    parser.add_argument("--min-delta", type=float, default=0.0)
     parser.add_argument("extra_args", nargs=argparse.REMAINDER)
     return parser.parse_args()
 

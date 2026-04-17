@@ -70,7 +70,7 @@ python scripts/run_recursive_refinement.py \
   --optimizer adamw \
   --batch-size 224 \
   --eval-every-epochs 0.01 \
-  --patience 5 \
+  --patience 3 \
   --resume-phase-index 1 \
   "${FILTERED_ARGS[@]}"
 
@@ -114,7 +114,7 @@ python scripts/run_recursive_refinement.py \
   --optimizer adamw \
   --batch-size 224 \
   --eval-every-epochs 0.01 \
-  --patience 5 \
+  --patience 3 \
   --resume-phase-index 1 \
   "${FILTERED_ARGS[@]}"
 

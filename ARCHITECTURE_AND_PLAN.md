@@ -41,7 +41,7 @@ The pipeline follows the research-validated principle: **Contrastive representat
 | **Loss:**            | Supervised Contrastive (SupCon, temperature=0.07) |
 | **Head LR:**         | `3e-3` |
 | **Backbone LR:**     | `0.0` (frozen) |
-| **Stopping:**        | Early stopping patience=5 on SupCon val_loss |
+| **Stopping:**        | Early stopping patience=3 on SupCon val_loss |
 | **Goal:**            | Orient the randomly-initialised projection head into a stable contrastive attractor before touching backbone weights |
 
 ### Stage 2 — SupCon Last-20 Modules
@@ -51,7 +51,7 @@ The pipeline follows the research-validated principle: **Contrastive representat
 | **Loss:**            | Supervised Contrastive (SupCon) |
 | **Head LR:**         | `3e-3` |
 | **Backbone LR:**     | `5e-5` |
-| **Stopping:**        | Early stopping patience=5 on SupCon val_loss |
+| **Stopping:**        | Early stopping patience=3 on SupCon val_loss |
 | **Goal:**            | Start adapting only the semantic tail while the frozen core stays intact |
 
 ### Stage 3 — SupCon Last-40 Modules
@@ -62,7 +62,7 @@ The pipeline follows the research-validated principle: **Contrastive representat
 | **Loss:**            | Supervised Contrastive (SupCon) |
 | **Head LR:**         | `3e-3` |
 | **Backbone LR:**     | `5e-5` |
-| **Stopping:**        | Early stopping patience=5 on SupCon val_loss |
+| **Stopping:**        | Early stopping patience=3 on SupCon val_loss |
 | **Goal:**            | Adapt the high-level semantic representations specifically to distinguish waste categories (ewaste vs soft_plastic vs organic etc) while keeping universally-useful low-level encoders intact |
 
 ### Stage 4 — CE Head Warm-up (Backbone Re-frozen)
@@ -73,7 +73,7 @@ The pipeline follows the research-validated principle: **Contrastive representat
 | **Loss:**            | Cross-Entropy (label_smoothing=0.0 default) |
 | **Head LR:**         | `1e-3` |
 | **Backbone LR:**     | `0.0` (frozen) |
-| **Stopping:**        | Early stopping patience=5 on classifier val_loss/val_raw_acc |
+| **Stopping:**        | Early stopping patience=3 on classifier val_loss/val_raw_acc |
 | **Goal:**            | **Critical safety gate.** The `ce_head` is randomly initialised. Without this warm-up, random CE gradients would backpropagate into the carefully arranged contrastive embedding space and corrupt it. This phase stabilises the CE hyperplanes between the tight SupCon clusters before any backbone gradients flow. |
 
 ### Stage 5 — CE Last-20 Modules
@@ -83,7 +83,7 @@ The pipeline follows the research-validated principle: **Contrastive representat
 | **Loss:**            | Cross-Entropy |
 | **Head LR:**         | `1e-4` after exponential decay from the `1e-3` head-only phase |
 | **Backbone LR:**     | `1e-5` |
-| **Stopping:**        | Early stopping patience=5 on `val_loss` |
+| **Stopping:**        | Early stopping patience=3 on `val_loss` |
 | **Phase rejection:** | If a phase fails to beat the global best, its weights are NOT used to initialise the next phase (global best is restored) |
 | **Goal:**            | Begin supervised backbone adaptation while preserving the frozen core |
 
@@ -94,7 +94,7 @@ The pipeline follows the research-validated principle: **Contrastive representat
 | **Loss:**            | Cross-Entropy |
 | **Head LR:**         | `1e-5` |
 | **Backbone LR:**     | `1e-5` |
-| **Stopping:**        | Early stopping patience=5 on `val_loss` |
+| **Stopping:**        | Early stopping patience=3 on `val_loss` |
 | **Phase rejection:** | Same global-best gate as Stage 5 |
 | **Goal:**            | Final supervised semantic alignment before recursive cleanup |
 
