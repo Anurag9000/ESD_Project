@@ -3974,7 +3974,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--epoch-visualization-umap-thumbnail-limit",
         type=int,
-        default=1024,
+        default=0,
         help="Maximum number of thumbnails rendered on the UMAP map. Use 0 to render all thumbnails.",
     )
     parser.add_argument(

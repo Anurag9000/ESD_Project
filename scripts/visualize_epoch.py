@@ -21,16 +21,14 @@ from __future__ import annotations
 
 import argparse
 import sys
+import math
 from pathlib import Path
 
 import matplotlib
-matplotlib.use("Agg")  # No display needed — pure file output
-import matplotlib.pyplot as plt
-from matplotlib.offsetbox import AnnotationBbox, OffsetImage
 import numpy as np
 import torch
 import torch.nn.functional as F
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from sklearn.decomposition import PCA
 import umap
 from torch.utils.data import DataLoader
@@ -81,7 +79,7 @@ def generate_umap_thumbnail_map(
     output_dir: Path,
     epoch_label: str,
     max_samples: int = 0,
-    thumbnail_limit: int = 1024,
+    thumbnail_limit: int = 0,
     thumb_size: int = 48,
 ) -> None:
     print("  [UMAP] Extracting embeddings, predictions, and thumbnails …")
@@ -130,63 +128,113 @@ def generate_umap_thumbnail_map(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     palette = matplotlib.colormaps.get_cmap("tab10").resampled(len(class_names))
-    fig, ax = plt.subplots(figsize=(16, 14), dpi=150)
-
-    point_colors = np.array([palette(int(pred)) for pred in pred_np])
-    ax.scatter(
-        coords[:, 0],
-        coords[:, 1],
-        s=8,
-        alpha=0.10,
-        c=point_colors,
-        linewidths=0,
-    )
-
-    if thumbnail_limit > 0 and len(coords) > thumbnail_limit:
-        rng = np.random.default_rng(42)
-        selected = np.sort(rng.choice(len(coords), size=thumbnail_limit, replace=False))
-    else:
-        selected = np.arange(len(coords))
-
     x_min, y_min = coords.min(axis=0)
     x_max, y_max = coords.max(axis=0)
-    span = max(float(x_max - x_min), float(y_max - y_min), 1e-6)
-    zoom = max(0.18, min(0.58, 0.32 * (48 / max(thumb_size, 1))))
+    x_span = max(float(x_max - x_min), 1e-6)
+    y_span = max(float(y_max - y_min), 1e-6)
+    norm_x = (coords[:, 0] - x_min) / x_span
+    norm_y = (coords[:, 1] - y_min) / y_span
 
-    for idx in selected:
-        color = palette(int(pred_np[idx]))
-        imagebox = OffsetImage(thumb_np[idx], zoom=zoom)
-        ab = AnnotationBbox(
-            imagebox,
-            (coords[idx, 0], coords[idx, 1]),
-            frameon=True,
-            pad=0.12,
-            bboxprops=dict(edgecolor=color, linewidth=1.1, boxstyle="round,pad=0.05"),
+    render_count = len(coords) if thumbnail_limit <= 0 else min(len(coords), thumbnail_limit)
+    candidate_order = np.lexsort((norm_y, norm_x))
+    if render_count < len(candidate_order):
+        candidate_order = candidate_order[:render_count]
+
+    # Pack every sample into a distinct cell, using the UMAP location as the
+    # preferred cell and a greedy search for the nearest free neighbour when
+    # that slot is already occupied.
+    cols = max(1, int(math.ceil(math.sqrt(render_count * (x_span / y_span)))))
+    rows = max(1, int(math.ceil(render_count / cols)))
+    cell = max(thumb_size + 4, 8)
+    pad = 2
+    top_margin = 92
+    left_margin = 24
+    canvas_w = left_margin * 2 + cols * cell
+    canvas_h = top_margin + rows * cell + 24
+    canvas = Image.new("RGB", (canvas_w, canvas_h), (18, 18, 18))
+    draw = ImageDraw.Draw(canvas)
+    try:
+        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
+        small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
+    except OSError:
+        title_font = ImageFont.load_default()
+        small_font = ImageFont.load_default()
+
+    def _find_free_slot(target_r: int, target_c: int, occupied: np.ndarray) -> tuple[int, int]:
+        if not occupied[target_r, target_c]:
+            return target_r, target_c
+        max_radius = max(rows, cols)
+        for radius in range(1, max_radius):
+            r0 = max(0, target_r - radius)
+            r1 = min(rows - 1, target_r + radius)
+            c0 = max(0, target_c - radius)
+            c1 = min(cols - 1, target_c + radius)
+            for c in range(c0, c1 + 1):
+                if not occupied[r0, c]:
+                    return r0, c
+                if not occupied[r1, c]:
+                    return r1, c
+            for r in range(r0 + 1, r1):
+                if not occupied[r, c0]:
+                    return r, c0
+                if not occupied[r, c1]:
+                    return r, c1
+        for r in range(rows):
+            for c in range(cols):
+                if not occupied[r, c]:
+                    return r, c
+        return target_r, target_c
+
+    occupied = np.zeros((rows, cols), dtype=bool)
+    sample_count = 0
+    for idx in candidate_order:
+        target_r = int(round(norm_y[idx] * max(rows - 1, 0)))
+        target_c = int(round(norm_x[idx] * max(cols - 1, 0)))
+        slot_r, slot_c = _find_free_slot(target_r, target_c, occupied)
+        occupied[slot_r, slot_c] = True
+        sample_count += 1
+
+        x = left_margin + slot_c * cell + pad
+        y = top_margin + slot_r * cell + pad
+        thumb = Image.fromarray(thumb_np[idx])
+        canvas.paste(thumb, (x, y))
+        draw.rectangle(
+            [x - 1, y - 1, x + thumb_size + 1, y + thumb_size + 1],
+            outline=tuple(int(v * 255) for v in palette(int(pred_np[idx]))[:3]),
+            width=2,
         )
-        ax.add_artist(ab)
 
-    handles = [
-        plt.Line2D([0], [0], marker="o", color="w", label=cls_name,
-                   markerfacecolor=palette(cls_id), markersize=8)
-        for cls_id, cls_name in enumerate(class_names)
-    ]
-    ax.legend(handles=handles, loc="best", fontsize=8, frameon=True, ncol=2)
-    ax.set_title(
-        f"UMAP Thumbnail Map of Test Embeddings — {epoch_label}\n"
-        f"Thumbnails are colored by predicted class; background points show the full test embedding cloud.",
-        fontsize=14,
+    draw.text(
+        (left_margin, 18),
+        f"UMAP Thumbnail Map of Test Embeddings — {epoch_label}",
+        fill=(245, 245, 245),
+        font=title_font,
     )
-    ax.set_xlabel("UMAP dim 1")
-    ax.set_ylabel("UMAP dim 2")
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.grid(alpha=0.12)
-    ax.set_xlim(x_min - 0.05 * span, x_max + 0.05 * span)
-    ax.set_ylim(y_min - 0.05 * span, y_max + 0.05 * span)
-    fig.tight_layout()
+    draw.text(
+        (left_margin, 42),
+        f"All {len(coords):,} test samples are placed on the canvas; thumbnails shift to the nearest free cell when a slot is occupied.",
+        fill=(210, 210, 210),
+        font=small_font,
+    )
+    draw.text(
+        (left_margin, 60),
+        "Border color = predicted class.",
+        fill=(210, 210, 210),
+        font=small_font,
+    )
+    legend_y = 76
+    legend_x = left_margin
+    for cls_id, cls_name in enumerate(class_names):
+        color = tuple(int(v * 255) for v in palette(cls_id)[:3])
+        draw.rectangle([legend_x, legend_y, legend_x + 10, legend_y + 10], fill=color, outline=(255, 255, 255))
+        draw.text((legend_x + 14, legend_y - 1), cls_name, fill=(230, 230, 230), font=small_font)
+        legend_x += max(110, 10 + 14 + len(cls_name) * 6)
+        if legend_x > canvas_w - 160:
+            legend_x = left_margin
+            legend_y += 14
+
     output_path = output_dir / "umap_thumbnail_map.png"
-    fig.savefig(output_path, bbox_inches="tight")
-    plt.close(fig)
+    canvas.save(output_path)
     print(f"  [UMAP] Saved → {output_path}")
 
 # Main entry-point
@@ -200,8 +248,8 @@ def run(
     batch_size: int = 128,
     num_workers: int = 4,
     umap_max_samples: int = 0,
-    umap_thumbnail_limit: int = 1024,
-    umap_thumb_size: int = 48,
+    umap_thumbnail_limit: int = 0,
+    umap_thumb_size: int = 18,
 ) -> None:
     checkpoint_path = Path(checkpoint_path)
     output_dir = Path(output_dir)
@@ -281,7 +329,7 @@ def main() -> None:
         help="Optional cap for UMAP samples. Use 0 for the full test set.",
     )
     parser.add_argument(
-        "--umap-thumbnail-limit", type=int, default=1024,
+        "--umap-thumbnail-limit", type=int, default=0,
         help="Maximum number of thumbnails rendered on the UMAP map. Use 0 to render all thumbnails.",
     )
     args = parser.parse_args()
