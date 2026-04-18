@@ -4081,7 +4081,6 @@ def run_experiment(args: argparse.Namespace) -> int:
         else cpu_state_dict(model)
     )
     resume_state = dict(resume_checkpoint.get("resume", {})) if resume_checkpoint is not None else {}
-    resume_eval_needed = resume_checkpoint is not None
     resume_from_best_phase = resume_checkpoint is not None and args.resume_mode != "latest"
     if resume_from_best_phase:
         resume_state = {
@@ -4235,50 +4234,6 @@ def run_experiment(args: argparse.Namespace) -> int:
                         "reason": "missing_optimizer_or_scheduler_state",
                     },
                 )
-
-            if resume_eval_needed and same_resume_phase:
-                log_json_event(
-                    log_path,
-                    {
-                        "event": "resume_initial_val_pass",
-                        "stage": "supcon",
-                        "phase_index": supcon_phase_index,
-                        "phase_name": supcon_phase.name,
-                        "reason": "user_verification",
-                    },
-                )
-                init_val_loss = evaluate_supcon(
-                    model=model,
-                    loader=supcon_val_loader,
-                    criterion=supcon_loss,
-                    device=device,
-                    max_batches=args.max_eval_batches,
-                    log_path=log_path,
-                    log_every_eval_steps=args.log_eval_every_steps,
-                    stage="supcon",
-                    split="val",
-                    eval_context={
-                        "phase_index": supcon_phase_index,
-                        "phase_name": supcon_phase.name,
-                        "epoch_in_phase": int(resume_state.get("epoch", 1)),
-                        "validation_index": int(resume_state.get("validation_index", 0)),
-                        "epoch_step": int(resume_state.get("epoch_step_completed", 0)),
-                        "global_train_step": train_progress["global_train_step"],
-                        "is_initial_resume_eval": True,
-                    },
-                    args=args,
-                )
-                log_json_event(
-                    log_path,
-                    {
-                        "event": "resume_initial_val_finished",
-                        "stage": "supcon",
-                        "phase_index": supcon_phase_index,
-                        "phase_name": supcon_phase.name,
-                        "val_loss": init_val_loss,
-                    },
-                )
-                resume_eval_needed = False
 
             supcon_steps_full_epoch = steps_per_epoch_for_sampler(
                 supcon_sampler, supcon_train_dataset, args.batch_size, args.max_train_batches
