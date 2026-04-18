@@ -92,6 +92,8 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--base-output-dir` | required | Root output directory for recursive refinement. |
 | `--base-log-file` | required | JSONL log file for recursive refinement. |
 | `--initial-checkpoint` | required | Seed checkpoint for the first refinement pass. |
+| `--backbone` | `convnextv2_nano` | Backbone name forwarded to the recursive trainer. |
+| `--weights` | `default` | Pretrained-weight mode forwarded to the recursive trainer. |
 | `--metric` | required | Accept/reject metric: `val_loss` or `val_raw_acc`. |
 | `--threshold` | required | Stop threshold for recursive refinement. |
 | `--initial-head-lr` | required | Initial head learning rate for refinement. |

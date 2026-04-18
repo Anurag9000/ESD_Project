@@ -60,6 +60,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base-output-dir", required=True)
     parser.add_argument("--base-log-file", required=True)
     parser.add_argument("--initial-checkpoint", required=True)
+    parser.add_argument("--backbone", default="convnextv2_nano")
+    parser.add_argument("--weights", default="default")
     parser.add_argument("--metric", choices=("val_loss", "val_raw_acc"), required=True)
     parser.add_argument("--threshold", type=float, required=True)
     parser.add_argument("--initial-head-lr", type=float, required=True)
@@ -215,6 +217,10 @@ def run_training(
         "scripts/train_efficientnet_b0_progressive.py",
         "--dataset-root",
         args.dataset_root,
+        "--backbone",
+        args.backbone,
+        "--weights",
+        args.weights,
         "--optimizer",
         args.optimizer,
         "--batch-size",
