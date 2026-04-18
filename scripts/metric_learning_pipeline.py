@@ -1893,13 +1893,9 @@ def train_supcon_epoch(
         with torch.no_grad():
             with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
                 batch_logits = model.classify(model.encode(view_one), labels=None)
-        batch_predictions, batch_confident_mask = confidence_qualified_predictions(
-            batch_logits,
-            args.confidence_threshold,
-        )
-        batch_raw_correct = int((batch_predictions == labels).sum().item())
-        batch_qualified_correct = int(((batch_predictions == labels) & batch_confident_mask).sum().item())
-        batch_per_class_confidence = per_class_average_confidence_from_logits(
+        batch_predictions = batch_logits.detach().argmax(dim=1)
+        batch_acc = float((batch_predictions == labels).float().mean().item())
+        batch_per_class_accuracy, batch_per_class_confidence = per_class_accuracy_and_confidence_from_logits(
             batch_logits,
             labels,
             getattr(loader.dataset, "classes", []),
@@ -1910,8 +1906,7 @@ def train_supcon_epoch(
         train_progress["global_source_samples_seen"] += batch_size
         progress.set_postfix(
             loss=f"{second_loss.item():.4f}",
-            acc=f"{batch_qualified_correct / max(1, batch_size):.4f}",
-            raw_acc=f"{batch_raw_correct / max(1, batch_size):.4f}",
+            acc=f"{batch_acc:.4f}",
         )
 
         if train_progress["global_train_step"] % log_every_steps == 0:
@@ -1927,9 +1922,9 @@ def train_supcon_epoch(
                 "epoch_source_samples_seen": total_seen,
                 "global_source_samples_seen": train_progress["global_source_samples_seen"],
                 "loss": float(second_loss.item()),
-                "acc": batch_qualified_correct / max(1, batch_size),
-                "raw_acc": batch_raw_correct / max(1, batch_size),
-            "per_class_avg_confidence": batch_per_class_confidence,
+                "acc": batch_acc,
+                "per_class_accuracy": batch_per_class_accuracy,
+                "per_class_avg_confidence": batch_per_class_confidence,
                 "learning_rates": optimizer_learning_rates(optimizer),
             }
             log_json_event(log_path, event)
@@ -2048,24 +2043,20 @@ def train_supcon_steps(
         with torch.no_grad():
             with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
                 batch_logits = model.classify(model.encode(view_one), labels=None)
-        batch_predictions, batch_confident_mask = confidence_qualified_predictions(
-            batch_logits,
-            args.confidence_threshold,
-        )
-        batch_raw_correct = int((batch_predictions == labels).sum().item())
-        batch_qualified_correct = int(((batch_predictions == labels) & batch_confident_mask).sum().item())
-        batch_per_class_confidence = per_class_average_confidence_from_logits(
+        batch_predictions = batch_logits.detach().argmax(dim=1)
+        batch_acc = float((batch_predictions == labels).float().mean().item())
+        batch_per_class_accuracy, batch_per_class_confidence = per_class_accuracy_and_confidence_from_logits(
             batch_logits,
             labels,
             class_names,
         )
         step_checkpoint_payload["last_batch_loss"] = float(second_loss.item())
-        step_checkpoint_payload["last_batch_acc"] = batch_qualified_correct / max(1, batch_size)
-        step_checkpoint_payload["last_batch_raw_acc"] = batch_raw_correct / max(1, batch_size)
+        step_checkpoint_payload["last_batch_acc"] = batch_acc
+        step_checkpoint_payload["last_batch_per_class_accuracy"] = batch_per_class_accuracy
         step_checkpoint_payload["last_batch_per_class_avg_confidence"] = batch_per_class_confidence
         step_resume_payload["last_batch_loss"] = float(second_loss.item())
-        step_resume_payload["last_batch_acc"] = batch_qualified_correct / max(1, batch_size)
-        step_resume_payload["last_batch_raw_acc"] = batch_raw_correct / max(1, batch_size)
+        step_resume_payload["last_batch_acc"] = batch_acc
+        step_resume_payload["last_batch_per_class_accuracy"] = batch_per_class_accuracy
         step_resume_payload["last_batch_per_class_avg_confidence"] = batch_per_class_confidence
         total_loss += second_loss.item() * batch_size
         total_seen += batch_size
@@ -2104,8 +2095,8 @@ def train_supcon_steps(
                 "epoch_source_samples_seen": total_seen,
                 "global_source_samples_seen": train_progress["global_source_samples_seen"],
                 "loss": float(second_loss.item()),
-                "acc": batch_qualified_correct / max(1, batch_size),
-                "raw_acc": batch_raw_correct / max(1, batch_size),
+                "acc": batch_acc,
+                "per_class_accuracy": batch_per_class_accuracy,
                 "per_class_avg_confidence": batch_per_class_confidence,
                 "learning_rates": optimizer_learning_rates(optimizer),
                 "phase_train_loss_best": best_train_loss,
@@ -2134,10 +2125,11 @@ def evaluate_supcon(
     split: str,
     eval_context: dict[str, object] | None = None,
     args: argparse.Namespace | None = None,
-) -> tuple[float, float | None]:
+) -> tuple[float, dict[str, dict[str, float | None] | float]]:
     model.eval()
     total_loss = 0.0
     total_seen = 0
+    total_correct = 0.0
     all_logits: list[torch.Tensor] = []
     all_targets: list[torch.Tensor] = []
     eval_context = dict(eval_context or {})
@@ -2160,11 +2152,14 @@ def evaluate_supcon(
                 proj_two = model.supcon_projection(emb_two)
                 loss = criterion(torch.stack([proj_one, proj_two], dim=1), labels)
                 logits = model.classify(emb_one, labels=None)
+            batch_predictions = logits.detach().argmax(dim=1)
+            batch_acc = float((batch_predictions == labels).float().mean().item())
             total_loss += loss.item() * labels.size(0)
             total_seen += labels.size(0)
+            total_correct += batch_acc * labels.size(0)
             all_logits.append(logits.detach().cpu())
             all_targets.append(labels.detach().cpu())
-            batch_per_class_confidence = per_class_average_confidence_from_logits(
+            batch_per_class_accuracy, batch_per_class_confidence = per_class_accuracy_and_confidence_from_logits(
                 logits,
                 labels,
                 getattr(loader.dataset, "classes", []),
@@ -2180,19 +2175,26 @@ def evaluate_supcon(
                         "batch_size": labels.size(0),
                         "samples_seen": total_seen,
                         "loss": float(loss.item()),
+                        "acc": batch_acc,
+                        "per_class_accuracy": batch_per_class_accuracy,
                         "per_class_avg_confidence": batch_per_class_confidence,
                         **eval_context,
                     },
                 )
     if all_logits and all_targets:
-        per_class_avg_confidence = per_class_average_confidence_from_logits(
+        per_class_accuracy, per_class_avg_confidence = per_class_accuracy_and_confidence_from_logits(
             torch.cat(all_logits, dim=0),
             torch.cat(all_targets, dim=0),
             getattr(loader.dataset, "classes", []),
         )
     else:
+        per_class_accuracy = {}
         per_class_avg_confidence = {}
-    return total_loss / max(1, total_seen), per_class_avg_confidence
+    return total_loss / max(1, total_seen), {
+        "accuracy": total_correct / max(1, total_seen),
+        "per_class_accuracy": per_class_accuracy,
+        "per_class_avg_confidence": per_class_avg_confidence,
+    }
 
 
 def classifier_loss(
@@ -2249,59 +2251,28 @@ def classifier_loss_from_logits(
     return total_loss, base_loss, confidence_penalty, targeted_penalty
 
 
-def confidence_qualified_predictions(logits: torch.Tensor, confidence_threshold: float) -> tuple[torch.Tensor, torch.Tensor]:
-    probabilities = torch.softmax(logits, dim=1)
-    confidence, predictions = probabilities.max(dim=1)
-    return predictions, confidence >= confidence_threshold
-
-
-def confidence_qualified_correct_count(
-    logits: torch.Tensor,
-    labels: torch.Tensor,
-    confidence_threshold: float,
-) -> tuple[int, int]:
-    predictions, confident_mask = confidence_qualified_predictions(logits, confidence_threshold)
-    raw_correct = (predictions == labels)
-    qualified_correct = raw_correct & confident_mask
-    return int(qualified_correct.sum().item()), int(raw_correct.sum().item())
-
-
-def average_classwise_confidence_from_logits(
+def per_class_accuracy_and_confidence_from_logits(
     logits: torch.Tensor,
     targets: torch.Tensor,
     class_names: list[str],
-) -> float | None:
+) -> tuple[dict[str, float | None], dict[str, float | None]]:
     if logits.numel() == 0 or targets.numel() == 0 or not class_names:
-        return None
+        return {}, {}
     probabilities = torch.softmax(logits.detach(), dim=1)
     confidences = probabilities.max(dim=1).values.detach().cpu()
+    predictions = logits.detach().argmax(dim=1).cpu()
     targets_cpu = targets.detach().cpu()
-    classwise_confidences: list[float] = []
-    for class_index in range(len(class_names)):
-        class_mask = targets_cpu == class_index
-        if class_mask.any():
-            classwise_confidences.append(float(confidences[class_mask].mean().item()))
-    return float(np.mean(classwise_confidences)) if classwise_confidences else None
-
-
-def per_class_average_confidence_from_logits(
-    logits: torch.Tensor,
-    targets: torch.Tensor,
-    class_names: list[str],
-) -> dict[str, float | None]:
-    if logits.numel() == 0 or targets.numel() == 0 or not class_names:
-        return {}
-    probabilities = torch.softmax(logits.detach(), dim=1)
-    confidences = probabilities.max(dim=1).values.detach().cpu()
-    targets_cpu = targets.detach().cpu()
+    per_class_accuracy: dict[str, float | None] = {}
     per_class_confidence: dict[str, float | None] = {}
     for class_index, class_name in enumerate(class_names):
         class_mask = targets_cpu == class_index
         if class_mask.any():
+            per_class_accuracy[class_name] = float((predictions[class_mask] == targets_cpu[class_mask]).float().mean().item())
             per_class_confidence[class_name] = float(confidences[class_mask].mean().item())
         else:
+            per_class_accuracy[class_name] = None
             per_class_confidence[class_name] = None
-    return per_class_confidence
+    return per_class_accuracy, per_class_confidence
 
 
 def format_per_class_confidence(per_class_confidence: dict[str, float | None] | None) -> str | None:
@@ -2336,7 +2307,6 @@ def train_classifier_epoch(
     freeze_frozen_batchnorms(backbone_modules)
     total_loss = 0.0
     total_correct = 0.0
-    total_raw_correct = 0.0
     total_base_loss = 0.0
     total_confidence_gap = 0.0
     total_targeted_penalty = 0.0
@@ -2379,35 +2349,34 @@ def train_classifier_epoch(
         with torch.no_grad():
             with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
                 eval_logits = model.classify(model.encode(images), labels=None)
-            qualified_correct, raw_correct = confidence_qualified_correct_count(eval_logits, labels, args.confidence_threshold)
-            per_class_avg_confidence = per_class_average_confidence_from_logits(
+            per_class_accuracy, per_class_avg_confidence = per_class_accuracy_and_confidence_from_logits(
                 eval_logits,
                 labels,
                 class_names,
             )
 
         batch_size = labels.size(0)
+        batch_predictions = eval_logits.detach().argmax(dim=1)
+        batch_acc = float((batch_predictions == labels).float().mean().item())
         step_checkpoint_payload["last_batch_loss"] = float(second_loss.item())
-        step_checkpoint_payload["last_batch_acc"] = qualified_correct / max(1, batch_size)
-        step_checkpoint_payload["last_batch_raw_acc"] = raw_correct / max(1, batch_size)
+        step_checkpoint_payload["last_batch_acc"] = batch_acc
+        step_checkpoint_payload["last_batch_per_class_accuracy"] = per_class_accuracy
         step_checkpoint_payload["last_batch_per_class_avg_confidence"] = per_class_avg_confidence
         step_resume_payload["last_batch_loss"] = float(second_loss.item())
-        step_resume_payload["last_batch_acc"] = qualified_correct / max(1, batch_size)
-        step_resume_payload["last_batch_raw_acc"] = raw_correct / max(1, batch_size)
+        step_resume_payload["last_batch_acc"] = batch_acc
+        step_resume_payload["last_batch_per_class_accuracy"] = per_class_accuracy
         step_resume_payload["last_batch_per_class_avg_confidence"] = per_class_avg_confidence
         total_loss += second_loss.item() * batch_size
         total_base_loss += second_base_loss.item() * batch_size
         total_confidence_gap += second_confidence_penalty.item() * batch_size
         total_targeted_penalty += second_targeted_penalty.item() * batch_size
-        total_correct += qualified_correct
-        total_raw_correct += raw_correct
+        total_correct += batch_acc * batch_size
         total_seen += batch_size
         train_progress["global_train_step"] += 1
         train_progress["global_source_samples_seen"] += batch_size
         progress.set_postfix(
             loss=f"{second_loss.item():.4f}",
-            acc=f"{qualified_correct / max(1, batch_size):.4f}",
-            raw_acc=f"{raw_correct / max(1, batch_size):.4f}",
+            acc=f"{batch_acc:.4f}",
         )
 
         if train_progress["global_train_step"] % log_every_steps == 0:
@@ -2426,10 +2395,9 @@ def train_classifier_epoch(
                 "base_loss": float(second_base_loss.item()),
                 "confidence_gap_penalty": float(second_confidence_penalty.item()),
                 "targeted_confusion_penalty": float(second_targeted_penalty.item()),
-                "acc": qualified_correct / max(1, batch_size),
-                "raw_acc": raw_correct / max(1, batch_size),
+                "acc": batch_acc,
+                "per_class_accuracy": per_class_accuracy,
                 "per_class_avg_confidence": per_class_avg_confidence,
-                "confidence_threshold": args.confidence_threshold,
                 "learning_rates": optimizer_learning_rates(optimizer),
             }
             log_json_event(log_path, event)
@@ -2460,12 +2428,11 @@ def train_classifier_steps(
     args: argparse.Namespace,
     step_checkpoint_payload: dict[str, Any] | None = None,
     step_resume_payload: dict[str, Any] | None = None,
-) -> tuple[float, float, float, int, int]:
+) -> tuple[float, float, int, int]:
     model.train()
     freeze_frozen_batchnorms(backbone_modules)
     total_loss = 0.0
     total_correct = 0.0
-    total_raw_correct = 0.0
     total_base_loss = 0.0
     total_confidence_gap = 0.0
     total_targeted_penalty = 0.0
@@ -2547,20 +2514,20 @@ def train_classifier_steps(
         with torch.no_grad():
             with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
                 eval_logits = model.classify(model.encode(images), labels=None)
-            qualified_correct, raw_correct = confidence_qualified_correct_count(eval_logits, labels, args.confidence_threshold)
-            per_class_avg_confidence = per_class_average_confidence_from_logits(
+            per_class_accuracy, per_class_avg_confidence = per_class_accuracy_and_confidence_from_logits(
                 eval_logits,
                 labels,
                 class_names,
             )
 
         batch_size = labels.size(0)
+        batch_predictions = eval_logits.detach().argmax(dim=1)
+        batch_acc = float((batch_predictions == labels).float().mean().item())
         total_loss += second_loss.item() * batch_size
         total_base_loss += second_base_loss.item() * batch_size
         total_confidence_gap += second_confidence_penalty.item() * batch_size
         total_targeted_penalty += second_targeted_penalty.item() * batch_size
-        total_correct += qualified_correct
-        total_raw_correct += raw_correct
+        total_correct += batch_acc * batch_size
         total_seen += batch_size
         steps_done += 1
         train_progress["global_train_step"] += 1
@@ -2600,10 +2567,9 @@ def train_classifier_steps(
                 "base_loss": float(second_base_loss.item()),
                 "confidence_gap_penalty": float(second_confidence_penalty.item()),
                 "targeted_confusion_penalty": float(second_targeted_penalty.item()),
-                "acc": qualified_correct / max(1, batch_size),
-                "raw_acc": raw_correct / max(1, batch_size),
+                "acc": batch_acc,
+                "per_class_accuracy": per_class_accuracy,
                 "per_class_avg_confidence": per_class_avg_confidence,
-                "confidence_threshold": args.confidence_threshold,
                 "learning_rates": optimizer_learning_rates(optimizer),
                 "phase_train_loss_best": best_train_loss,
                 "phase_train_loss_wait": train_loss_wait,
@@ -2619,7 +2585,6 @@ def train_classifier_steps(
     return (
         total_loss / max(1, total_seen),
         total_correct / max(1, total_seen),
-        total_raw_correct / max(1, total_seen),
         steps_done,
         total_seen,
     )
@@ -2642,7 +2607,6 @@ def evaluate_classifier(
     total_loss = 0.0
     total_seen = 0
     total_correct = 0.0
-    total_raw_correct = 0.0
     all_logits = []
     all_targets = []
     eval_context = dict(eval_context or {})
@@ -2663,9 +2627,9 @@ def evaluate_classifier(
                 logits = model.classify(embeddings, labels=None)
                 loss, _, _, _ = classifier_loss_from_logits(margin_logits, logits, labels, args)
             
-            threshold = args.confidence_threshold if args is not None else 0.8
-            qualified_correct, raw_correct = confidence_qualified_correct_count(logits, labels, threshold)
-            batch_per_class_avg_confidence = per_class_average_confidence_from_logits(
+            batch_predictions = logits.detach().argmax(dim=1)
+            batch_acc = float((batch_predictions == labels).float().mean().item())
+            batch_per_class_accuracy, batch_per_class_avg_confidence = per_class_accuracy_and_confidence_from_logits(
                 logits,
                 labels,
                 getattr(loader.dataset, "classes", []),
@@ -2673,15 +2637,12 @@ def evaluate_classifier(
             
             total_loss += loss.item() * labels.size(0)
             total_seen += labels.size(0)
-            total_correct += qualified_correct
-            total_raw_correct += raw_correct
+            total_correct += batch_acc * labels.size(0)
             
             all_logits.append(logits.detach().cpu().float().numpy())
             all_targets.append(labels.detach().cpu().numpy())
             
-            batch_acc = qualified_correct / max(1, labels.size(0))
-            batch_raw_acc = raw_correct / max(1, labels.size(0))
-            progress.set_postfix(step=eval_step, loss=f"{loss.item():.4f}", acc=f"{batch_acc:.4f}", raw_acc=f"{batch_raw_acc:.4f}")
+            progress.set_postfix(step=eval_step, loss=f"{loss.item():.4f}", acc=f"{batch_acc:.4f}")
             if eval_step % log_every_eval_steps == 0:
                 log_json_event(
                     log_path,
@@ -2694,7 +2655,7 @@ def evaluate_classifier(
                         "samples_seen": total_seen,
                         "loss": float(loss.item()),
                         "acc": batch_acc,
-                        "raw_acc": batch_raw_acc,
+                        "per_class_accuracy": batch_per_class_accuracy,
                         "per_class_avg_confidence": batch_per_class_avg_confidence,
                         **eval_context,
                     },
@@ -2724,8 +2685,6 @@ def collect_logits_and_labels(
     total_batches = min(len(loader), max_batches) if max_batches > 0 else len(loader)
     with torch.no_grad():
         total_seen = 0
-        total_correct = 0.0
-        total_raw_correct = 0.0
         progress = tqdm(
             enumerate(limited_batches(loader, max_batches), start=1),
             total=total_batches,
@@ -2745,9 +2704,9 @@ def collect_logits_and_labels(
                     logits = model.classify(embeddings, labels=None)
                     loss = None
             
-            threshold = args.confidence_threshold if args is not None else 0.8
-            qualified_correct, raw_correct = confidence_qualified_correct_count(logits, labels, threshold)
-            batch_per_class_avg_confidence = per_class_average_confidence_from_logits(
+            batch_predictions = logits.detach().argmax(dim=1)
+            batch_acc = float((batch_predictions == labels).float().mean().item())
+            batch_per_class_accuracy, batch_per_class_avg_confidence = per_class_accuracy_and_confidence_from_logits(
                 logits,
                 labels,
                 getattr(loader.dataset, "classes", []),
@@ -2757,12 +2716,8 @@ def collect_logits_and_labels(
             labels_list.append(labels.cpu())
             
             total_seen += labels.size(0)
-            total_correct += qualified_correct
-            total_raw_correct += raw_correct
             
-            batch_acc = qualified_correct / max(1, labels.size(0))
-            batch_raw_acc = raw_correct / max(1, labels.size(0))
-            postfix = {"step": eval_step, "acc": f"{batch_acc:.4f}", "raw_acc": f"{batch_raw_acc:.4f}"}
+            postfix = {"step": eval_step, "acc": f"{batch_acc:.4f}"}
             if loss is not None:
                 postfix["loss"] = f"{loss.item():.4f}"
             progress.set_postfix(**postfix)
@@ -2776,7 +2731,7 @@ def collect_logits_and_labels(
                     "batch_size": labels.size(0),
                     "samples_seen": total_seen,
                     "acc": batch_acc,
-                    "raw_acc": batch_raw_acc,
+                    "per_class_accuracy": batch_per_class_accuracy,
                     "per_class_avg_confidence": batch_per_class_avg_confidence,
                 }
                 if loss is not None:
@@ -2867,7 +2822,6 @@ def compute_classification_metrics(
     probabilities = torch.softmax(torch.from_numpy(logits), dim=1).numpy()
     predictions = logits.argmax(axis=1)
     confidence = probabilities.max(axis=1)
-    qualified_matches = (predictions == targets) & (confidence >= confidence_threshold)
     num_classes = len(class_names)
     support = np.bincount(targets, minlength=num_classes)
     cm = confusion_matrix_from_predictions(targets, predictions, num_classes)
@@ -2907,7 +2861,7 @@ def compute_classification_metrics(
         pr_aucs.append(pr_auc)
 
     raw_accuracy = float((predictions == targets).mean())
-    accuracy = float(qualified_matches.mean())
+    accuracy = raw_accuracy
     balanced_accuracy = float(sum(recalls) / num_classes)
     macro_roc_auc, weighted_roc_auc = macro_weighted(roc_aucs, support.tolist())
     macro_pr_auc, weighted_pr_auc = macro_weighted(pr_aucs, support.tolist())
@@ -2930,17 +2884,20 @@ def compute_classification_metrics(
     )
     mcc = mcc_num / mcc_den if mcc_den > 0 else 0.0
     calibration = compute_calibration_metrics(probabilities, targets)
-    per_class_avg_confidence = per_class_average_confidence_from_logits(
-        torch.from_numpy(logits),
-        torch.from_numpy(targets),
-        class_names,
-    )
+    per_class_accuracy: dict[str, float | None] = {}
+    per_class_avg_confidence: dict[str, float | None] = {}
+    for class_index, class_name in enumerate(class_names):
+        class_mask = targets == class_index
+        if class_mask.any():
+            per_class_accuracy[class_name] = float((predictions[class_mask] == targets[class_mask]).mean())
+            per_class_avg_confidence[class_name] = float(confidence[class_mask].mean())
+        else:
+            per_class_accuracy[class_name] = None
+            per_class_avg_confidence[class_name] = None
 
     return {
         "num_classes": num_classes,
         "num_samples": int(total_samples),
-        "confidence_threshold": confidence_threshold,
-        "rejection_rate": float((confidence < confidence_threshold).mean()),
         "raw_accuracy": raw_accuracy,
         "accuracy": accuracy,
         "top1_accuracy": top1,
@@ -2958,6 +2915,7 @@ def compute_classification_metrics(
         "weighted_pr_auc_ovr": weighted_pr_auc,
         "cohen_kappa": float(cohen_kappa),
         "mcc": float(mcc),
+        "per_class_accuracy": per_class_accuracy,
         "per_class_avg_confidence": per_class_avg_confidence,
         "calibration": calibration,
         "confusion_matrix": cm.tolist(),
@@ -3323,6 +3281,8 @@ def format_console_event(payload: dict[str, Any]) -> str | None:
             f"val_steps={payload.get('val_steps_per_eval')} test_steps={payload.get('test_steps_per_eval')}"
         )
     if event == "train_step":
+        per_class_accuracy = payload.get("per_class_accuracy")
+        per_class_accuracy_text = format_per_class_confidence(per_class_accuracy) if isinstance(per_class_accuracy, dict) else None
         classwise_confidence = payload.get("per_class_avg_confidence")
         classwise_confidence_text = format_per_class_confidence(classwise_confidence) if isinstance(classwise_confidence, dict) else None
         pieces = [
@@ -3336,8 +3296,8 @@ def format_console_event(payload: dict[str, Any]) -> str | None:
         ]
         if isinstance(payload.get("acc"), (int, float)):
             pieces.append(f"acc={payload.get('acc'):.6f}")
-        if isinstance(payload.get("raw_acc"), (int, float)):
-            pieces.append(f"raw_acc={payload.get('raw_acc'):.6f}")
+        if per_class_accuracy_text:
+            pieces.append(f"per_class_accuracy={per_class_accuracy_text}")
         if classwise_confidence_text:
             pieces.append(f"per_class_avg_confidence={classwise_confidence_text}")
         learning_rates = payload.get("learning_rates")
@@ -3345,6 +3305,8 @@ def format_console_event(payload: dict[str, Any]) -> str | None:
             pieces.append("lr=" + ",".join(f"{lr:.8g}" for lr in learning_rates))
         return " ".join(piece for piece in pieces if piece)
     if event in {"validation_finished", "final_evaluation_finished", "resume_initial_val_finished"}:
+        per_class_accuracy = payload.get("per_class_accuracy")
+        per_class_accuracy_text = format_per_class_confidence(per_class_accuracy) if isinstance(per_class_accuracy, dict) else None
         classwise_confidence = payload.get("per_class_avg_confidence")
         classwise_confidence_text = format_per_class_confidence(classwise_confidence) if isinstance(classwise_confidence, dict) else None
         pieces = [
@@ -3353,10 +3315,11 @@ def format_console_event(payload: dict[str, Any]) -> str | None:
             f"phase_name={phase_name}" if phase_name is not None else None,
             f"epoch={payload.get('epoch')}",
             f"loss={payload.get('loss'):.6f}" if isinstance(payload.get("loss"), (int, float)) else None,
-            f"raw_acc={payload.get('raw_accuracy'):.6f}" if isinstance(payload.get("raw_accuracy"), (int, float)) else None,
-            f"acc={payload.get('qualified_accuracy'):.6f}" if isinstance(payload.get("qualified_accuracy"), (int, float)) else None,
+            f"accuracy={payload.get('accuracy'):.6f}" if isinstance(payload.get("accuracy"), (int, float)) else None,
             f"val_loss={payload.get('val_loss'):.6f}" if isinstance(payload.get("val_loss"), (int, float)) else None,
         ]
+        if per_class_accuracy_text:
+            pieces.append(f"per_class_accuracy={per_class_accuracy_text}")
         if classwise_confidence_text:
             pieces.append(f"per_class_avg_confidence={classwise_confidence_text}")
         return " ".join(piece for piece in pieces if piece)
@@ -3372,6 +3335,8 @@ def format_console_event(payload: dict[str, Any]) -> str | None:
         ]
         return " ".join(piece for piece in pieces if piece)
     if event == "eval_step":
+        per_class_accuracy = payload.get("per_class_accuracy")
+        per_class_accuracy_text = format_per_class_confidence(per_class_accuracy) if isinstance(per_class_accuracy, dict) else None
         classwise_confidence = payload.get("per_class_avg_confidence")
         classwise_confidence_text = format_per_class_confidence(classwise_confidence) if isinstance(classwise_confidence, dict) else None
         pieces = [
@@ -3382,8 +3347,9 @@ def format_console_event(payload: dict[str, Any]) -> str | None:
             f"step={payload.get('eval_step')}",
             f"loss={payload.get('loss'):.6f}" if isinstance(payload.get("loss"), (int, float)) else None,
             f"acc={payload.get('acc'):.6f}" if isinstance(payload.get("acc"), (int, float)) else None,
-            f"raw_acc={payload.get('raw_acc'):.6f}" if isinstance(payload.get("raw_acc"), (int, float)) else None,
         ]
+        if per_class_accuracy_text:
+            pieces.append(f"per_class_accuracy={per_class_accuracy_text}")
         if classwise_confidence_text:
             pieces.append(f"per_class_avg_confidence={classwise_confidence_text}")
         return " ".join(piece for piece in pieces if piece)
@@ -4617,7 +4583,6 @@ def run_experiment(args: argparse.Namespace) -> int:
                     progress.set_postfix(
                         loss=f"{supcon_step_resume_payload.get('last_batch_loss', window_train_loss):.4f}",
                         acc=f"{supcon_step_resume_payload.get('last_batch_acc', 0.0):.4f}",
-                        raw_acc=f"{supcon_step_resume_payload.get('last_batch_raw_acc', 0.0):.4f}",
                     )
                     release_training_memory(device, supcon_train_loader)
 
@@ -4649,7 +4614,7 @@ def run_experiment(args: argparse.Namespace) -> int:
                             "validation_reason": validation_trigger_reason,
                         },
                     )
-                    val_loss, val_per_class_avg_confidence = evaluate_supcon(
+                    val_loss, val_per_class_metrics = evaluate_supcon(
                         model=model,
                         loader=supcon_val_loader,
                         criterion=supcon_loss,
@@ -4683,7 +4648,9 @@ def run_experiment(args: argparse.Namespace) -> int:
                             "global_train_step": train_progress["global_train_step"],
                             "eval_batches": val_eval_batches,
                             "val_loss": val_loss,
-                            "per_class_avg_confidence": val_per_class_avg_confidence,
+                            "accuracy": val_per_class_metrics["accuracy"],
+                            "per_class_accuracy": val_per_class_metrics["per_class_accuracy"],
+                            "per_class_avg_confidence": val_per_class_metrics["per_class_avg_confidence"],
                             "phase_train_loss_best": phase_train_loss_best,
                             "phase_train_loss_wait": phase_train_loss_wait,
                             "phase_validation_wait": phase_validation_wait,
@@ -4770,10 +4737,12 @@ def run_experiment(args: argparse.Namespace) -> int:
                         "total_params": total_params,
                         "batch_train_loss": supcon_step_resume_payload.get("last_batch_loss", window_train_loss),
                         "batch_train_acc": supcon_step_resume_payload.get("last_batch_acc"),
-                        "batch_train_raw_acc": supcon_step_resume_payload.get("last_batch_raw_acc"),
+                        "batch_per_class_accuracy": supcon_step_resume_payload.get("last_batch_per_class_accuracy"),
                         "batch_per_class_avg_confidence": supcon_step_resume_payload.get("last_batch_per_class_avg_confidence"),
                         "val_loss": val_loss,
-                        "val_per_class_avg_confidence": val_per_class_avg_confidence,
+                        "val_accuracy": val_per_class_metrics["accuracy"],
+                        "val_per_class_accuracy": val_per_class_metrics["per_class_accuracy"],
+                        "val_per_class_avg_confidence": val_per_class_metrics["per_class_avg_confidence"],
                         "phase_best_val_loss": phase_best_loss,
                         "supcon_best_val_loss": supcon_best_loss,
                         "phase_train_loss_best": phase_train_loss_best,
@@ -5089,7 +5058,6 @@ def run_experiment(args: argparse.Namespace) -> int:
             epoch_samples_seen = 0
             epoch_loss_sum = 0.0
             epoch_correct_sum = 0.0
-            epoch_raw_correct_sum = 0.0
             validation_index = start_phase_validation_index if same_resume_phase and epoch == start_phase_epoch else 0
             phase_stopped = False
             progress = tqdm(total=phase_steps_per_epoch, leave=False)
@@ -5126,7 +5094,7 @@ def run_experiment(args: argparse.Namespace) -> int:
                     "phase_train_loss_wait": phase_train_loss_wait,
                     "phase_validation_wait": phase_validation_wait,
                 }
-                window_train_loss, window_train_acc, window_train_raw_acc, steps_done, window_samples = train_classifier_steps(
+                window_train_loss, window_train_acc, steps_done, window_samples = train_classifier_steps(
                     model=model,
                     batch_iterator=phase_iterator,
                     step_limit=phase_steps_full_epoch - epoch_steps_done,
@@ -5158,13 +5126,11 @@ def run_experiment(args: argparse.Namespace) -> int:
                 epoch_samples_seen += window_samples
                 epoch_loss_sum += window_train_loss * window_samples
                 epoch_correct_sum += window_train_acc * window_samples
-                epoch_raw_correct_sum += window_train_raw_acc * window_samples
                 validation_index += 1
                 progress.update(steps_done)
                 progress.set_postfix(
                     loss=f"{classifier_step_resume_payload.get('last_batch_loss', window_train_loss):.4f}",
                     acc=f"{classifier_step_resume_payload.get('last_batch_acc', window_train_acc):.4f}",
-                    raw_acc=f"{classifier_step_resume_payload.get('last_batch_raw_acc', window_train_raw_acc):.4f}",
                 )
                 release_training_memory(device, train_loader)
 
@@ -5212,6 +5178,8 @@ def run_experiment(args: argparse.Namespace) -> int:
                 )
                 val_loss = val_metrics["loss"]
                 val_acc = val_metrics["accuracy"]
+                val_per_class_accuracy = val_metrics["per_class_accuracy"]
+                val_per_class_avg_confidence = val_metrics["per_class_avg_confidence"]
                 val_raw_acc = val_metrics["raw_accuracy"]
 
                 release_training_memory(device, val_loader)
@@ -5231,24 +5199,24 @@ def run_experiment(args: argparse.Namespace) -> int:
                         "phase_index": phase_index,
                         "phase_name": phase.name,
                         "epoch_in_phase": epoch,
-                        "validation_index": validation_index,
-                        "epoch_step": epoch_steps_done,
-                        "global_train_step": train_progress["global_train_step"],
-                        "eval_batches": val_eval_batches,
-                        "val_loss": val_loss,
-                        "val_acc": val_acc,
-                        "val_raw_acc": val_raw_acc,
-                        "val_macro_precision": val_metrics["macro_precision"],
-                        "val_macro_recall": val_metrics["macro_recall"],
-                        "val_macro_f1": val_metrics["macro_f1"],
-                        "val_weighted_precision": val_metrics["weighted_precision"],
-                        "val_weighted_recall": val_metrics["weighted_recall"],
-                        "val_weighted_f1": val_metrics["weighted_f1"],
-                "per_class_avg_confidence": val_metrics["per_class_avg_confidence"],
-                        "val_ece": val_metrics["calibration"]["expected_calibration_error"],
-                        "val_brier_score": val_metrics["calibration"]["brier_score"],
-                        "val_nll": val_metrics["calibration"]["negative_log_likelihood"],
-                        "phase_train_loss_best": phase_train_loss_best,
+                            "validation_index": validation_index,
+                            "epoch_step": epoch_steps_done,
+                            "global_train_step": train_progress["global_train_step"],
+                            "eval_batches": val_eval_batches,
+                            "val_loss": val_loss,
+                            "accuracy": val_acc,
+                            "per_class_accuracy": val_per_class_accuracy,
+                            "per_class_avg_confidence": val_per_class_avg_confidence,
+                            "val_macro_precision": val_metrics["macro_precision"],
+                            "val_macro_recall": val_metrics["macro_recall"],
+                            "val_macro_f1": val_metrics["macro_f1"],
+                            "val_weighted_precision": val_metrics["weighted_precision"],
+                            "val_weighted_recall": val_metrics["weighted_recall"],
+                            "val_weighted_f1": val_metrics["weighted_f1"],
+                            "val_ece": val_metrics["calibration"]["expected_calibration_error"],
+                            "val_brier_score": val_metrics["calibration"]["brier_score"],
+                            "val_nll": val_metrics["calibration"]["negative_log_likelihood"],
+                            "phase_train_loss_best": phase_train_loss_best,
                         "phase_train_loss_wait": phase_train_loss_wait,
                         "phase_validation_wait": phase_validation_wait,
                         "validation_reason": validation_trigger_reason,
@@ -5315,13 +5283,15 @@ def run_experiment(args: argparse.Namespace) -> int:
                     "total_params": total_params,
                     "batch_train_loss": classifier_step_resume_payload.get("last_batch_loss", window_train_loss),
                     "batch_train_acc": classifier_step_resume_payload.get("last_batch_acc", window_train_acc),
-                    "batch_train_raw_acc": classifier_step_resume_payload.get("last_batch_raw_acc", window_train_raw_acc),
+                    "batch_per_class_accuracy": classifier_step_resume_payload.get(
+                        "last_batch_per_class_accuracy"
+                    ),
                     "batch_per_class_avg_confidence": classifier_step_resume_payload.get(
                         "last_batch_per_class_avg_confidence"
                     ),
                     "val_loss": val_loss,
-                    "val_acc": val_acc,
-                    "val_raw_acc": val_raw_acc,
+                    "val_accuracy": val_acc,
+                    "val_per_class_accuracy": val_per_class_accuracy,
                     "val_per_class_avg_confidence": val_metrics["per_class_avg_confidence"],
                     "val_macro_precision": val_metrics["macro_precision"],
                     "val_macro_recall": val_metrics["macro_recall"],
@@ -5334,7 +5304,7 @@ def run_experiment(args: argparse.Namespace) -> int:
                     "val_nll": val_metrics["calibration"]["negative_log_likelihood"],
                     "phase_best_val_loss": phase_best_loss,
                     "phase_best_val_acc": phase_best_acc,
-                    "phase_best_val_raw_acc": phase_best_raw_acc,
+                    "phase_best_val_accuracy": phase_best_raw_acc,
                     "phase_train_loss_best": phase_train_loss_best,
                     "phase_train_loss_wait": phase_train_loss_wait,
                     "phase_validation_wait": phase_validation_wait,
@@ -5432,7 +5402,7 @@ def run_experiment(args: argparse.Namespace) -> int:
                         "best_epoch_in_phase": phase_best_epoch,
                         "phase_best_val_loss": phase_best_loss,
                         "phase_best_val_acc": phase_best_acc,
-                        "phase_best_val_raw_acc": phase_best_raw_acc,
+                        "phase_best_val_accuracy": phase_best_raw_acc,
                         "stopped_at_epoch_step": epoch_steps_done,
                         "global_train_step": train_progress["global_train_step"],
                     }
@@ -5459,20 +5429,20 @@ def run_experiment(args: argparse.Namespace) -> int:
         )
         log_json_event(
             log_path,
-            {
-                "event": "phase_global_best_comparison",
-                "phase_index": phase_index,
-                "phase_name": phase.name,
-                "classifier_metric": args.classifier_early_stopping_metric,
-                "phase_improved_global_best": phase_improved_global_best,
-                "reject_current_enabled": args.reject_current_phase_on_global_miss,
-                "phase_best_val_loss": phase_best_loss,
-                "phase_best_val_raw_acc": phase_best_raw_acc,
-                "global_best_val_loss_before_phase": global_best_loss_before_phase,
-                "global_best_val_raw_acc_before_phase": global_best_raw_acc_before_phase,
-                "min_delta": args.early_stopping_min_delta,
-            },
-        )
+                {
+                    "event": "phase_global_best_comparison",
+                    "phase_index": phase_index,
+                    "phase_name": phase.name,
+                    "classifier_metric": args.classifier_early_stopping_metric,
+                    "phase_improved_global_best": phase_improved_global_best,
+                    "reject_current_enabled": args.reject_current_phase_on_global_miss,
+                    "phase_best_val_loss": phase_best_loss,
+                    "phase_best_val_accuracy": phase_best_raw_acc,
+                    "global_best_val_loss_before_phase": global_best_loss_before_phase,
+                    "global_best_val_accuracy_before_phase": global_best_raw_acc_before_phase,
+                    "min_delta": args.early_stopping_min_delta,
+                },
+            )
         reject_current_phase_for_next = (
             args.classifier_train_mode == "progressive"
             and args.reject_current_phase_on_global_miss
@@ -5488,9 +5458,9 @@ def run_experiment(args: argparse.Namespace) -> int:
                     "phase_name": phase.name,
                     "classifier_metric": args.classifier_early_stopping_metric,
                     "phase_best_val_loss": phase_best_loss,
-                    "phase_best_val_raw_acc": phase_best_raw_acc,
+                    "phase_best_val_accuracy": phase_best_raw_acc,
                     "global_best_val_loss_before_phase": global_best_loss_before_phase,
-                    "global_best_val_raw_acc_before_phase": global_best_raw_acc_before_phase,
+                    "global_best_val_accuracy_before_phase": global_best_raw_acc_before_phase,
                     "min_delta": args.early_stopping_min_delta,
                 },
             )
@@ -5584,10 +5554,10 @@ def run_experiment(args: argparse.Namespace) -> int:
             "event": "final_evaluation_finished",
             "split": "val",
             "eval_batches": val_eval_batches,
+            "accuracy": val_metrics["accuracy"],
+            "per_class_accuracy": val_metrics["per_class_accuracy"],
             "per_class_avg_confidence": val_metrics["per_class_avg_confidence"],
             "loss": val_metrics["loss"],
-            "raw_accuracy": val_metrics["raw_accuracy"],
-            "accuracy": val_metrics["accuracy"],
         },
     )
 
@@ -5613,10 +5583,10 @@ def run_experiment(args: argparse.Namespace) -> int:
                 "event": "final_evaluation_finished",
                 "split": "test",
                 "eval_batches": test_eval_batches,
+                "accuracy": test_metrics["accuracy"],
+                "per_class_accuracy": test_metrics["per_class_accuracy"],
                 "per_class_avg_confidence": test_metrics["per_class_avg_confidence"],
                 "loss": test_metrics["loss"],
-                "raw_accuracy": test_metrics["raw_accuracy"],
-                "accuracy": test_metrics["accuracy"],
             },
         )
         test_correct_confidence = compute_correct_confidence_by_class(test_logits, test_targets, train_dataset.classes)  # noqa: F841
@@ -5628,7 +5598,6 @@ def run_experiment(args: argparse.Namespace) -> int:
     validation_summary = {
         "split": "val",
         "num_samples": val_metrics["num_samples"],
-        "raw_accuracy": val_metrics["raw_accuracy"],
         "accuracy": val_metrics["accuracy"],
         "top1_accuracy": val_metrics["top1_accuracy"],
         "top3_accuracy": val_metrics["top3_accuracy"],
@@ -5639,6 +5608,7 @@ def run_experiment(args: argparse.Namespace) -> int:
         "weighted_recall": val_metrics["weighted_recall"],
         "weighted_f1": val_metrics["weighted_f1"],
         "balanced_accuracy": val_metrics["balanced_accuracy"],
+        "per_class_accuracy": val_metrics["per_class_accuracy"],
         "per_class_avg_confidence": val_metrics["per_class_avg_confidence"],
         "calibration": val_metrics["calibration"],
         "per_class": val_metrics["per_class"],
@@ -5664,7 +5634,6 @@ def run_experiment(args: argparse.Namespace) -> int:
         test_summary = {
             "split": "test",
             "num_samples": test_metrics["num_samples"],
-            "raw_accuracy": test_metrics["raw_accuracy"],
             "accuracy": test_metrics["accuracy"],
             "top1_accuracy": test_metrics["top1_accuracy"],
             "top3_accuracy": test_metrics["top3_accuracy"],
@@ -5675,6 +5644,7 @@ def run_experiment(args: argparse.Namespace) -> int:
             "weighted_recall": test_metrics["weighted_recall"],
             "weighted_f1": test_metrics["weighted_f1"],
             "balanced_accuracy": test_metrics["balanced_accuracy"],
+            "per_class_accuracy": test_metrics["per_class_accuracy"],
             "per_class_avg_confidence": test_metrics["per_class_avg_confidence"],
             "calibration": test_metrics["calibration"],
             "per_class": test_metrics["per_class"],
@@ -5687,8 +5657,8 @@ def run_experiment(args: argparse.Namespace) -> int:
                 "split": "test",
                 "eval_batches": test_eval_batches,
                 "num_samples": test_metrics["num_samples"],
-                "raw_accuracy": test_metrics["raw_accuracy"],
                 "accuracy": test_metrics["accuracy"],
+                "per_class_accuracy": test_metrics["per_class_accuracy"],
                 "macro_precision": test_metrics["macro_precision"],
                 "macro_recall": test_metrics["macro_recall"],
                 "macro_f1": test_metrics["macro_f1"],

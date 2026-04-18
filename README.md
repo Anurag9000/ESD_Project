@@ -9,6 +9,7 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 - **Corpus:** 304,258 verified images (WSS-304K, post-decontamination + 224px resolution floor)
 - **Taxonomy:** **8 material classes** — clothes, ewaste, glass, hard_plastic, metal, organic, paper, soft_plastic
 - **Orchestration:** 8-stage pipeline: SupCon Head → SupCon Last-20 → SupCon Last-40 → CE Head → CE Last-20 → CE Last-40 → Recursive val_loss → Recursive val_raw_acc
+- **Logging:** Pure accuracy plus per-class accuracy and per-class average confidence; thresholded accuracy is not printed in live logs.
 - **Balancing:** Balanced per-batch class cycling (default in all training scripts)
 - **Visual Audit:** Startup + end-of-epoch clean test-set visualizations, plus optional Grad-CAM and calibration plots
 

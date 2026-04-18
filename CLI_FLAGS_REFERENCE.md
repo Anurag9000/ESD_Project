@@ -2,6 +2,7 @@
 
 This file documents the live training, evaluation, and utility flags in the current repo state.
 Defaults are the values used when the flag is omitted. Boolean defaults are shown as `true` / `false`.
+Live logs now print pure accuracy plus `per_class_accuracy` and `per_class_avg_confidence`; thresholded accuracy fields are no longer emitted.
 
 ## Main Trainer: `scripts/metric_learning_pipeline.py`
 
