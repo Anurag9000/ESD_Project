@@ -3550,8 +3550,6 @@ def maybe_run_phase_visualizations(
         str(args.epoch_visualization_batch_size),
         "--num-workers",
         str(args.epoch_visualization_num_workers),
-        "--sample-limit-activations",
-        str(args.epoch_visualization_activation_sample_limit),
         "--umap-thumb-size",
         str(args.epoch_visualization_umap_thumb_size),
         "--umap-max-samples",
@@ -3961,12 +3959,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--epoch-visualization-batch-size", type=int, default=128)
     parser.add_argument("--epoch-visualization-num-workers", type=int, default=2)
-    parser.add_argument(
-        "--epoch-visualization-activation-sample-limit",
-        type=int,
-        default=0,
-        help="Number of test images to use for layer activation summaries. Use 0 for all test images.",
-    )
     parser.add_argument(
         "--epoch-visualization-umap-thumb-size",
         type=int,

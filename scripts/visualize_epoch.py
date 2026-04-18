@@ -6,10 +6,6 @@ Per-epoch visualization engine for the ESD waste classification pipeline.
 Generates canonical artefacts from the COMPLETE test set (no augmentations):
 
   1. umap_thumbnail_map.png    — UMAP layout of test embeddings with thumbnails
-  2. all_layer_activations.png — mean spatial activation for the backbone's major
-                                  feature stages (per-layer = mean over channels)
-                                  Why per-layer, not per-neuron?
-                                  Per-layer = one summary map per stage = usable signal.
 
 Usage (standalone):
     python scripts/visualize_epoch.py \\
@@ -25,13 +21,11 @@ from __future__ import annotations
 
 import argparse
 import sys
-import math
 from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")  # No display needed — pure file output
 import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
 from matplotlib.offsetbox import AnnotationBbox, OffsetImage
 import numpy as np
 import torch
@@ -73,19 +67,6 @@ def _denorm(tensor_hwc: np.ndarray) -> np.ndarray:
     """Reverse ImageNet normalisation → uint8 HWC."""
     img = tensor_hwc * np.array(IMAGENET_STD) + np.array(IMAGENET_MEAN)
     return np.clip(img * 255, 0, 255).astype(np.uint8)
-
-
-class _LayerHook:
-    """Forward hook that captures the output of a single module."""
-    def __init__(self, module: torch.nn.Module) -> None:
-        self._handle = module.register_forward_hook(self._fn)
-        self.out: torch.Tensor | None = None
-
-    def _fn(self, _m, _i, output: torch.Tensor) -> None:
-        self.out = output.detach()
-
-    def remove(self) -> None:
-        self._handle.remove()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -208,115 +189,6 @@ def generate_umap_thumbnail_map(
     plt.close(fig)
     print(f"  [UMAP] Saved → {output_path}")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 2. All-layer activations
-# ─────────────────────────────────────────────────────────────────────────────
-
-def backbone_activation_specs(model: MetricLearningEfficientNetB0) -> list[tuple[str, torch.nn.Module]]:
-    backbone = model.backbone
-    if hasattr(backbone, "features"):
-        return [
-            ("Stage 0 · Stem", backbone.features[0]),
-            ("Stage 1 · Features", backbone.features[1]),
-            ("Stage 2 · Features", backbone.features[2]),
-            ("Stage 3 · Features", backbone.features[3]),
-            ("Stage 4 · Features", backbone.features[4]),
-            ("Stage 5 · Features", backbone.features[5]),
-            ("Stage 6 · Features", backbone.features[6]),
-            ("Stage 7 · Features", backbone.features[7]),
-            ("Stage 8 · Head", backbone.features[8]),
-        ]
-    if hasattr(backbone, "stem") and hasattr(backbone, "stages"):
-        specs: list[tuple[str, torch.nn.Module]] = [("Stage 0 · Stem", backbone.stem)]
-        for idx, stage in enumerate(backbone.stages):
-            specs.append((f"Stage {idx + 1} · ConvNeXt Stage {idx}", stage))
-        if hasattr(backbone, "norm_pre"):
-            specs.append(("Final Norm", backbone.norm_pre))
-        return specs
-    children = [
-        (name, module)
-        for name, module in backbone.named_children()
-        if any(parameter.requires_grad or parameter.numel() > 0 for parameter in module.parameters(recurse=True))
-    ]
-    if not children:
-        raise ValueError("Backbone exposes no hookable child modules for visualization.")
-    return [(f"Stage {idx} · {name}", module) for idx, (name, module) in enumerate(children)]
-
-def generate_layer_activations(
-    model: MetricLearningEfficientNetB0,
-    loader: DataLoader,
-    device: torch.device,
-    output_path: Path,
-    epoch_label: str,
-    sample_limit: int = 0,
-) -> None:
-    """
-    Aggregate mean spatial activations across the entire test set by default.
-    The hook set follows the backbone's native stage layout. We average over:
-      - batch dimension  (all images)
-      - channel dimension (all learned filters)
-    resulting in one (H×W) heatmap per stage — a true "What does this stage attend to?"
-    """
-    stage_specs = backbone_activation_specs(model)
-    print(f"  [ActMaps] Hooking all {len(stage_specs)} backbone stages …")
-    model.eval()
-    model_dtype = next(model.parameters()).dtype
-
-    hooks = {name: _LayerHook(module) for name, module in stage_specs}
-
-    accumulators: dict[str, np.ndarray | None] = {name: None for name in hooks}
-    counts = {name: 0 for name in hooks}
-
-    with torch.no_grad():
-        for images, _ in tqdm(loader, desc="  LayerActivations", leave=False):
-            model.encode(images.to(device=device, dtype=model_dtype))   # forward — all hooks fire
-
-            for name, hook in hooks.items():
-                if hook.out is None:
-                    continue
-                # shape: (B, C, H, W) — average over B and C → (H, W)
-                spatial = hook.out.mean(dim=(0, 1)).cpu().float().numpy()
-                if accumulators[name] is None:
-                    accumulators[name] = spatial.copy()
-                else:
-                    accumulators[name] += spatial
-                counts[name] += 1
-
-            if sample_limit > 0 and sum(counts.values()) // len(counts) * loader.batch_size >= sample_limit:
-                break
-
-    for hook in hooks.values():
-        hook.remove()
-
-    # ── Plot: 3×3 grid ────────────────────────────────────────────────────────
-    n = len(stage_specs)
-    ncols = 3
-    nrows = (n + ncols - 1) // ncols
-    fig = plt.figure(figsize=(ncols * 5, nrows * 4 + 1), dpi=130, constrained_layout=True)
-    fig.suptitle(
-        f"All Backbone Layer Activations — {epoch_label}\n"
-        f"(Mean over channels and {'all test images' if sample_limit <= 0 else f'{sample_limit:,} test images'})",
-        fontsize=14, y=0.99,
-    )
-    gs = gridspec.GridSpec(nrows, ncols, hspace=0.45, wspace=0.25)
-
-    for plot_i, (name, acc) in enumerate(accumulators.items()):
-        ax = fig.add_subplot(gs[plot_i // ncols, plot_i % ncols])
-        if acc is None:
-            ax.text(0.5, 0.5, "no data", ha="center", va="center")
-            ax.set_title(name, fontsize=8)
-            continue
-        amap = acc / max(counts[name], 1)
-        amap = (amap - amap.min()) / (amap.max() - amap.min() + 1e-8)
-        im = ax.imshow(amap, cmap="inferno", interpolation="nearest")
-        ax.set_title(name, fontsize=8)
-        ax.axis("off")
-        plt.colorbar(im, ax=ax, fraction=0.04, pad=0.02)
-
-    fig.savefig(output_path, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  [ActMaps] Saved → {output_path}")
-# ─────────────────────────────────────────────────────────────────────────────
 # Main entry-point
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -327,7 +199,6 @@ def run(
     epoch: int | str,
     batch_size: int = 128,
     num_workers: int = 4,
-    sample_limit_activations: int = 0,
     umap_max_samples: int = 0,
     umap_thumbnail_limit: int = 1024,
     umap_thumb_size: int = 48,
@@ -373,12 +244,6 @@ def run(
         thumb_size=umap_thumb_size,
     )
 
-    # ── 2. All-layer activations ─────────────────────────────────────────────
-    generate_layer_activations(
-        model, loader, device,
-        output_dir / "all_layer_activations.png", epoch_label,
-        sample_limit=sample_limit_activations,
-    )
     print(f"[VIZ] All visualizations saved to {output_dir}\n")
 
 
@@ -408,10 +273,6 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument(
-        "--sample-limit-activations", type=int, default=2048,
-        help="Max images used to build the activation average. Use 0 for all test images.",
-    )
-    parser.add_argument(
         "--umap-thumb-size", type=int, default=48,
         help="Thumbnail size for the UMAP thumbnail map (default 48).",
     )
@@ -431,7 +292,6 @@ def main() -> None:
         epoch=args.epoch,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        sample_limit_activations=args.sample_limit_activations,
         umap_max_samples=args.umap_max_samples,
         umap_thumbnail_limit=args.umap_thumbnail_limit,
         umap_thumb_size=args.umap_thumb_size,

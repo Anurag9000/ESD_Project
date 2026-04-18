@@ -61,7 +61,6 @@ Live logs now print pure accuracy plus `per_class_accuracy` and `per_class_avg_c
 | `--epoch-visualizations` / `--no-epoch-visualizations` | `true` | Enable or disable startup and phase-end visual audits. |
 | `--epoch-visualization-batch-size` | `128` | Batch size used by visualization loaders. |
 | `--epoch-visualization-num-workers` | `2` | Worker count used by visualization loaders. |
-| `--epoch-visualization-activation-sample-limit` | `0` | Activation summary sample cap; `0` means all samples. |
 | `--epoch-visualization-umap-thumb-size` | `48` | Thumbnail size for the UMAP thumbnail map. |
 | `--epoch-visualization-umap-max-samples` | `0` | Cap on UMAP samples; `0` means the full test set. |
 | `--epoch-visualization-umap-thumbnail-limit` | `1024` | Maximum thumbnails rendered on the UMAP map. |

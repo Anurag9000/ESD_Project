@@ -156,7 +156,7 @@ Resume is fully automatic: re-running `./run_training.sh --backbone convnextv2_n
 - **Augmentation:** 16× deterministic split-safe augmentation (train only; val/test use raw images)
 - **Class Balancing:** Balanced per-batch class cycling is the default and mandatory production path.
 - **Interpretability Audit:** At run start and after every completed phase, the pipeline generates clean no-augmentation test-set visualizations:
-  a UMAP thumbnail embedding map, all-layer activation summaries, calibration plots, and optional Grad-CAM overlays.
+  a UMAP thumbnail embedding map, calibration plots, and optional Grad-CAM overlays.
 - **Augmentation types:** Random crops, flips, colour jitter, Gaussian blur, shadow, glare, motion blur, defocus, resolution degradation, truncation, smudging
 
 ---
