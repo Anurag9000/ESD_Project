@@ -17,7 +17,7 @@ Live logs now print pure accuracy plus `per_class_accuracy` and `per_class_avg_c
 | `--projection-dim` | `128` | Width of the SupCon projection head. |
 | `--unfreeze-chunk-size` | `20` | Number of backbone leaf modules unfrozen per progressive step. |
 | `--skip-supcon` | `false` | Skip the SupCon stage entirely when enabled. |
-| `--classifier-train-mode` | `progressive` | Choose `progressive` unfreezing or `full_model` training. |
+| `--classifier-train-mode` | `progressive` | Choose `progressive` unfreezing or `full_model` training; `full_model` is still capped by `--ce-max-unfreeze-modules`. |
 | `--classifier-early-stopping-metric` | `val_loss` | Classifier phase selection metric: `val_loss` or `val_raw_acc`. |
 | `--reject-current-phase-on-global-miss` / `--no-reject-current-phase-on-global-miss` | `true` | Gate whether a phase that fails to beat the global best may seed the next phase. |
 | `--supcon-temperature` | `0.07` | Temperature for the SupCon loss. |
@@ -44,7 +44,7 @@ Live logs now print pure accuracy plus `per_class_accuracy` and `per_class_avg_c
 | `--augment-repeats` | `16` | Deterministic augmentation variants per source image. |
 | `--augment-gaussian-sigmas` | `0.5` | Stochastic augmentation sigma scale. |
 | `--supcon-unfreeze-backbone-modules` | `40` | Upper bound on how deep SupCon may unfreeze. |
-| `--ce-max-unfreeze-modules` | `40` | Upper bound on how deep CE may unfreeze. |
+| `--ce-max-unfreeze-modules` | `40` | Upper bound on how deep CE may unfreeze, including the `full_model` path. |
 | `--output-dir` | `Results/metric_learning_experiment` | Main training output root. |
 | `--log-file` | `logs/metric_learning_experiment.log.jsonl` | Structured JSONL log path. |
 | `--resume-checkpoint` | `""` | Explicit checkpoint to resume from. |
@@ -229,4 +229,4 @@ These are not `argparse` flags, but they control the shell wrappers and the acti
 - `run_training.sh` always injects `--dataset-root "$DATASET_ROOT"` and `--sampling-strategy balanced` into the progressive trainer.
 - `run_training.sh` auto-resumes from `step_last.pt` first, then `last.pt`.
 - `run_full_training_pipeline.sh` ignores user-supplied `--dataset-root`, `--batch-size`, `--output-dir`, `--log-file`, `--resume-checkpoint`, `--resume-mode`, `--resume-phase-index`, `--classifier-train-mode`, `--classifier-early-stopping-metric`, `--head-lr`, `--backbone-lr`, `--stage-early-stopping-patience`, and `--optimizer`.
-- `run_full_training_pipeline.sh` hardcodes the recursive refinement recipe to `batch-size 224`, `patience 1`, `resume-phase-index 1`, `optimizer adamw`, `sampling-strategy balanced`, and `skip-supcon` for both recursive passes.
+- `run_full_training_pipeline.sh` hardcodes the recursive refinement recipe to `batch-size 224`, `patience 1`, `resume-phase-index 1`, `optimizer adamw`, `sampling-strategy balanced`, `skip-supcon`, `classifier-train-mode progressive`, and `ce-max-unfreeze-modules 40` for both recursive passes.

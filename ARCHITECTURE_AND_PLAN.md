@@ -100,11 +100,13 @@ The pipeline follows the research-validated principle: **Contrastive representat
 
 ### Stage 7 — Recursive val_loss Refinement
 - Runs `run_recursive_refinement.py` with `metric=val_loss`, `threshold=1e-4`.
+- Uses the same 40-module frozen core as the main CE/SupCon pipeline; recursive refinement is progressive, not full-model.
 - Automatically halves learning rates on plateau and repeats until loss stops improving.
 - Produces `accepted_best.pt`.
 
 ### Stage 8 — Recursive val_raw_acc Refinement
 - Same mechanism as Stage 5 but optimises for raw validation accuracy.
+- Uses the same 40-module frozen core as Stage 7 and the main CE/SupCon pipeline.
 - LRs bootstrapped from Stage 5 final state (halved further).
 - Produces final deployment-ready `accepted_best.pt`.
 

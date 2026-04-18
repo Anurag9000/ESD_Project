@@ -1469,7 +1469,8 @@ def build_classifier_phase_plan(total_modules: int, args: argparse.Namespace) ->
     """
     phases: list[PhaseSpec] = []
     if args.classifier_train_mode == "full_model":
-        phases.append(PhaseSpec(name="ce_full_model", unfrozen_backbone_modules=total_modules))
+        effective_max = min(total_modules, getattr(args, "ce_max_unfreeze_modules", total_modules))
+        phases.append(PhaseSpec(name="ce_full_model", unfrozen_backbone_modules=effective_max))
         return phases
     # ── Stage 3: CE head warm-up (backbone fully frozen) ─────────────────────
     # embedding + embedding_norm + ce_head are trainable; all backbone frozen.
