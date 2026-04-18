@@ -57,8 +57,8 @@ The pipeline follows the research-validated principle: **Contrastive representat
 ### Stage 3 — SupCon Last-40 Modules
 | Parameter            | Value  |
 | :------------------- | :----- |
-| **Trainable:**       | Top 40 leaf modules (of 130 total) + SupCon head |
-| **Frozen forever:**  | First 90 leaf modules (stem, stages 0–5: edges, textures, patterns) = **928,416 params** |
+| **Trainable:**       | Top 40 leaf modules (of 79 total for the default `convnextv2_nano`) + SupCon head |
+| **Frozen forever:**  | First 39 leaf modules (stem, early stages: edges, textures, patterns) remain frozen in the default backbone |
 | **Loss:**            | Supervised Contrastive (SupCon) |
 | **Head LR:**         | `3e-3` |
 | **Backbone LR:**     | `5e-5` |

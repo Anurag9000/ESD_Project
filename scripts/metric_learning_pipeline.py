@@ -1465,8 +1465,7 @@ def build_classifier_phase_plan(total_modules: int, args: argparse.Namespace) ->
 
     The permanent freeze boundary is enforced here: the CE progressive loop
     never unfreezes more than `ce_max_unfreeze_modules` leaf modules, matching
-    the SupCon boundary so low-level texture/pattern encoders (first 90 of 130
-    leaf modules) are never touched by CE gradients.
+    the SupCon boundary so the low-level texture/pattern encoders stay frozen.
     """
     phases: list[PhaseSpec] = []
     if args.classifier_train_mode == "full_model":
@@ -1478,8 +1477,8 @@ def build_classifier_phase_plan(total_modules: int, args: argparse.Namespace) ->
     phases.append(PhaseSpec(name="ce_head_only", unfrozen_backbone_modules=0))
     # ── Stage 4: CE progressive unfreezing ────────────────────────────────────
     # HARD CAP: never exceed ce_max_unfreeze_modules (default=40).
-    # This permanently locks the first 90 leaf modules (edges, textures, patterns)
-    # in both SupCon and CE phases — they are NEVER gradient-updated.
+    # This keeps the low-level stem and early texture encoders frozen in both
+    # SupCon and CE phases — only the semantic tail is adapted.
     effective_max = min(total_modules, getattr(args, "ce_max_unfreeze_modules", total_modules))
     count = 0
     phase_index = 0
@@ -1651,11 +1650,8 @@ def classifier_phase_learning_rates(
         return head_lr, backbone_lr
 
     # BUG FIX: use effective_total (capped at ce_max_unfreeze_modules) as the
-    # denominator, NOT total_backbone_modules (130). Without this, with
-    # ce_max_unfreeze_modules=40, phase ce_last_40 only reached 40/130=30.8%
-    # progress, decaying head LR to only 4.94e-4 instead of the intended 1e-5.
-    # With effective_total=40: ce_last_20 → progress=0.5 → head=1e-4;
-    #                          ce_last_40 → progress=1.0 → head=1e-5=backbone_lr.
+    # denominator, NOT total_backbone_modules. That keeps the final progressive
+    # phase aligned with the actual unfreeze ceiling, so head LR decays fully.
     effective_total = min(total_backbone_modules, getattr(args, "ce_max_unfreeze_modules", total_backbone_modules))
     if effective_total <= 0:
         return head_lr, backbone_lr
@@ -3785,7 +3781,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Hard cap on backbone leaf modules unfrozen during CE progressive training. "
             "Default=40 matches --supcon-unfreeze-backbone-modules, permanently locking "
-            "the first 90 leaf modules (edges, textures, patterns) in both SupCon and CE phases."
+            "the low-level frozen core in both SupCon and CE phases."
         ),
     )
     parser.add_argument("--output-dir", default="Results/metric_learning_experiment")
