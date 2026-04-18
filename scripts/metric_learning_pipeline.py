@@ -3733,9 +3733,9 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--confidence-threshold", type=float, default=0.80)
-    parser.add_argument("--supcon-early-stopping-patience", type=int, default=3)
-    parser.add_argument("--head-early-stopping-patience", type=int, default=3)
-    parser.add_argument("--stage-early-stopping-patience", type=int, default=3)
+    parser.add_argument("--supcon-early-stopping-patience", type=int, default=1)
+    parser.add_argument("--head-early-stopping-patience", type=int, default=1)
+    parser.add_argument("--stage-early-stopping-patience", type=int, default=1)
     parser.add_argument("--early-stopping-min-delta", type=float, default=0.0)
     parser.add_argument("--warmup-epochs", type=int, default=0)
     parser.add_argument("--warmup-steps", type=int, default=1024)
@@ -4131,15 +4131,16 @@ def run_experiment(args: argparse.Namespace) -> int:
             "resume": resume_state,
         },
     )
-    maybe_run_phase_visualizations(
-        checkpoint_path=checkpoint_path,
-        dataset_root=args.dataset_root,
-        output_dir=output_dir,
-        phase_label="startup",
-        args=args,
-        log_path=log_path,
-        reason="run_start",
-    )
+    if resume_checkpoint is None:
+        maybe_run_phase_visualizations(
+            checkpoint_path=checkpoint_path,
+            dataset_root=args.dataset_root,
+            output_dir=output_dir,
+            phase_label="startup",
+            args=args,
+            log_path=log_path,
+            reason="run_start",
+        )
 
     if args.skip_supcon or resume_from_best_phase or not supcon_phases:
         supcon_completed = True

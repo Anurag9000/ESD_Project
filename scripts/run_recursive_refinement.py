@@ -65,7 +65,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--initial-head-lr", type=float, required=True)
     parser.add_argument("--initial-backbone-lr", type=float, required=True)
     parser.add_argument("--batch-size", type=int, default=224)
-    parser.add_argument("--patience", type=int, default=3)
+    parser.add_argument("--patience", type=int, default=1)
     parser.add_argument("--eval-every-epochs", type=float, default=0.01)
     parser.add_argument("--dataset-root", default="Dataset_Final")
     parser.add_argument("--optimizer", default="adamw")
