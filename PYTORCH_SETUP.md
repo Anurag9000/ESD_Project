@@ -41,20 +41,7 @@ Each phase writes into its own folder under `Results/<run>/progressive/phases/<p
 
 ### Manual Execution (Standardized Params)
 ```bash
-python scripts/train_efficientnet_b0_progressive.py \
-  --dataset-root Dataset_Final \
-  --backbone convnextv2_nano \
-  --precision mixed \
-  --optimizer adamw \
-  --sampling-strategy balanced \
-  --eval-every-epochs 0.01 \
-  --supcon-head-epochs 5 \
-  --supcon-stage-epochs 20 \
-  --head-epochs 5 \
-  --stage-epochs 20 \
-  --num-workers 2 \
-  --prefetch-factor 1 \
-  --epoch-visualizations
+./run_training.sh --backbone convnextv2_nano --num-workers 2 --prefetch-factor 1
 ```
 
 ### Default Hyperparameters

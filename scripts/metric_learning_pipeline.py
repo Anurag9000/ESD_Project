@@ -3806,7 +3806,7 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help=(
-            "Generate test-set visualizations at startup and after every completed epoch. "
+            "Generate test-set visualizations at startup and after every completed phase. "
             "Uses the clean no-augmentation test split."
         ),
     )
@@ -3824,7 +3824,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=48,
         help="Thumbnail size for the full test atlas image.",
     )
-    parser.add_argument("--eval-every-epochs", type=float, default=1.0)
     parser.add_argument(
         "--runtime-bad-sample-cleanup",
         action="store_true",
