@@ -2826,6 +2826,15 @@ def compute_classification_metrics(
     num_classes = len(class_names)
     support = np.bincount(targets, minlength=num_classes)
     cm = confusion_matrix_from_predictions(targets, predictions, num_classes)
+    if logits.size > 0 and targets.size > 0:
+        ce_loss = float(
+            F.cross_entropy(
+                torch.from_numpy(logits).float(),
+                torch.from_numpy(targets).long(),
+            ).item()
+        )
+    else:
+        ce_loss = 0.0
 
     per_class = {}
     precisions = []
@@ -2871,6 +2880,7 @@ def compute_classification_metrics(
     weighted_f1 = float(np.average(f1_scores, weights=support)) if support.sum() > 0 else 0.0
     top1 = accuracy
     top3 = top_k_accuracy(logits, targets, 3)
+    top5 = top_k_accuracy(logits, targets, min(5, num_classes)) if num_classes > 0 else 0.0
 
     total_samples = float(cm.sum())
     t_sum = cm.sum(axis=1).astype(np.float64)
@@ -2901,8 +2911,11 @@ def compute_classification_metrics(
         "num_samples": int(total_samples),
         "raw_accuracy": raw_accuracy,
         "accuracy": accuracy,
+        "loss": float(ce_loss),
+        "cross_entropy_loss": float(ce_loss),
         "top1_accuracy": top1,
         "top3_accuracy": top3,
+        "top5_accuracy": top5,
         "balanced_accuracy": balanced_accuracy,
         "macro_precision": float(sum(precisions) / num_classes),
         "macro_recall": float(sum(recalls) / num_classes),
@@ -3082,6 +3095,55 @@ def save_confidence_histogram(path: Path, probabilities: np.ndarray, title: str)
     ax.grid(True, axis="y", alpha=0.2)
     fig.savefig(path, dpi=160, bbox_inches="tight")
     plt.close(fig)
+
+
+def save_confusion_matrix_csv(path: Path, confusion_matrix: np.ndarray, class_names: list[str], percent: bool = False) -> None:
+    matrix = np.asarray(confusion_matrix, dtype=np.float64)
+    if matrix.size == 0:
+        path.write_text("", encoding="utf-8")
+        return
+    rows = [["true_class\\pred_class", *class_names]]
+    for row_index, class_name in enumerate(class_names):
+        row_total = float(matrix[row_index].sum())
+        if percent:
+            values = [f"{(matrix[row_index, col_index] / row_total * 100.0):.3f}" if row_total > 0 else "0.000" for col_index in range(len(class_names))]
+        else:
+            values = [str(int(matrix[row_index, col_index])) for col_index in range(len(class_names))]
+        rows.append([class_name, *values])
+    path.write_text("\n".join(",".join(row) for row in rows), encoding="utf-8")
+
+
+def save_classification_report_csv(path: Path, metrics: dict[str, Any], class_names: list[str]) -> None:
+    per_class = metrics.get("per_class", {}) or {}
+    per_class_accuracy = metrics.get("per_class_accuracy", {}) or {}
+    per_class_confidence = metrics.get("per_class_avg_confidence", {}) or {}
+    rows = [[
+        "class",
+        "support",
+        "precision",
+        "recall",
+        "specificity",
+        "f1",
+        "roc_auc_ovr",
+        "pr_auc_ovr",
+        "accuracy",
+        "avg_confidence",
+    ]]
+    for class_name in class_names:
+        stats = per_class.get(class_name, {}) or {}
+        rows.append([
+            class_name,
+            str(stats.get("support", "")),
+            f"{float(stats.get('precision', 0.0)):.6f}",
+            f"{float(stats.get('recall', 0.0)):.6f}",
+            f"{float(stats.get('specificity', 0.0)):.6f}",
+            f"{float(stats.get('f1', 0.0)):.6f}",
+            "" if stats.get("roc_auc_ovr") is None else f"{float(stats['roc_auc_ovr']):.6f}",
+            "" if stats.get("pr_auc_ovr") is None else f"{float(stats['pr_auc_ovr']):.6f}",
+            "" if per_class_accuracy.get(class_name) is None else f"{float(per_class_accuracy[class_name]):.6f}",
+            "" if per_class_confidence.get(class_name) is None else f"{float(per_class_confidence[class_name]):.6f}",
+        ])
+    path.write_text("\n".join(",".join(row) for row in rows), encoding="utf-8")
 
 
 def compute_correct_confidence_by_class(
@@ -5586,6 +5648,11 @@ def run_experiment(args: argparse.Namespace) -> int:
         release_training_memory(device, test_loader)
         test_metrics = compute_classification_metrics(test_logits, test_targets, train_dataset.classes, args.confidence_threshold)
         test_probabilities = torch.softmax(torch.from_numpy(test_logits), dim=1).numpy()
+        test_confmat = np.asarray(test_metrics["confusion_matrix"], dtype=np.int64)
+        test_loss = float(test_metrics.get("cross_entropy_loss", test_metrics.get("loss", 0.0)))
+        save_confusion_matrix_csv(output_dir / "test_confmat_counts.csv", test_confmat, train_dataset.classes, percent=False)
+        save_confusion_matrix_csv(output_dir / "test_confmat_rate_pct.csv", test_confmat, train_dataset.classes, percent=True)
+        save_classification_report_csv(output_dir / "test_classification_report.csv", test_metrics, train_dataset.classes)
         log_json_event(
             log_path,
             {
@@ -5593,9 +5660,30 @@ def run_experiment(args: argparse.Namespace) -> int:
                 "split": "test",
                 "eval_batches": test_eval_batches,
                 "accuracy": test_metrics["accuracy"],
+                "loss": test_loss,
+                "raw_accuracy": test_metrics["raw_accuracy"],
+                "top1_accuracy": test_metrics["top1_accuracy"],
+                "top3_accuracy": test_metrics["top3_accuracy"],
+                "top5_accuracy": test_metrics["top5_accuracy"],
+                "macro_precision": test_metrics["macro_precision"],
+                "macro_recall": test_metrics["macro_recall"],
+                "macro_f1": test_metrics["macro_f1"],
+                "weighted_precision": test_metrics["weighted_precision"],
+                "weighted_recall": test_metrics["weighted_recall"],
+                "weighted_f1": test_metrics["weighted_f1"],
+                "balanced_accuracy": test_metrics["balanced_accuracy"],
+                "macro_roc_auc_ovr": test_metrics["macro_roc_auc_ovr"],
+                "weighted_roc_auc_ovr": test_metrics["weighted_roc_auc_ovr"],
+                "macro_pr_auc_ovr": test_metrics["macro_pr_auc_ovr"],
+                "weighted_pr_auc_ovr": test_metrics["weighted_pr_auc_ovr"],
+                "cohen_kappa": test_metrics["cohen_kappa"],
+                "mcc": test_metrics["mcc"],
                 "per_class_accuracy": test_metrics["per_class_accuracy"],
                 "per_class_avg_confidence": test_metrics["per_class_avg_confidence"],
-                "loss": test_metrics["loss"],
+                "ece": test_metrics["calibration"]["expected_calibration_error"],
+                "mce": test_metrics["calibration"]["maximum_calibration_error"],
+                "brier_score": test_metrics["calibration"]["brier_score"],
+                "nll": test_metrics["calibration"]["negative_log_likelihood"],
             },
         )
         test_correct_confidence = compute_correct_confidence_by_class(test_logits, test_targets, train_dataset.classes)  # noqa: F841
@@ -5643,9 +5731,12 @@ def run_experiment(args: argparse.Namespace) -> int:
         test_summary = {
             "split": "test",
             "num_samples": test_metrics["num_samples"],
+            "loss": test_loss,
+            "cross_entropy_loss": test_loss,
             "accuracy": test_metrics["accuracy"],
             "top1_accuracy": test_metrics["top1_accuracy"],
             "top3_accuracy": test_metrics["top3_accuracy"],
+            "top5_accuracy": test_metrics["top5_accuracy"],
             "macro_precision": test_metrics["macro_precision"],
             "macro_recall": test_metrics["macro_recall"],
             "macro_f1": test_metrics["macro_f1"],
@@ -5653,6 +5744,12 @@ def run_experiment(args: argparse.Namespace) -> int:
             "weighted_recall": test_metrics["weighted_recall"],
             "weighted_f1": test_metrics["weighted_f1"],
             "balanced_accuracy": test_metrics["balanced_accuracy"],
+            "macro_roc_auc_ovr": test_metrics["macro_roc_auc_ovr"],
+            "weighted_roc_auc_ovr": test_metrics["weighted_roc_auc_ovr"],
+            "macro_pr_auc_ovr": test_metrics["macro_pr_auc_ovr"],
+            "weighted_pr_auc_ovr": test_metrics["weighted_pr_auc_ovr"],
+            "cohen_kappa": test_metrics["cohen_kappa"],
+            "mcc": test_metrics["mcc"],
             "per_class_accuracy": test_metrics["per_class_accuracy"],
             "per_class_avg_confidence": test_metrics["per_class_avg_confidence"],
             "calibration": test_metrics["calibration"],
@@ -5667,6 +5764,11 @@ def run_experiment(args: argparse.Namespace) -> int:
                 "eval_batches": test_eval_batches,
                 "num_samples": test_metrics["num_samples"],
                 "accuracy": test_metrics["accuracy"],
+                "loss": test_loss,
+                "raw_accuracy": test_metrics["raw_accuracy"],
+                "top1_accuracy": test_metrics["top1_accuracy"],
+                "top3_accuracy": test_metrics["top3_accuracy"],
+                "top5_accuracy": test_metrics["top5_accuracy"],
                 "per_class_accuracy": test_metrics["per_class_accuracy"],
                 "macro_precision": test_metrics["macro_precision"],
                 "macro_recall": test_metrics["macro_recall"],
@@ -5675,8 +5777,15 @@ def run_experiment(args: argparse.Namespace) -> int:
                 "weighted_recall": test_metrics["weighted_recall"],
                 "weighted_f1": test_metrics["weighted_f1"],
                 "balanced_accuracy": test_metrics["balanced_accuracy"],
+                "macro_roc_auc_ovr": test_metrics["macro_roc_auc_ovr"],
+                "weighted_roc_auc_ovr": test_metrics["weighted_roc_auc_ovr"],
+                "macro_pr_auc_ovr": test_metrics["macro_pr_auc_ovr"],
+                "weighted_pr_auc_ovr": test_metrics["weighted_pr_auc_ovr"],
+                "cohen_kappa": test_metrics["cohen_kappa"],
+                "mcc": test_metrics["mcc"],
                 "per_class_avg_confidence": test_metrics["per_class_avg_confidence"],
                 "ece": test_metrics["calibration"]["expected_calibration_error"],
+                "mce": test_metrics["calibration"]["maximum_calibration_error"],
                 "brier_score": test_metrics["calibration"]["brier_score"],
                 "nll": test_metrics["calibration"]["negative_log_likelihood"],
             },
@@ -5693,7 +5802,7 @@ def run_experiment(args: argparse.Namespace) -> int:
         )
         save_confusion_matrix_plot(
             output_dir / "test_confusion_matrix.png",
-            np.asarray(test_metrics["confusion_matrix"], dtype=np.int64),
+            test_confmat,
             train_dataset.classes,
             "Test Confusion Matrix",
         )

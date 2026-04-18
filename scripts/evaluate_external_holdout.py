@@ -23,6 +23,8 @@ from metric_learning_pipeline import (
     evaluation_tensor_from_image,
     model_dtype_for_args,
     release_training_memory,
+    save_classification_report_csv,
+    save_confusion_matrix_csv,
     save_confidence_histogram,
     save_confusion_matrix_plot,
     save_json,
@@ -189,17 +191,27 @@ def main() -> int:
     )
     confidence = compute_correct_confidence_by_class(collapsed_logits, collapsed_targets, runtime_class_names)
     probabilities = torch.softmax(torch.from_numpy(collapsed_logits), dim=1).numpy() if collapsed_logits.size else np.empty((0, len(runtime_class_names)), dtype=np.float32)
+    confmat = np.asarray(metrics["confusion_matrix"], dtype=np.int64)
+    loss_value = float(metrics.get("cross_entropy_loss", metrics.get("loss", 0.0)))
 
     save_json(output_dir / "metrics.json", metrics)
     save_json(output_dir / "correct_confidence_by_class.json", confidence)
+    save_confusion_matrix_csv(output_dir / "confmat_counts_test.csv", confmat, runtime_class_names, percent=False)
+    save_confusion_matrix_csv(output_dir / "confmat_rate_pct_test.csv", confmat, runtime_class_names, percent=True)
+    save_classification_report_csv(output_dir / "classification_report_test.csv", metrics, runtime_class_names)
     save_json(
         output_dir / "summary.json",
         {
             "checkpoint": str(checkpoint_path),
             "dataset_root": str(dataset_root),
             "num_samples": metrics["num_samples"],
+            "loss": loss_value,
+            "cross_entropy_loss": loss_value,
             "raw_accuracy": metrics["raw_accuracy"],
             "accuracy": metrics["accuracy"],
+            "top1_accuracy": metrics["top1_accuracy"],
+            "top3_accuracy": metrics["top3_accuracy"],
+            "top5_accuracy": metrics["top5_accuracy"],
             "macro_precision": metrics["macro_precision"],
             "macro_recall": metrics["macro_recall"],
             "macro_f1": metrics["macro_f1"],
@@ -207,17 +219,27 @@ def main() -> int:
             "weighted_recall": metrics["weighted_recall"],
             "weighted_f1": metrics["weighted_f1"],
             "balanced_accuracy": metrics["balanced_accuracy"],
+            "macro_roc_auc_ovr": metrics["macro_roc_auc_ovr"],
+            "weighted_roc_auc_ovr": metrics["weighted_roc_auc_ovr"],
+            "macro_pr_auc_ovr": metrics["macro_pr_auc_ovr"],
+            "weighted_pr_auc_ovr": metrics["weighted_pr_auc_ovr"],
+            "cohen_kappa": metrics["cohen_kappa"],
+            "mcc": metrics["mcc"],
             "expected_calibration_error": metrics["calibration"]["expected_calibration_error"],
             "maximum_calibration_error": metrics["calibration"]["maximum_calibration_error"],
             "brier_score": metrics["calibration"]["brier_score"],
             "negative_log_likelihood": metrics["calibration"]["negative_log_likelihood"],
             "class_names": runtime_class_names,
             "collapse": collapse_info,
+            "per_class_accuracy": metrics["per_class_accuracy"],
+            "per_class_avg_confidence": metrics["per_class_avg_confidence"],
+            "per_class": metrics["per_class"],
+            "calibration": metrics["calibration"],
         },
     )
     save_confusion_matrix_plot(
         output_dir / "confusion_matrix.png",
-        np.asarray(metrics["confusion_matrix"], dtype=np.int64),
+        confmat,
         runtime_class_names,
         "External Holdout Confusion Matrix",
     )

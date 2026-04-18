@@ -122,6 +122,8 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--class-mapping` | `""` | JSON string for runtime class collapsing. |
 | `--splits` | `["val", "test"]` | Splits to evaluate. |
 
+The saved-classifier evaluator now writes `metrics.json`, `summary.json`, `correct_confidence_by_class.json`, `confmat_counts_<split>.csv`, `confmat_rate_pct_<split>.csv`, `classification_report_<split>.csv`, `confusion_matrix.png`, `reliability_diagram.png`, and `confidence_histogram.png` for each requested split.
+
 ## External Holdout: `scripts/evaluate_external_holdout.py`
 
 | Flag | Default | What it does |

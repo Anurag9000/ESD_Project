@@ -68,6 +68,11 @@ source .venv/bin/activate
 ./run_training.sh --backbone convnextv2_nano --num-workers 2 --prefetch-factor 1
 ```
 
+### End-of-Run Test Report
+- After the recursive `val_loss` and `val_raw_acc` stages complete, the pipeline runs one protected final test evaluation on the accepted checkpoint.
+- The final test bundle now includes `confmat_counts_test.csv`, `confmat_rate_pct_test.csv`, `classification_report_test.csv`, `test_confusion_matrix.png`, `test_reliability_diagram.png`, `test_confidence_histogram.png`, `metrics.json`, and `summary.json`.
+- The reported metric bundle includes loss, raw accuracy, top-1/top-3/top-5 accuracy, macro/weighted precision, recall, F1, balanced accuracy, macro/weighted ROC AUC OVR, macro/weighted PR AUC OVR, Cohen's kappa, MCC, ECE, MCE, Brier score, and NLL.
+
 ### Android Dashboard
 ```bash
 cd SmartBin_Android

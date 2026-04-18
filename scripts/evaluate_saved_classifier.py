@@ -18,6 +18,8 @@ from metric_learning_pipeline import (
     collapse_logits_and_targets_to_runtime_classes,
     compute_classification_metrics,
     compute_correct_confidence_by_class,
+    save_classification_report_csv,
+    save_confusion_matrix_csv,
     model_dtype_for_args,
     release_training_memory,
     save_confusion_matrix_plot,
@@ -184,15 +186,25 @@ def main() -> int:
         )
         confidence = compute_correct_confidence_by_class(collapsed_logits, collapsed_targets, runtime_class_names)
         probabilities = torch.softmax(torch.from_numpy(collapsed_logits), dim=1).numpy()
+        confmat = torch.as_tensor(metrics["confusion_matrix"], dtype=torch.int64).numpy()
+        loss_value = float(metrics.get("cross_entropy_loss", metrics.get("loss", 0.0)))
         split_dir = output_dir / split
         split_dir.mkdir(parents=True, exist_ok=True)
         save_json(split_dir / "metrics.json", metrics)
         save_json(split_dir / "correct_confidence_by_class.json", confidence)
+        save_confusion_matrix_csv(split_dir / f"confmat_counts_{split}.csv", confmat, runtime_class_names, percent=False)
+        save_confusion_matrix_csv(split_dir / f"confmat_rate_pct_{split}.csv", confmat, runtime_class_names, percent=True)
+        save_classification_report_csv(split_dir / f"classification_report_{split}.csv", metrics, runtime_class_names)
         split_summary = {
             "split": split,
             "num_samples": metrics["num_samples"],
+            "loss": loss_value,
+            "cross_entropy_loss": loss_value,
             "raw_accuracy": metrics["raw_accuracy"],
             "accuracy": metrics["accuracy"],
+            "top1_accuracy": metrics["top1_accuracy"],
+            "top3_accuracy": metrics["top3_accuracy"],
+            "top5_accuracy": metrics["top5_accuracy"],
             "macro_precision": metrics["macro_precision"],
             "macro_recall": metrics["macro_recall"],
             "macro_f1": metrics["macro_f1"],
@@ -200,6 +212,12 @@ def main() -> int:
             "weighted_recall": metrics["weighted_recall"],
             "weighted_f1": metrics["weighted_f1"],
             "balanced_accuracy": metrics["balanced_accuracy"],
+            "macro_roc_auc_ovr": metrics["macro_roc_auc_ovr"],
+            "weighted_roc_auc_ovr": metrics["weighted_roc_auc_ovr"],
+            "macro_pr_auc_ovr": metrics["macro_pr_auc_ovr"],
+            "weighted_pr_auc_ovr": metrics["weighted_pr_auc_ovr"],
+            "cohen_kappa": metrics["cohen_kappa"],
+            "mcc": metrics["mcc"],
             "expected_calibration_error": metrics["calibration"]["expected_calibration_error"],
             "maximum_calibration_error": metrics["calibration"]["maximum_calibration_error"],
             "brier_score": metrics["calibration"]["brier_score"],
@@ -207,6 +225,10 @@ def main() -> int:
             "class_names": runtime_class_names,
             "collapse": collapse_info,
             "source_class_counts": class_counts(dataset),
+            "per_class_accuracy": metrics["per_class_accuracy"],
+            "per_class_avg_confidence": metrics["per_class_avg_confidence"],
+            "per_class": metrics["per_class"],
+            "calibration": metrics["calibration"],
         }
         save_json(split_dir / "summary.json", split_summary)
         save_reliability_diagram(
@@ -221,7 +243,7 @@ def main() -> int:
         )
         save_confusion_matrix_plot(
             split_dir / "confusion_matrix.png",
-            torch.tensor(metrics["confusion_matrix"]).numpy(),
+            confmat,
             runtime_class_names,
             f"{split.title()} Confusion Matrix",
         )
