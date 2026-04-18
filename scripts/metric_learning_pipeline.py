@@ -3552,8 +3552,12 @@ def maybe_run_phase_visualizations(
         str(args.epoch_visualization_num_workers),
         "--sample-limit-activations",
         str(args.epoch_visualization_activation_sample_limit),
-        "--atlas-thumb-size",
-        str(args.epoch_visualization_atlas_thumb_size),
+        "--umap-thumb-size",
+        str(args.epoch_visualization_umap_thumb_size),
+        "--umap-max-samples",
+        str(args.epoch_visualization_umap_max_samples),
+        "--umap-thumbnail-limit",
+        str(args.epoch_visualization_umap_thumbnail_limit),
     ]
     log_json_event(
         log_path,
@@ -3964,10 +3968,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of test images to use for layer activation summaries. Use 0 for all test images.",
     )
     parser.add_argument(
-        "--epoch-visualization-atlas-thumb-size",
+        "--epoch-visualization-umap-thumb-size",
         type=int,
         default=48,
-        help="Thumbnail size for the full test atlas image.",
+        help="Thumbnail size for the UMAP thumbnail map.",
+    )
+    parser.add_argument(
+        "--epoch-visualization-umap-max-samples",
+        type=int,
+        default=0,
+        help="Optional cap for UMAP samples. Use 0 for the full test set.",
+    )
+    parser.add_argument(
+        "--epoch-visualization-umap-thumbnail-limit",
+        type=int,
+        default=1024,
+        help="Maximum number of thumbnails rendered on the UMAP map. Use 0 to render all thumbnails.",
     )
     parser.add_argument(
         "--runtime-bad-sample-cleanup",

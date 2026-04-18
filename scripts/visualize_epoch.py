@@ -5,13 +5,11 @@ visualize_epoch.py
 Per-epoch visualization engine for the ESD waste classification pipeline.
 Generates canonical artefacts from the COMPLETE test set (no augmentations):
 
-  1. tsne_all_classes.png      — one global t-SNE of every test embedding
-  2. per_class_tsne/*.png      — one t-SNE highlight plot per class
-  3. all_layer_activations.png — mean spatial activation for the backbone's major
+  1. umap_thumbnail_map.png    — UMAP layout of test embeddings with thumbnails
+  2. all_layer_activations.png — mean spatial activation for the backbone's major
                                   feature stages (per-layer = mean over channels)
                                   Why per-layer, not per-neuron?
                                   Per-layer = one summary map per stage = usable signal.
-  4. test_full_atlas.png       — full test-set atlas mosaic (every test image)
 
 Usage (standalone):
     python scripts/visualize_epoch.py \\
@@ -34,12 +32,13 @@ import matplotlib
 matplotlib.use("Agg")  # No display needed — pure file output
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+from matplotlib.offsetbox import AnnotationBbox, OffsetImage
 import numpy as np
 import torch
 import torch.nn.functional as F
 from PIL import Image
 from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
+import umap
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -90,10 +89,10 @@ class _LayerHook:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. Per-class t-SNE
+# 1. UMAP thumbnail embedding map
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generate_tsne_suite(
+def generate_umap_thumbnail_map(
     model: MetricLearningEfficientNetB0,
     loader: DataLoader,
     class_names: list[str],
@@ -101,94 +100,113 @@ def generate_tsne_suite(
     output_dir: Path,
     epoch_label: str,
     max_samples: int = 0,
+    thumbnail_limit: int = 1024,
+    thumb_size: int = 48,
 ) -> None:
-    print("  [t-SNE] Extracting embeddings …")
+    print("  [UMAP] Extracting embeddings, predictions, and thumbnails …")
     model.eval()
     model_dtype = next(model.parameters()).dtype
-    all_emb, all_lbl = [], []
+    all_emb, all_pred, all_thumb = [], [], []
     with torch.no_grad():
-        for images, labels in tqdm(loader, desc="  t-SNE embeddings", leave=False):
-            emb = model.encode(images.to(device=device, dtype=model_dtype))  # (B, 128)
+        for images, _ in tqdm(loader, desc="  UMAP embeddings", leave=False):
+            images_gpu = images.to(device=device, dtype=model_dtype)
+            emb = model.encode(images_gpu)
+            logits = model.classify(emb)
+            probs = F.softmax(logits, dim=1)
+            _, preds = probs.max(dim=1)
+
             all_emb.append(emb.cpu().float().numpy())
-            all_lbl.extend(labels.tolist())
+            all_pred.extend(preds.cpu().tolist())
+            for image in images:
+                image_np = _denorm(image.permute(1, 2, 0).numpy())
+                thumb = Image.fromarray(image_np).resize((thumb_size, thumb_size), Image.BILINEAR)
+                all_thumb.append(np.array(thumb))
+
             if max_samples > 0 and sum(chunk.shape[0] for chunk in all_emb) >= max_samples:
                 break
 
     emb_np = np.concatenate(all_emb, axis=0).astype(np.float32, copy=False)
-    lbl_np = np.array(all_lbl[: len(emb_np)])
+    pred_np = np.array(all_pred[: len(emb_np)])
+    thumb_np = all_thumb[: len(emb_np)]
     if max_samples > 0 and len(emb_np) > max_samples:
         emb_np = emb_np[:max_samples]
-        lbl_np = lbl_np[:max_samples]
+        pred_np = pred_np[:max_samples]
+        thumb_np = thumb_np[:max_samples]
 
     pca_dim = min(50, emb_np.shape[1], max(2, emb_np.shape[0] - 1))
     if pca_dim < emb_np.shape[1]:
         emb_np = PCA(n_components=pca_dim, random_state=42).fit_transform(emb_np)
 
-    print(f"  [t-SNE] Running on {len(emb_np)} samples …")
-    coords = TSNE(
+    print(f"  [UMAP] Running on {len(emb_np)} samples …")
+    coords = umap.UMAP(
         n_components=2,
         random_state=42,
-        init="pca",
-        learning_rate="auto",
-        angle=0.5,
-        perplexity=min(40, len(emb_np) - 1),
+        init="spectral",
+        n_neighbors=min(30, max(2, len(emb_np) - 1)),
+        min_dist=0.05,
+        metric="euclidean",
     ).fit_transform(emb_np)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    per_class_dir = output_dir / "per_class_tsne"
-    per_class_dir.mkdir(parents=True, exist_ok=True)
-
     palette = matplotlib.colormaps.get_cmap("tab10").resampled(len(class_names))
-    fig, ax = plt.subplots(figsize=(14, 12), dpi=150)
-    for cls_id, cls_name in enumerate(class_names):
-        mask = lbl_np == cls_id
-        ax.scatter(
-            coords[mask, 0], coords[mask, 1],
-            c=[palette(cls_id)],
-            label=cls_name,
-            s=6,
-            alpha=0.5,
-            linewidths=0,
+    fig, ax = plt.subplots(figsize=(16, 14), dpi=150)
+
+    point_colors = np.array([palette(int(pred)) for pred in pred_np])
+    ax.scatter(
+        coords[:, 0],
+        coords[:, 1],
+        s=8,
+        alpha=0.10,
+        c=point_colors,
+        linewidths=0,
+    )
+
+    if thumbnail_limit > 0 and len(coords) > thumbnail_limit:
+        rng = np.random.default_rng(42)
+        selected = np.sort(rng.choice(len(coords), size=thumbnail_limit, replace=False))
+    else:
+        selected = np.arange(len(coords))
+
+    x_min, y_min = coords.min(axis=0)
+    x_max, y_max = coords.max(axis=0)
+    span = max(float(x_max - x_min), float(y_max - y_min), 1e-6)
+    zoom = max(0.18, min(0.58, 0.32 * (48 / max(thumb_size, 1))))
+
+    for idx in selected:
+        color = palette(int(pred_np[idx]))
+        imagebox = OffsetImage(thumb_np[idx], zoom=zoom)
+        ab = AnnotationBbox(
+            imagebox,
+            (coords[idx, 0], coords[idx, 1]),
+            frameon=True,
+            pad=0.12,
+            bboxprops=dict(edgecolor=color, linewidth=1.1, boxstyle="round,pad=0.05"),
         )
-    ax.legend(markerscale=4, loc="upper right", framealpha=0.8)
-    ax.set_title(f"Per-Class Embedding Geometry — {epoch_label}\n"
-                 f"({len(emb_np):,} test images, no augmentation)", fontsize=13)
-    ax.set_xlabel("t-SNE dim 1")
-    ax.set_ylabel("t-SNE dim 2")
+        ax.add_artist(ab)
+
+    handles = [
+        plt.Line2D([0], [0], marker="o", color="w", label=cls_name,
+                   markerfacecolor=palette(cls_id), markersize=8)
+        for cls_id, cls_name in enumerate(class_names)
+    ]
+    ax.legend(handles=handles, loc="best", fontsize=8, frameon=True, ncol=2)
+    ax.set_title(
+        f"UMAP Thumbnail Map of Test Embeddings — {epoch_label}\n"
+        f"Thumbnails are colored by predicted class; background points show the full test embedding cloud.",
+        fontsize=14,
+    )
+    ax.set_xlabel("UMAP dim 1")
+    ax.set_ylabel("UMAP dim 2")
     ax.set_xticks([])
     ax.set_yticks([])
+    ax.grid(alpha=0.12)
+    ax.set_xlim(x_min - 0.05 * span, x_max + 0.05 * span)
+    ax.set_ylim(y_min - 0.05 * span, y_max + 0.05 * span)
     fig.tight_layout()
-    output_path = output_dir / "tsne_all_classes.png"
+    output_path = output_dir / "umap_thumbnail_map.png"
     fig.savefig(output_path, bbox_inches="tight")
     plt.close(fig)
-    print(f"  [t-SNE] Saved → {output_path}")
-
-    for cls_id, cls_name in enumerate(class_names):
-        mask = lbl_np == cls_id
-        fig, ax = plt.subplots(figsize=(14, 12), dpi=150)
-        ax.scatter(coords[:, 0], coords[:, 1], c="#999999", s=5, alpha=0.12, linewidths=0)
-        ax.scatter(
-            coords[mask, 0],
-            coords[mask, 1],
-            c=[palette(cls_id)],
-            s=7,
-            alpha=0.8,
-            linewidths=0,
-        )
-        ax.set_title(
-            f"t-SNE Highlight — {cls_name} — {epoch_label}\n"
-            f"({int(mask.sum()):,} samples highlighted)",
-            fontsize=13,
-        )
-        ax.set_xticks([])
-        ax.set_yticks([])
-        ax.set_xlabel("t-SNE dim 1")
-        ax.set_ylabel("t-SNE dim 2")
-        fig.tight_layout()
-        per_class_path = per_class_dir / f"{cls_name}.png"
-        fig.savefig(per_class_path, bbox_inches="tight")
-        plt.close(fig)
-
+    print(f"  [UMAP] Saved → {output_path}")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. All-layer activations
@@ -234,7 +252,7 @@ def generate_layer_activations(
 ) -> None:
     """
     Aggregate mean spatial activations across the entire test set by default.
-    ALL 9 EfficientNet-B0 backbone stages.  We average over:
+    The hook set follows the backbone's native stage layout. We average over:
       - batch dimension  (all images)
       - channel dimension (all learned filters)
     resulting in one (H×W) heatmap per stage — a true "What does this stage attend to?"
@@ -298,212 +316,6 @@ def generate_layer_activations(
     fig.savefig(output_path, bbox_inches="tight")
     plt.close(fig)
     print(f"  [ActMaps] Saved → {output_path}")
-
-
-def generate_per_class_sample_activations(
-    model: MetricLearningEfficientNetB0,
-    loader: DataLoader,
-    class_names: list[str],
-    device: torch.device,
-    output_dir: Path,
-    epoch_label: str,
-    samples_per_class: int = 10,
-) -> None:
-    """
-    Pick 10 samples from each class and generate a 4x3 grid for EACH one:
-    - [0,0]: Original Image
-    - [0,1...]: Stages of the backbone
-    """
-    print(f"  [SampleActs] Picking {samples_per_class} samples per class for audit …")
-    model.eval()
-    
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Selection buckets
-    n_cls = len(class_names)
-    buckets: dict[int, list[tuple[torch.Tensor, int]]] = {i: [] for i in range(n_cls)}
-    
-    with torch.no_grad():
-        for images, targets in loader:
-            for i in range(len(images)):
-                t = int(targets[i])
-                if len(buckets[t]) < samples_per_class:
-                    buckets[t].append((images[i], t))
-            if all(len(v) >= samples_per_class for v in buckets.values()):
-                break
-                
-    # Flatten selected samples
-    selected_samples = []
-    for cls_id in range(n_cls):
-        selected_samples.extend(buckets[cls_id])
-        
-    # Setup hooks
-    stage_specs = backbone_activation_specs(model)
-    hooks = {name: _LayerHook(module) for name, module in stage_specs}
-    stage_names = [name for name, _ in stage_specs]
-    stage_count = len(stage_names)
-    
-    print(f"  [SampleActs] Generating {len(selected_samples)} individual maps …")
-    model_dtype = next(model.parameters()).dtype
-    for idx, (img_tensor, target_id) in enumerate(tqdm(selected_samples, desc="  Sample activations", leave=False)):
-        model.eval()
-        with torch.no_grad():
-            img_batch = img_tensor.unsqueeze(0).to(device=device, dtype=model_dtype)
-            emb = model.encode(img_batch)
-            logits = model.classify(emb)
-            probs = F.softmax(logits, dim=1)
-            conf, pred = probs.max(dim=1)
-            pred = int(pred[0])
-            conf = float(conf[0])
-            
-            # Capture activations
-            activations = {name: hook.out[0].mean(dim=0).cpu().float().numpy() for name, hook in hooks.items()}
-            
-        # Draw a dynamic grid that fits the backbone stage count.
-        stage_rows = max(1, math.ceil((1 + stage_count) / 3))
-        ncols = 3
-        nrows = stage_rows + 1  # dedicate the final row to the text summary
-        fig = plt.figure(figsize=(ncols * 6, nrows * 5), dpi=100)
-        gs = gridspec.GridSpec(nrows, ncols, hspace=0.35, wspace=0.25)
-        
-        # Original Image
-        ax0 = fig.add_subplot(gs[0, 0])
-        img_np = _denorm(img_tensor.permute(1, 2, 0).numpy())
-        ax0.imshow(img_np)
-        ax0.set_title(f"Original: {class_names[target_id]}", fontsize=12, fontweight="bold")
-        ax0.axis("off")
-        
-        # 9 Stages
-        for s_idx, s_name in enumerate(stage_names):
-            grid_idx = s_idx + 1
-            row = grid_idx // 3
-            col = grid_idx % 3
-            ax = fig.add_subplot(gs[row, col])
-            amap = activations[s_name]
-            amap = (amap - amap.min()) / (amap.max() - amap.min() + 1e-8)
-            im = ax.imshow(amap, cmap="magma")
-            ax.set_title(f"Stage {s_idx}\n{s_name.split('·')[-1].strip()}", fontsize=10)
-            ax.axis("off")
-            plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-            
-        # Stats summary
-        ax_stat = fig.add_subplot(gs[stage_rows, :])
-        ax_stat.axis("off")
-        color = "green" if pred == target_id else "red"
-        status = "CORRECT" if pred == target_id else "MISCLASSIFIED"
-        stats_text = (
-            f"Ground Truth: {class_names[target_id]}\n"
-            f"Prediction: {class_names[pred]} ({status})\n"
-            f"Confidence: {conf:.2%}\n"
-            f"Epoch: {epoch_label}"
-        )
-        ax_stat.text(0.1, 0.5, stats_text, fontsize=16, color=color, va="center", fontweight="bold")
-        
-        plt.savefig(output_dir / f"{class_names[target_id]}_sample_{idx%samples_per_class}.png", bbox_inches="tight")
-        plt.close(fig)
-        
-    for hook in hooks.values():
-        hook.remove()
-    print(f"  [SampleActs] Saved {len(selected_samples)} samples to {output_dir}")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 3. Full test-set classification Atlas
-# ─────────────────────────────────────────────────────────────────────────────
-
-def generate_test_atlas(
-    model: MetricLearningEfficientNetB0,
-    loader: DataLoader,
-    class_names: list[str],
-    device: torch.device,
-    output_path: Path,
-    epoch_label: str,
-    thumb_size: int = 18,
-    max_columns: int = 192,
-    max_images: int = 0,
-) -> None:
-    """
-    Render the COMPLETE test set into one atlas image.
-    Images are sorted by predicted class, then confidence, then actual class.
-    Border colour: green = correct, red = misclassified.
-    """
-    print("  [Atlas] Collecting the full test set …")
-    model.eval()
-    model_dtype = next(model.parameters()).dtype
-
-    entries: list[tuple[int, int, float, np.ndarray]] = []
-
-    with torch.no_grad():
-        for images, targets in tqdm(loader, desc="  Atlas collect", leave=False):
-            images_gpu = images.to(device=device, dtype=model_dtype)
-            emb = model.encode(images_gpu)
-            logits = model.classify(emb)
-            probs = F.softmax(logits, dim=1)
-            confs, preds = probs.max(dim=1)
-
-            for i in range(len(images)):
-                pred = int(preds[i])
-                img = images[i].permute(1, 2, 0).numpy()
-                img = _denorm(img)
-                img_pil = Image.fromarray(img).resize(
-                    (thumb_size, thumb_size), Image.BILINEAR
-                )
-                entries.append((pred, int(targets[i]), float(confs[i]), np.array(img_pil)))
-                if max_images > 0 and len(entries) >= max_images:
-                    break
-            if max_images > 0 and len(entries) >= max_images:
-                break
-
-    entries.sort(key=lambda item: (item[0], -item[2], item[1]))
-
-    border = 2
-    cell = thumb_size + 2 * border
-    count = len(entries)
-    columns = min(max_columns, max(1, math.ceil(math.sqrt(count))))
-    rows = max(1, math.ceil(count / columns))
-    title_h = 44
-    legend_h = 28
-    canvas_h = title_h + legend_h + (rows * cell)
-    canvas_w = columns * cell
-    canvas = np.ones((canvas_h, canvas_w, 3), dtype=np.uint8) * 24
-
-    for index, (pred, actual, _conf, thumb) in enumerate(entries):
-        row = index // columns
-        col = index % columns
-        y_top = title_h + legend_h + row * cell
-        x_left = col * cell
-        colour = (50, 200, 80) if actual == pred else (220, 50, 50)
-        canvas[y_top : y_top + cell, x_left : x_left + cell] = colour
-        canvas[
-            y_top + border : y_top + border + thumb_size,
-            x_left + border : x_left + border + thumb_size,
-        ] = thumb
-
-    final_img = Image.fromarray(canvas)
-    from PIL import ImageDraw, ImageFont
-    try:
-        title_font = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 15
-        )
-    except OSError:
-        title_font = ImageFont.load_default()
-    draw = ImageDraw.Draw(final_img)
-    draw.text(
-        (8, 10),
-        f"Full Test Set Atlas — {epoch_label} ({count:,} images, no augmentation)",
-        fill=(255, 255, 255),
-        font=title_font,
-    )
-    draw.text(
-        (8, title_h + 4 - legend_h),
-        "Sorted by predicted class then confidence. Green border = correct, red border = misclassified.",
-        fill=(210, 210, 210),
-        font=title_font if thumb_size >= 24 else ImageFont.load_default(),
-    )
-    final_img.save(output_path)
-    print(f"  [Atlas] Saved → {output_path}")
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Main entry-point
 # ─────────────────────────────────────────────────────────────────────────────
@@ -516,9 +328,9 @@ def run(
     batch_size: int = 128,
     num_workers: int = 4,
     sample_limit_activations: int = 0,
-    atlas_thumb_size: int = 48,
-    tsne_max_samples: int = 0,
-    atlas_max_images: int = 0,
+    umap_max_samples: int = 0,
+    umap_thumbnail_limit: int = 1024,
+    umap_thumb_size: int = 48,
 ) -> None:
     checkpoint_path = Path(checkpoint_path)
     output_dir = Path(output_dir)
@@ -552,11 +364,13 @@ def run(
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
 
-    # ── 1. Per-class t-SNE ───────────────────────────────────────────────────
-    generate_tsne_suite(
+    # ── 1. UMAP thumbnail map ────────────────────────────────────────────────
+    generate_umap_thumbnail_map(
         model, loader, class_names, device,
         output_dir, epoch_label,
-        max_samples=tsne_max_samples,
+        max_samples=umap_max_samples,
+        thumbnail_limit=umap_thumbnail_limit,
+        thumb_size=umap_thumb_size,
     )
 
     # ── 2. All-layer activations ─────────────────────────────────────────────
@@ -565,28 +379,14 @@ def run(
         output_dir / "all_layer_activations.png", epoch_label,
         sample_limit=sample_limit_activations,
     )
-
-    generate_per_class_sample_activations(
-        model, loader, class_names, device,
-        output_dir / "per_class_samples", epoch_label,
-        samples_per_class=10,
-    )
-
-    # ── 3. Full atlas ────────────────────────────────────────────────────────
-    generate_test_atlas(
-        model, loader, class_names, device,
-        output_dir / "test_full_atlas.png", epoch_label,
-        thumb_size=atlas_thumb_size,
-        max_images=atlas_max_images,
-    )
     print(f"[VIZ] All visualizations saved to {output_dir}\n")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Generate per-class t-SNE, all-layer activation maps, and a "
-            "full test-set classification atlas from a training checkpoint."
+            "Generate a UMAP thumbnail embedding map and all-layer activation "
+            "maps from a training checkpoint."
         )
     )
     parser.add_argument(
@@ -612,16 +412,16 @@ def main() -> None:
         help="Max images used to build the activation average. Use 0 for all test images.",
     )
     parser.add_argument(
-        "--atlas-thumb-size", type=int, default=48,
-        help="Thumbnail size for the full test atlas (default 48).",
+        "--umap-thumb-size", type=int, default=48,
+        help="Thumbnail size for the UMAP thumbnail map (default 48).",
     )
     parser.add_argument(
-        "--tsne-max-samples", type=int, default=0,
-        help="Optional cap for t-SNE samples. Use 0 for the full test set.",
+        "--umap-max-samples", type=int, default=0,
+        help="Optional cap for UMAP samples. Use 0 for the full test set.",
     )
     parser.add_argument(
-        "--atlas-max-images", type=int, default=0,
-        help="Optional cap for full-atlas images. Use 0 for the full test set.",
+        "--umap-thumbnail-limit", type=int, default=1024,
+        help="Maximum number of thumbnails rendered on the UMAP map. Use 0 to render all thumbnails.",
     )
     args = parser.parse_args()
     run(
@@ -632,9 +432,9 @@ def main() -> None:
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         sample_limit_activations=args.sample_limit_activations,
-        atlas_thumb_size=args.atlas_thumb_size,
-        tsne_max_samples=args.tsne_max_samples,
-        atlas_max_images=args.atlas_max_images,
+        umap_max_samples=args.umap_max_samples,
+        umap_thumbnail_limit=args.umap_thumbnail_limit,
+        umap_thumb_size=args.umap_thumb_size,
     )
 
 
