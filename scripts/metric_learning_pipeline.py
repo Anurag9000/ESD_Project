@@ -1791,16 +1791,21 @@ def steps_per_epoch_for_sampler(sampler: Sampler[int] | None, dataset: Dataset, 
     return min(steps, max_batches) if max_batches > 0 else steps
 
 
-def steps_until_next_validation(
-    phase_steps_completed: int,
-    steps_per_epoch: int,
-    eval_every_epochs: float,
-    steps_remaining_in_epoch: int,
-) -> int:
-    interval_steps = max(float(eval_every_epochs) * float(steps_per_epoch), 1.0)
-    next_threshold = (math.floor(phase_steps_completed / interval_steps) + 1) * interval_steps
-    steps_until_threshold = max(1, int(math.ceil(next_threshold - phase_steps_completed)))
-    return min(steps_until_threshold, steps_remaining_in_epoch)
+def infer_phase_train_loss_baseline(
+    history: list[dict[str, Any]],
+    stage: str,
+    phase_name: str | None,
+) -> float:
+    for row in reversed(history):
+        if row.get("stage") != stage:
+            continue
+        if phase_name is not None and row.get("phase_name") != phase_name:
+            continue
+        for key in ("window_train_loss", "epoch_running_train_loss", "running_loss"):
+            value = row.get(key)
+            if isinstance(value, (int, float)):
+                return float(value)
+    return float("inf")
 
 
 def limited_batches(loader: DataLoader, max_batches: int):
@@ -1944,6 +1949,10 @@ def train_supcon_steps(
     total_loss = 0.0
     total_seen = 0
     steps_done = 0
+    if step_checkpoint_payload is None:
+        step_checkpoint_payload = {}
+    if step_resume_payload is None:
+        step_resume_payload = {}
 
     for local_step in range(step_limit):
         try:
@@ -1988,6 +1997,36 @@ def train_supcon_steps(
             second_loss = loss
         scheduler.step()
 
+        step_train_loss = float(second_loss.item())
+        best_train_loss = float(step_checkpoint_payload.get("phase_train_loss_best", float("inf")))
+        train_loss_wait = int(step_checkpoint_payload.get("phase_train_loss_wait", 0))
+        validation_wait = int(step_checkpoint_payload.get("phase_validation_wait", 0))
+        if step_train_loss < best_train_loss - args.early_stopping_min_delta:
+            best_train_loss = step_train_loss
+            train_loss_wait = 0
+        else:
+            train_loss_wait += 1
+        validation_wait += 1
+        validation_due = False
+        validation_reason: str | None = None
+        if train_loss_wait >= args.train_loss_validation_patience:
+            validation_due = True
+            validation_reason = "train_loss_plateau"
+            train_loss_wait = 0
+        elif validation_wait >= args.validation_patience:
+            validation_due = True
+            validation_reason = "validation_stale"
+        step_checkpoint_payload["phase_train_loss_best"] = best_train_loss
+        step_checkpoint_payload["phase_train_loss_wait"] = train_loss_wait
+        step_checkpoint_payload["phase_validation_wait"] = validation_wait
+        step_checkpoint_payload["validation_due"] = validation_due
+        step_checkpoint_payload["validation_reason"] = validation_reason
+        step_resume_payload["phase_train_loss_best"] = best_train_loss
+        step_resume_payload["phase_train_loss_wait"] = train_loss_wait
+        step_resume_payload["phase_validation_wait"] = validation_wait
+        step_resume_payload["validation_due"] = validation_due
+        step_resume_payload["validation_reason"] = validation_reason
+
         batch_size = labels.size(0)
         total_loss += second_loss.item() * batch_size
         total_seen += batch_size
@@ -2027,8 +2066,16 @@ def train_supcon_steps(
                 "global_source_samples_seen": train_progress["global_source_samples_seen"],
                 "running_loss": total_loss / max(1, total_seen),
                 "learning_rates": optimizer_learning_rates(optimizer),
+                "phase_train_loss_best": best_train_loss,
+                "phase_train_loss_wait": train_loss_wait,
+                "phase_validation_wait": validation_wait,
+                "validation_due": validation_due,
+                "validation_reason": validation_reason,
             }
             log_json_event(log_path, event)
+
+        if validation_due:
+            break
 
     return total_loss / max(1, total_seen), steps_done, total_seen
 
@@ -2297,6 +2344,10 @@ def train_classifier_steps(
     total_targeted_penalty = 0.0
     total_seen = 0
     steps_done = 0
+    if step_checkpoint_payload is None:
+        step_checkpoint_payload = {}
+    if step_resume_payload is None:
+        step_resume_payload = {}
 
     for local_step in range(step_limit):
         try:
@@ -2335,6 +2386,36 @@ def train_classifier_steps(
             second_confidence_penalty = confidence_penalty
             second_targeted_penalty = targeted_penalty
         scheduler.step()
+
+        step_train_loss = float(second_loss.item())
+        best_train_loss = float(step_checkpoint_payload.get("phase_train_loss_best", float("inf")))
+        train_loss_wait = int(step_checkpoint_payload.get("phase_train_loss_wait", 0))
+        validation_wait = int(step_checkpoint_payload.get("phase_validation_wait", 0))
+        if step_train_loss < best_train_loss - args.early_stopping_min_delta:
+            best_train_loss = step_train_loss
+            train_loss_wait = 0
+        else:
+            train_loss_wait += 1
+        validation_wait += 1
+        validation_due = False
+        validation_reason: str | None = None
+        if train_loss_wait >= args.train_loss_validation_patience:
+            validation_due = True
+            validation_reason = "train_loss_plateau"
+            train_loss_wait = 0
+        elif validation_wait >= args.validation_patience:
+            validation_due = True
+            validation_reason = "validation_stale"
+        step_checkpoint_payload["phase_train_loss_best"] = best_train_loss
+        step_checkpoint_payload["phase_train_loss_wait"] = train_loss_wait
+        step_checkpoint_payload["phase_validation_wait"] = validation_wait
+        step_checkpoint_payload["validation_due"] = validation_due
+        step_checkpoint_payload["validation_reason"] = validation_reason
+        step_resume_payload["phase_train_loss_best"] = best_train_loss
+        step_resume_payload["phase_train_loss_wait"] = train_loss_wait
+        step_resume_payload["phase_validation_wait"] = validation_wait
+        step_resume_payload["validation_due"] = validation_due
+        step_resume_payload["validation_reason"] = validation_reason
 
         with torch.no_grad():
             with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
@@ -2391,8 +2472,16 @@ def train_classifier_steps(
                 "running_targeted_confusion_penalty": total_targeted_penalty / max(1, total_seen),
                 "confidence_threshold": args.confidence_threshold,
                 "learning_rates": optimizer_learning_rates(optimizer),
+                "phase_train_loss_best": best_train_loss,
+                "phase_train_loss_wait": train_loss_wait,
+                "phase_validation_wait": validation_wait,
+                "validation_due": validation_due,
+                "validation_reason": validation_reason,
             }
             log_json_event(log_path, event)
+
+        if validation_due:
+            break
 
     return (
         total_loss / max(1, total_seen),
@@ -3601,7 +3690,7 @@ def build_parser() -> argparse.ArgumentParser:
         "(5) Recursive val_loss refinement → "
         "(6) Recursive val_raw_acc refinement. "
         "Checkpoints saved at every step, validation, and phase transition. "
-        "Per-epoch clean test-set visual audits, calibration reports, and optional Grad-CAM exports are available."
+        "Phase-end clean test-set visual audits, calibration reports, and optional Grad-CAM exports are available."
     )
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--dataset-root", default="Dataset_Final")
@@ -3651,6 +3740,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--confidence-gap-penalty-weight", type=float, default=0.0)
     parser.add_argument("--class-loss-weight", action="append", default=[])
     parser.add_argument("--targeted-confusion-penalty", action="append", default=[])
+    parser.add_argument(
+        "--train-loss-validation-patience",
+        type=int,
+        default=500,
+        help="Trigger validation after this many consecutive train steps without a new best train loss in the current phase.",
+    )
+    parser.add_argument(
+        "--validation-patience",
+        type=int,
+        default=1000,
+        help="Force validation after this many consecutive train steps since the last validation checkpoint in the current phase.",
+    )
     parser.add_argument(
         "--sampling-strategy",
         choices=("balanced", "weighted", "shuffle"),
@@ -3902,8 +4003,10 @@ def run_experiment(args: argparse.Namespace) -> int:
         raise ValueError("--log-every-steps must be >= 1")
     if args.log_eval_every_steps < 1:
         raise ValueError("--log-eval-every-steps must be >= 1")
-    if args.eval_every_epochs <= 0:
-        raise ValueError("--eval-every-epochs must be > 0")
+    if args.train_loss_validation_patience < 1:
+        raise ValueError("--train-loss-validation-patience must be >= 1")
+    if args.validation_patience < 1:
+        raise ValueError("--validation-patience must be >= 1")
     if args.confidence_threshold < 0.0 or args.confidence_threshold > 1.0:
         raise ValueError("--confidence-threshold must be between 0 and 1")
     if args.supcon_early_stopping_patience < 1:
@@ -4032,7 +4135,8 @@ def run_experiment(args: argparse.Namespace) -> int:
             "val_steps_per_eval": len(val_loader),
             "test_steps_per_eval": len(test_loader),
             "sampling_strategy": args.sampling_strategy,
-            "eval_every_epochs": args.eval_every_epochs,
+            "train_loss_validation_patience": args.train_loss_validation_patience,
+            "validation_patience": args.validation_patience,
             "supcon_early_stopping_patience": args.supcon_early_stopping_patience,
             "head_early_stopping_patience": args.head_early_stopping_patience,
             "stage_early_stopping_patience": args.stage_early_stopping_patience,
@@ -4235,6 +4339,15 @@ def run_experiment(args: argparse.Namespace) -> int:
                     },
                 )
 
+            phase_train_loss_best = float(
+                resume_state.get(
+                    "phase_train_loss_best",
+                    infer_phase_train_loss_baseline(history, "supcon", supcon_phase.name),
+                )
+            )
+            phase_train_loss_wait = int(resume_state.get("phase_train_loss_wait", 0))
+            phase_validation_wait = int(resume_state.get("phase_validation_wait", 0))
+
             supcon_steps_full_epoch = steps_per_epoch_for_sampler(
                 supcon_sampler, supcon_train_dataset, args.batch_size, args.max_train_batches
             )
@@ -4260,21 +4373,41 @@ def run_experiment(args: argparse.Namespace) -> int:
                 progress = tqdm(total=supcon_steps_per_epoch, leave=False)
 
                 while epoch_steps_done < supcon_steps_full_epoch:
-                    phase_steps_completed = ((epoch - 1) * supcon_steps_full_epoch) + epoch_steps_done
-                    step_window = steps_until_next_validation(
-                        phase_steps_completed=phase_steps_completed,
-                        steps_per_epoch=supcon_steps_full_epoch,
-                        eval_every_epochs=args.eval_every_epochs,
-                        steps_remaining_in_epoch=supcon_steps_full_epoch - epoch_steps_done,
-                    )
                     step_start_index = epoch_steps_done * args.batch_size
                     supcon_sampler.set_epoch(augmentation_epoch_cursor)
                     supcon_sampler.set_start_index(step_start_index)
                     supcon_iterator = iter(limited_batches(supcon_train_loader, args.max_train_batches))
+                    supcon_step_checkpoint_payload = {
+                        "history": history,
+                        "best_val_loss": best_val_loss,
+                        "best_val_acc": best_val_acc,
+                        "best_val_raw_acc": best_val_raw_acc,
+                        "best_classifier_state": best_classifier_state,
+                        "supcon_best_state": supcon_best_state,
+                        "supcon_best_loss": supcon_best_loss,
+                        "supcon_best_epoch": supcon_best_epoch,
+                        "supcon_wait": supcon_wait,
+                        "phase_best_state": phase_best_state,
+                        "augmentation_epoch_cursor": augmentation_epoch_cursor,
+                        "phase_train_loss_best": phase_train_loss_best,
+                        "phase_train_loss_wait": phase_train_loss_wait,
+                        "phase_validation_wait": phase_validation_wait,
+                    }
+                    supcon_step_resume_payload = {
+                        "phase_index": supcon_phase_index,
+                        "phase_name": supcon_phase.name,
+                        "validation_index": validation_index,
+                        "phase_best_loss": phase_best_loss,
+                        "phase_best_epoch": phase_best_epoch,
+                        "phase_wait": phase_wait,
+                        "phase_train_loss_best": phase_train_loss_best,
+                        "phase_train_loss_wait": phase_train_loss_wait,
+                        "phase_validation_wait": phase_validation_wait,
+                    }
                     window_train_loss, steps_done, window_samples = train_supcon_steps(
                         model=model,
                         batch_iterator=supcon_iterator,
-                        step_limit=step_window,
+                        step_limit=supcon_steps_full_epoch - epoch_steps_done,
                         criterion=supcon_loss,
                         optimizer=supcon_optimizer,
                         scaler=supcon_scaler,
@@ -4292,27 +4425,8 @@ def run_experiment(args: argparse.Namespace) -> int:
                         args=args,
                         phase_index=supcon_phase_index,
                         phase_name=supcon_phase.name,
-                        step_checkpoint_payload={
-                            "history": history,
-                            "best_val_loss": best_val_loss,
-                            "best_val_acc": best_val_acc,
-                            "best_val_raw_acc": best_val_raw_acc,
-                            "best_classifier_state": best_classifier_state,
-                            "supcon_best_state": supcon_best_state,
-                            "supcon_best_loss": supcon_best_loss,
-                            "supcon_best_epoch": supcon_best_epoch,
-                            "supcon_wait": supcon_wait,
-                            "phase_best_state": phase_best_state,
-                            "augmentation_epoch_cursor": augmentation_epoch_cursor,
-                        },
-                        step_resume_payload={
-                            "phase_index": supcon_phase_index,
-                            "phase_name": supcon_phase.name,
-                            "validation_index": validation_index,
-                            "phase_best_loss": phase_best_loss,
-                            "phase_best_epoch": phase_best_epoch,
-                            "phase_wait": phase_wait,
-                        },
+                        step_checkpoint_payload=supcon_step_checkpoint_payload,
+                        step_resume_payload=supcon_step_resume_payload,
                     )
                     del supcon_iterator
                     if steps_done == 0:
@@ -4326,6 +4440,19 @@ def run_experiment(args: argparse.Namespace) -> int:
                     progress.set_postfix(loss=f"{epoch_loss_sum / max(1, epoch_samples_seen):.4f}")
                     release_training_memory(device, supcon_train_loader)
 
+                    phase_train_loss_best = float(
+                        supcon_step_resume_payload.get("phase_train_loss_best", phase_train_loss_best)
+                    )
+                    phase_train_loss_wait = int(
+                        supcon_step_resume_payload.get("phase_train_loss_wait", phase_train_loss_wait)
+                    )
+                    phase_validation_wait = int(
+                        supcon_step_resume_payload.get("phase_validation_wait", phase_validation_wait)
+                    )
+                    validation_trigger_reason = supcon_step_resume_payload.get("validation_reason")
+                    if validation_trigger_reason is None and epoch_steps_done < supcon_steps_full_epoch:
+                        validation_trigger_reason = "epoch_boundary"
+
                     log_json_event(
                         log_path,
                         {
@@ -4338,6 +4465,7 @@ def run_experiment(args: argparse.Namespace) -> int:
                             "epoch_step": epoch_steps_done,
                             "global_train_step": train_progress["global_train_step"],
                             "eval_batches": val_eval_batches,
+                            "validation_reason": validation_trigger_reason,
                         },
                     )
                     val_loss = evaluate_supcon(
@@ -4374,6 +4502,10 @@ def run_experiment(args: argparse.Namespace) -> int:
                             "global_train_step": train_progress["global_train_step"],
                             "eval_batches": val_eval_batches,
                             "val_loss": val_loss,
+                            "phase_train_loss_best": phase_train_loss_best,
+                            "phase_train_loss_wait": phase_train_loss_wait,
+                            "phase_validation_wait": phase_validation_wait,
+                            "validation_reason": validation_trigger_reason,
                         },
                     )
                     if val_loss < phase_best_loss - args.early_stopping_min_delta:
@@ -4459,15 +4591,49 @@ def run_experiment(args: argparse.Namespace) -> int:
                         "val_loss": val_loss,
                         "phase_best_val_loss": phase_best_loss,
                         "supcon_best_val_loss": supcon_best_loss,
+                        "phase_train_loss_best": phase_train_loss_best,
+                        "phase_train_loss_wait": phase_train_loss_wait,
+                        "phase_validation_wait": phase_validation_wait,
+                        "validation_reason": validation_trigger_reason,
                         "checks_without_improvement": phase_wait,
                         "patience_limit": args.supcon_early_stopping_patience,
-                        "patience_unit": "validation_window",
-                        "validation_interval_epochs": args.eval_every_epochs,
+                        "patience_unit": "train_steps",
+                        "validation_interval_train_steps": None,
+                        "train_loss_validation_patience": args.train_loss_validation_patience,
+                        "validation_patience": args.validation_patience,
                         "supcon_head_lr": args.supcon_head_lr,
                         "supcon_backbone_lr": args.supcon_backbone_lr,
                     }
                     history.append(row)
                     log_json_event(log_path, row)
+                    phase_train_loss_wait = 0
+                    phase_validation_wait = 0
+                    supcon_step_checkpoint_payload["phase_train_loss_wait"] = 0
+                    supcon_step_checkpoint_payload["phase_validation_wait"] = 0
+                    supcon_step_checkpoint_payload["validation_due"] = False
+                    supcon_step_checkpoint_payload["validation_reason"] = None
+                    supcon_step_resume_payload["phase_train_loss_wait"] = 0
+                    supcon_step_resume_payload["phase_validation_wait"] = 0
+                    supcon_step_resume_payload["validation_due"] = False
+                    supcon_step_resume_payload["validation_reason"] = None
+                    save_step_checkpoint(
+                        path=step_checkpoint_path,
+                        model=model,
+                        class_names=train_dataset.classes,
+                        class_to_idx=train_dataset.class_to_idx,
+                        args=args,
+                        train_progress=train_progress,
+                        stage="supcon",
+                        epoch=epoch,
+                        epoch_step=epoch_steps_done,
+                        optimizer=supcon_optimizer,
+                        scheduler=supcon_scheduler,
+                        scaler=supcon_scaler,
+                        phase_index=supcon_phase_index,
+                        phase_name=supcon_phase.name,
+                        extra_payload=supcon_step_checkpoint_payload,
+                        extra_resume=supcon_step_resume_payload,
+                    )
                     save_training_checkpoint(
                         checkpoint_path,
                         {
@@ -4487,6 +4653,9 @@ def run_experiment(args: argparse.Namespace) -> int:
                             "supcon_wait": supcon_wait,
                             "phase_best_state": phase_best_state,
                             "augmentation_epoch_cursor": augmentation_epoch_cursor,
+                            "phase_train_loss_best": phase_train_loss_best,
+                            "phase_train_loss_wait": phase_train_loss_wait,
+                            "phase_validation_wait": phase_validation_wait,
                             "resume": {
                                 "stage": "supcon",
                                 "phase_index": supcon_phase_index,
@@ -4497,6 +4666,9 @@ def run_experiment(args: argparse.Namespace) -> int:
                                 "phase_best_loss": phase_best_loss,
                                 "phase_best_epoch": phase_best_epoch,
                                 "phase_wait": phase_wait,
+                                "phase_train_loss_best": phase_train_loss_best,
+                                "phase_train_loss_wait": phase_train_loss_wait,
+                                "phase_validation_wait": phase_validation_wait,
                                 "optimizer_state_dict": supcon_optimizer.state_dict(),
                                 "scheduler_state_dict": supcon_scheduler.state_dict(),
                                 "scaler_state_dict": supcon_scaler.state_dict(),
@@ -4701,6 +4873,14 @@ def run_experiment(args: argparse.Namespace) -> int:
             phase_best_epoch = 0
             phase_best_state = cpu_state_dict(model)
             phase_wait = 0
+        phase_train_loss_best = float(
+            resume_state.get(
+                "phase_train_loss_best",
+                infer_phase_train_loss_baseline(history, "classifier", phase.name),
+            )
+        )
+        phase_train_loss_wait = int(resume_state.get("phase_train_loss_wait", 0))
+        phase_validation_wait = int(resume_state.get("phase_validation_wait", 0))
         phase_patience = (
             args.head_early_stopping_patience
             if phase_index == 1 and args.classifier_train_mode == "progressive"
@@ -4716,7 +4896,10 @@ def run_experiment(args: argparse.Namespace) -> int:
             train_sampler.set_epoch(augmentation_epoch_cursor)
             train_sampler.set_start_index(start_index)
             phase_steps_full_epoch = steps_per_epoch_for_sampler(train_sampler, train_dataset, args.batch_size, args.max_train_batches)
-            phase_steps_per_epoch = max(0, phase_steps_full_epoch - (start_phase_epoch_step if same_resume_phase and epoch == start_phase_epoch else 0))
+            phase_steps_per_epoch = max(
+                0,
+                phase_steps_full_epoch - (start_phase_epoch_step if same_resume_phase and epoch == start_phase_epoch else 0),
+            )
             epoch_steps_done = start_phase_epoch_step if same_resume_phase and epoch == start_phase_epoch else 0
             epoch_samples_seen = 0
             epoch_loss_sum = 0.0
@@ -4727,21 +4910,41 @@ def run_experiment(args: argparse.Namespace) -> int:
             progress = tqdm(total=phase_steps_per_epoch, leave=False)
 
             while epoch_steps_done < phase_steps_full_epoch:
-                phase_steps_completed = ((epoch - 1) * phase_steps_full_epoch) + epoch_steps_done
-                step_window = steps_until_next_validation(
-                    phase_steps_completed=phase_steps_completed,
-                    steps_per_epoch=phase_steps_full_epoch,
-                    eval_every_epochs=args.eval_every_epochs,
-                    steps_remaining_in_epoch=phase_steps_full_epoch - epoch_steps_done,
-                )
                 step_start_index = epoch_steps_done * args.batch_size
                 train_sampler.set_epoch(augmentation_epoch_cursor)
                 train_sampler.set_start_index(step_start_index)
                 phase_iterator = iter(limited_batches(train_loader, args.max_train_batches))
+                classifier_step_checkpoint_payload = {
+                    "history": history,
+                    "best_val_loss": best_val_loss,
+                    "best_val_acc": best_val_acc,
+                    "best_val_raw_acc": best_val_raw_acc,
+                    "best_classifier_state": best_classifier_state,
+                    "supcon_best_state": supcon_best_state,
+                    "supcon_best_loss": supcon_best_loss,
+                    "supcon_best_epoch": supcon_best_epoch,
+                    "supcon_wait": supcon_wait,
+                    "phase_best_state": phase_best_state,
+                    "augmentation_epoch_cursor": augmentation_epoch_cursor,
+                    "phase_train_loss_best": phase_train_loss_best,
+                    "phase_train_loss_wait": phase_train_loss_wait,
+                    "phase_validation_wait": phase_validation_wait,
+                }
+                classifier_step_resume_payload = {
+                    "validation_index": validation_index,
+                    "phase_best_loss": phase_best_loss,
+                    "phase_best_acc": phase_best_acc,
+                    "phase_best_raw_acc": phase_best_raw_acc,
+                    "phase_best_epoch": phase_best_epoch,
+                    "phase_wait": phase_wait,
+                    "phase_train_loss_best": phase_train_loss_best,
+                    "phase_train_loss_wait": phase_train_loss_wait,
+                    "phase_validation_wait": phase_validation_wait,
+                }
                 window_train_loss, window_train_acc, window_train_raw_acc, steps_done, window_samples = train_classifier_steps(
                     model=model,
                     batch_iterator=phase_iterator,
-                    step_limit=step_window,
+                    step_limit=phase_steps_full_epoch - epoch_steps_done,
                     criterion=classifier_criterion,
                     optimizer=optimizer,
                     scaler=scaler,
@@ -4759,27 +4962,8 @@ def run_experiment(args: argparse.Namespace) -> int:
                     class_names=train_dataset.classes,
                     class_to_idx=train_dataset.class_to_idx,
                     args=args,
-                    step_checkpoint_payload={
-                        "history": history,
-                        "best_val_loss": best_val_loss,
-                        "best_val_acc": best_val_acc,
-                        "best_val_raw_acc": best_val_raw_acc,
-                        "best_classifier_state": best_classifier_state,
-                        "supcon_best_state": supcon_best_state,
-                        "supcon_best_loss": supcon_best_loss,
-                        "supcon_best_epoch": supcon_best_epoch,
-                        "supcon_wait": supcon_wait,
-                        "phase_best_state": phase_best_state,
-                        "augmentation_epoch_cursor": augmentation_epoch_cursor,
-                    },
-                    step_resume_payload={
-                        "validation_index": validation_index,
-                        "phase_best_loss": phase_best_loss,
-                        "phase_best_acc": phase_best_acc,
-                        "phase_best_raw_acc": phase_best_raw_acc,
-                        "phase_best_epoch": phase_best_epoch,
-                        "phase_wait": phase_wait,
-                    },
+                    step_checkpoint_payload=classifier_step_checkpoint_payload,
+                    step_resume_payload=classifier_step_resume_payload,
                 )
                 del phase_iterator
                 if steps_done == 0:
@@ -4798,6 +4982,13 @@ def run_experiment(args: argparse.Namespace) -> int:
                 )
                 release_training_memory(device, train_loader)
 
+                phase_train_loss_best = float(classifier_step_resume_payload.get("phase_train_loss_best", phase_train_loss_best))
+                phase_train_loss_wait = int(classifier_step_resume_payload.get("phase_train_loss_wait", phase_train_loss_wait))
+                phase_validation_wait = int(classifier_step_resume_payload.get("phase_validation_wait", phase_validation_wait))
+                validation_trigger_reason = classifier_step_resume_payload.get("validation_reason")
+                if validation_trigger_reason is None and epoch_steps_done < phase_steps_full_epoch:
+                    validation_trigger_reason = "epoch_boundary"
+
                 log_json_event(
                     log_path,
                     {
@@ -4810,6 +5001,7 @@ def run_experiment(args: argparse.Namespace) -> int:
                         "epoch_step": epoch_steps_done,
                         "global_train_step": train_progress["global_train_step"],
                         "eval_batches": val_eval_batches,
+                        "validation_reason": validation_trigger_reason,
                     },
                 )
                 val_metrics = evaluate_classifier(
@@ -4837,6 +5029,14 @@ def run_experiment(args: argparse.Namespace) -> int:
                 val_raw_acc = val_metrics["raw_accuracy"]
 
                 release_training_memory(device, val_loader)
+                val_improved = improved_classifier_selection_metric(
+                    args.classifier_early_stopping_metric,
+                    phase_best_loss,
+                    phase_best_raw_acc,
+                    val_loss,
+                    val_raw_acc,
+                    args.early_stopping_min_delta,
+                )
                 log_json_event(
                     log_path,
                     {
@@ -4861,16 +5061,13 @@ def run_experiment(args: argparse.Namespace) -> int:
                         "val_ece": val_metrics["calibration"]["expected_calibration_error"],
                         "val_brier_score": val_metrics["calibration"]["brier_score"],
                         "val_nll": val_metrics["calibration"]["negative_log_likelihood"],
+                        "phase_train_loss_best": phase_train_loss_best,
+                        "phase_train_loss_wait": phase_train_loss_wait,
+                        "phase_validation_wait": phase_validation_wait,
+                        "validation_reason": validation_trigger_reason,
                     },
                 )
-                if improved_classifier_selection_metric(
-                    args.classifier_early_stopping_metric,
-                    phase_best_loss,
-                    phase_best_raw_acc,
-                    val_loss,
-                    val_raw_acc,
-                    args.early_stopping_min_delta,
-                ):
+                if val_improved:
                     phase_best_loss = val_loss
                     phase_best_acc = val_acc
                     phase_best_raw_acc = val_raw_acc
@@ -4879,8 +5076,7 @@ def run_experiment(args: argparse.Namespace) -> int:
                     phase_wait = 0
                     classifier_phase_dir = phase_artifact_dir(output_dir, phase.name)
                     classifier_phase_dir.mkdir(parents=True, exist_ok=True)
-                    
-                    # AUTO-GENERATION: Confusion Matrix for Step-Best
+
                     if "confusion_matrix" in val_metrics:
                         save_confusion_matrix_plot(
                             classifier_phase_dir / "best_confusion_matrix.png",
@@ -4902,7 +5098,6 @@ def run_experiment(args: argparse.Namespace) -> int:
                         },
                         classifier_phase_dir / "best.pt",
                     )
-
                 else:
                     phase_wait += 1
 
@@ -4952,16 +5147,50 @@ def run_experiment(args: argparse.Namespace) -> int:
                     "phase_best_val_loss": phase_best_loss,
                     "phase_best_val_acc": phase_best_acc,
                     "phase_best_val_raw_acc": phase_best_raw_acc,
+                    "phase_train_loss_best": phase_train_loss_best,
+                    "phase_train_loss_wait": phase_train_loss_wait,
+                    "phase_validation_wait": phase_validation_wait,
+                    "validation_reason": validation_trigger_reason,
                     "checks_without_improvement": phase_wait,
                     "patience_limit": phase_patience,
-                    "patience_unit": "validation_window",
-                    "validation_interval_epochs": args.eval_every_epochs,
+                    "patience_unit": "train_steps",
+                    "validation_interval_train_steps": None,
+                    "train_loss_validation_patience": args.train_loss_validation_patience,
+                    "validation_patience": args.validation_patience,
                     "early_stopping_metric": args.classifier_early_stopping_metric,
                     "phase_head_lr": phase_head_lr,
                     "phase_backbone_lr": phase_backbone_lr,
                 }
                 history.append(row)
                 log_json_event(log_path, row)
+                phase_train_loss_wait = 0
+                phase_validation_wait = 0
+                classifier_step_checkpoint_payload["phase_train_loss_wait"] = 0
+                classifier_step_checkpoint_payload["phase_validation_wait"] = 0
+                classifier_step_checkpoint_payload["validation_due"] = False
+                classifier_step_checkpoint_payload["validation_reason"] = None
+                classifier_step_resume_payload["phase_train_loss_wait"] = 0
+                classifier_step_resume_payload["phase_validation_wait"] = 0
+                classifier_step_resume_payload["validation_due"] = False
+                classifier_step_resume_payload["validation_reason"] = None
+                save_step_checkpoint(
+                    path=step_checkpoint_path,
+                    model=model,
+                    class_names=train_dataset.classes,
+                    class_to_idx=train_dataset.class_to_idx,
+                    args=args,
+                    train_progress=train_progress,
+                    stage="classifier",
+                    epoch=epoch,
+                    epoch_step=epoch_steps_done,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    scaler=scaler,
+                    phase_index=phase_index,
+                    phase_name=phase.name,
+                    extra_payload=classifier_step_checkpoint_payload,
+                    extra_resume=classifier_step_resume_payload,
+                )
                 save_training_checkpoint(
                     checkpoint_path,
                     {
@@ -4979,6 +5208,9 @@ def run_experiment(args: argparse.Namespace) -> int:
                         "supcon_best_epoch": supcon_best_epoch,
                         "supcon_wait": supcon_wait,
                         "augmentation_epoch_cursor": augmentation_epoch_cursor,
+                        "phase_train_loss_best": phase_train_loss_best,
+                        "phase_train_loss_wait": phase_train_loss_wait,
+                        "phase_validation_wait": phase_validation_wait,
                         "train_progress": train_progress,
                         "phase_best_state": phase_best_state,
                         "resume": {
@@ -4993,6 +5225,9 @@ def run_experiment(args: argparse.Namespace) -> int:
                             "phase_best_raw_acc": phase_best_raw_acc,
                             "phase_best_epoch": phase_best_epoch,
                             "phase_wait": phase_wait,
+                            "phase_train_loss_best": phase_train_loss_best,
+                            "phase_train_loss_wait": phase_train_loss_wait,
+                            "phase_validation_wait": phase_validation_wait,
                             "optimizer_state_dict": optimizer.state_dict(),
                             "scheduler_state_dict": scheduler.state_dict(),
                             "scaler_state_dict": scaler.state_dict(),
@@ -5346,10 +5581,11 @@ def run_experiment(args: argparse.Namespace) -> int:
             "supcon_patience": args.supcon_early_stopping_patience,
             "head_patience": args.head_early_stopping_patience,
             "stage_patience": args.stage_early_stopping_patience,
+            "train_loss_validation_patience": args.train_loss_validation_patience,
+            "validation_patience": args.validation_patience,
             "min_delta": args.early_stopping_min_delta,
             "monitor": "val_loss",
-            "check_unit": "validation_window",
-            "eval_every_epochs": args.eval_every_epochs,
+            "check_unit": "train_steps",
         },
         "embedding_dim": args.embedding_dim,
         "projection_dim": args.projection_dim,

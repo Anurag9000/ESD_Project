@@ -69,7 +69,6 @@ python scripts/run_recursive_refinement.py \
   --skip-supcon \
   --optimizer adamw \
   --batch-size 224 \
-  --eval-every-epochs 0.01 \
   --patience 1 \
   --resume-phase-index 1 \
   "${FILTERED_ARGS[@]}"
@@ -113,7 +112,6 @@ python scripts/run_recursive_refinement.py \
   --skip-supcon \
   --optimizer adamw \
   --batch-size 224 \
-  --eval-every-epochs 0.01 \
   --patience 1 \
   --resume-phase-index 1 \
   "${FILTERED_ARGS[@]}"

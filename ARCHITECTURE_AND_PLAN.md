@@ -140,7 +140,7 @@ The pipeline follows the research-validated principle: **Contrastive representat
 | Final progressive best | `best.pt` | `Results/<run>/progressive/` |
 | Phase-best snapshot | `best.pt` | `Results/<run>/progressive/phases/<phase_name>/` |
 | Phase-best confusion matrix | `best_confusion_matrix.png` | `Results/<run>/progressive/phases/<phase_name>/` |
-| Per-epoch visual audit | `visualizations/<epoch_label>/...` | `Results/<run>/progressive/phases/<phase_name>/` |
+| Phase-end visual audit | `visualizations/<phase_label>/...` | `Results/<run>/progressive/phases/<phase_name>/` |
 
 Resume is fully automatic: re-running `./run_training.sh --backbone convnextv2_nano --num-workers 2 --prefetch-factor 1` detects the most recent run stamp and injects `--resume-checkpoint step_last.pt` automatically.
 

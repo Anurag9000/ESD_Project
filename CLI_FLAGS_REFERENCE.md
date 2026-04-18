@@ -34,6 +34,8 @@ Defaults are the values used when the flag is omitted. Boolean defaults are show
 | `--confidence-gap-penalty-weight` | `0.0` | Optional confidence-gap regularizer weight. |
 | `--class-loss-weight` | `[]` | Repeatable `NAME=WEIGHT` overrides for per-class loss weighting. |
 | `--targeted-confusion-penalty` | `[]` | Repeatable `TRUE_CLASS:PREDICTED_CLASS:WEIGHT` penalties. |
+| `--train-loss-validation-patience` | `500` | Trigger validation after this many consecutive train steps without a new best train loss in the current phase. |
+| `--validation-patience` | `1000` | Force validation after this many consecutive train steps since the last validation checkpoint in the current phase. |
 | `--sampling-strategy` | `balanced` | Train-loader sampling mode: `balanced`, `weighted`, or `shuffle`. |
 | `--weighted-sampling` | legacy alias | Sets `--sampling-strategy weighted`. |
 | `--no-weighted-sampling` | legacy alias | Sets `--sampling-strategy shuffle`. |
@@ -55,12 +57,11 @@ Defaults are the values used when the flag is omitted. Boolean defaults are show
 | `--max-eval-batches` | `0` | Debug cap on eval batches; `0` means no cap. |
 | `--log-every-steps` | `1` | Training-step logging cadence. |
 | `--log-eval-every-steps` | `1` | Eval-step logging cadence. |
-| `--epoch-visualizations` / `--no-epoch-visualizations` | `true` | Enable or disable startup and per-epoch visual audits. |
+| `--epoch-visualizations` / `--no-epoch-visualizations` | `true` | Enable or disable startup and phase-end visual audits. |
 | `--epoch-visualization-batch-size` | `128` | Batch size used by visualization loaders. |
 | `--epoch-visualization-num-workers` | `2` | Worker count used by visualization loaders. |
 | `--epoch-visualization-activation-sample-limit` | `0` | Activation summary sample cap; `0` means all samples. |
 | `--epoch-visualization-atlas-thumb-size` | `48` | Thumbnail size for the test atlas. |
-| `--eval-every-epochs` | `1.0` | Validation cadence in epochs. |
 | `--runtime-bad-sample-cleanup` | `false` | Delete unreadable samples during training and remove metadata entries. |
 | `--confidence-threshold` | `0.80` | Confidence threshold used in threshold-aware accuracy metrics. |
 | `--supcon-early-stopping-patience` | `1` | Patience for SupCon phases. |
@@ -95,7 +96,6 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--initial-backbone-lr` | required | Initial backbone learning rate for refinement. |
 | `--batch-size` | `224` | Batch size forwarded to the trainer. |
 | `--patience` | `1` | Early-stopping patience forwarded to the trainer. |
-| `--eval-every-epochs` | `0.01` | Validation cadence forwarded to the trainer. |
 | `--dataset-root` | `Dataset_Final` | Dataset root forwarded to the trainer. |
 | `--optimizer` | `adamw` | Optimizer forwarded to the trainer. |
 | `--sampling-strategy` | `balanced` | Sampling strategy forwarded to the trainer. |

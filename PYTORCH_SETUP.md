@@ -18,10 +18,10 @@ source .venv/bin/activate
 
 The training process is automated via deterministic shell scripts and now defaults to:
 - balanced per-batch class cycling for train, val, test, and SupCon loaders
-- validation every `0.01` epoch
+- validation triggered by train-step patience (`train_loss_validation_patience=500`, `validation_patience=1000`)
 - patience `1` across SupCon, CE head, CE progressive, and recursive refinement
 - warmup + cosine decay annealing
-- startup and per-epoch clean test-set visual audits
+- startup and phase-end clean test-set visual audits
 
 ### Full Pipeline Orchestration
 Executes the staged pipeline:
@@ -74,7 +74,8 @@ python scripts/train_efficientnet_b0_progressive.py \
 | `unfreeze_chunk_size` | `20` |
 | `supcon_unfreeze_backbone_modules` | `40` |
 | `ce_max_unfreeze_modules` | `40` |
-| `eval_every_epochs` | `0.01` |
+| `train_loss_validation_patience` | `500` |
+| `validation_patience` | `1000` |
 | `supcon_early_stopping_patience` | `1` |
 | `head_early_stopping_patience` | `1` |
 | `stage_early_stopping_patience` | `1` |
