@@ -1841,6 +1841,8 @@ def train_supcon_epoch(
     log_every_steps: int,
     train_progress: dict[str, int],
     args: argparse.Namespace,
+    phase_index: int,
+    phase_name: str,
 ) -> float:
     model.train()
     freeze_frozen_batchnorms(backbone_modules)
@@ -1897,6 +1899,8 @@ def train_supcon_epoch(
             event = {
                 "event": "train_step",
                 "stage": "supcon",
+                "phase_index": phase_index,
+                "phase_name": phase_name,
                 "epoch": epoch,
                 "epoch_step": step_in_epoch,
                 "global_train_step": train_progress["global_train_step"],
@@ -1930,6 +1934,8 @@ def train_supcon_steps(
     class_names: list[str],
     class_to_idx: dict[str, int],
     args: argparse.Namespace,
+    phase_index: int,
+    phase_name: str,
     step_checkpoint_payload: dict[str, Any] | None = None,
     step_resume_payload: dict[str, Any] | None = None,
 ) -> tuple[float, int, int]:
@@ -2001,6 +2007,8 @@ def train_supcon_steps(
             optimizer=optimizer,
             scheduler=scheduler,
             scaler=scaler,
+            phase_index=phase_index,
+            phase_name=phase_name,
             extra_payload=step_checkpoint_payload,
             extra_resume=step_resume_payload,
         )
@@ -2009,6 +2017,8 @@ def train_supcon_steps(
             event = {
                 "event": "train_step",
                 "stage": "supcon",
+                "phase_index": phase_index,
+                "phase_name": phase_name,
                 "epoch": epoch,
                 "epoch_step": step_in_epoch,
                 "global_train_step": train_progress["global_train_step"],
@@ -3047,6 +3057,8 @@ def remove_bad_sample_from_metadata(dataset_root: Path, sample_path: Path) -> in
 def format_console_event(payload: dict[str, Any]) -> str | None:
     event = payload.get("event")
     timestamp = payload.get("timestamp", "")
+    phase_name = payload.get("phase_name")
+    phase_piece = f" phase_name={phase_name}" if phase_name is not None else ""
     if event == "run_started":
         return (
             f"[{timestamp}] run_started model={payload.get('model_name')} "
@@ -3061,6 +3073,7 @@ def format_console_event(payload: dict[str, Any]) -> str | None:
         pieces = [
             f"[{timestamp}] train_step",
             f"stage={payload.get('stage')}",
+            f"phase_name={phase_name}" if phase_name is not None else None,
             f"epoch={payload.get('epoch')}",
             f"epoch_step={payload.get('epoch_step')}",
             f"global_step={payload.get('global_train_step')}",
@@ -3078,6 +3091,7 @@ def format_console_event(payload: dict[str, Any]) -> str | None:
         pieces = [
             f"[{timestamp}] {event}",
             f"stage={payload.get('stage')}",
+            f"phase_name={phase_name}" if phase_name is not None else None,
             f"epoch={payload.get('epoch')}",
             f"loss={payload.get('loss'):.6f}" if isinstance(payload.get("loss"), (int, float)) else None,
             f"raw_acc={payload.get('raw_accuracy'):.6f}" if isinstance(payload.get("raw_accuracy"), (int, float)) else None,
@@ -3085,17 +3099,59 @@ def format_console_event(payload: dict[str, Any]) -> str | None:
             f"val_loss={payload.get('val_loss'):.6f}" if isinstance(payload.get("val_loss"), (int, float)) else None,
         ]
         return " ".join(piece for piece in pieces if piece)
+    if event == "validation_started":
+        pieces = [
+            f"[{timestamp}] validation_started",
+            f"stage={payload.get('stage')}",
+            f"phase_name={phase_name}" if phase_name is not None else None,
+            f"epoch={payload.get('epoch_in_phase')}",
+            f"validation_index={payload.get('validation_index')}",
+            f"epoch_step={payload.get('epoch_step')}",
+            f"eval_batches={payload.get('eval_batches')}",
+        ]
+        return " ".join(piece for piece in pieces if piece)
     if event == "eval_step":
         pieces = [
             f"[{timestamp}] eval_step",
             f"stage={payload.get('stage')}",
             f"split={payload.get('split')}",
+            f"phase_name={phase_name}" if phase_name is not None else None,
             f"step={payload.get('eval_step')}",
             f"loss={payload.get('running_loss'):.6f}" if isinstance(payload.get("running_loss"), (int, float)) else None,
         ]
         return " ".join(piece for piece in pieces if piece)
     if event == "resume_initial_val_pass":
-        return f"[{timestamp}] resume_initial_val_pass stage={payload.get('stage')} starting verification..."
+        return f"[{timestamp}] resume_initial_val_pass stage={payload.get('stage')}{phase_piece} starting verification..."
+    if event == "phase_visualization_started":
+        return (
+            f"[{timestamp}] phase_visualization_started stage={payload.get('stage')}"
+            f"{phase_piece} output_dir={payload.get('output_dir')}"
+        )
+    if event == "phase_visualization_failed":
+        return (
+            f"[{timestamp}] phase_visualization_failed stage={payload.get('stage')}"
+            f"{phase_piece} error={payload.get('error')}"
+        )
+    if event == "phase_visualization_finished":
+        return (
+            f"[{timestamp}] phase_visualization_finished stage={payload.get('stage')}"
+            f"{phase_piece} output_dir={payload.get('output_dir')}"
+        )
+    if event == "phase_global_best_comparison":
+        return (
+            f"[{timestamp}] phase_global_best_comparison stage={payload.get('stage')}"
+            f"{phase_piece} improved_global_best={payload.get('phase_improved_global_best')}"
+        )
+    if event == "phase_rejected_for_next_initialization":
+        return (
+            f"[{timestamp}] phase_rejected_for_next_initialization stage={payload.get('stage')}"
+            f"{phase_piece} reason={payload.get('reason')}"
+        )
+    if event == "next_phase_initialization_selected":
+        return (
+            f"[{timestamp}] next_phase_initialization_selected stage={payload.get('stage')}"
+            f"{phase_piece} next_phase_init_source={payload.get('next_phase_init_source')}"
+        )
     if event == "runtime_bad_sample_detected":
         return (
             f"[{timestamp}] runtime_bad_sample_detected split={payload.get('split')} "
@@ -4278,6 +4334,8 @@ def run_experiment(args: argparse.Namespace) -> int:
                         class_names=train_dataset.classes,
                         class_to_idx=train_dataset.class_to_idx,
                         args=args,
+                        phase_index=supcon_phase_index,
+                        phase_name=supcon_phase.name,
                         step_checkpoint_payload={
                             "history": history,
                             "best_val_loss": best_val_loss,
