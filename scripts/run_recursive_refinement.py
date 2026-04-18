@@ -67,6 +67,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--initial-head-lr", type=float, required=True)
     parser.add_argument("--initial-backbone-lr", type=float, required=True)
     parser.add_argument("--batch-size", type=int, default=224)
+    parser.add_argument("--num-workers", type=int, default=2)
+    parser.add_argument("--prefetch-factor", type=int, default=1)
     parser.add_argument("--patience", type=int, default=1)
     parser.add_argument("--dataset-root", default="Dataset_Final")
     parser.add_argument("--optimizer", default="adamw")
@@ -225,6 +227,10 @@ def run_training(
         args.optimizer,
         "--batch-size",
         str(args.batch_size),
+        "--num-workers",
+        str(args.num_workers),
+        "--prefetch-factor",
+        str(args.prefetch_factor),
         "--stage-early-stopping-patience",
         str(args.patience),
         "--classifier-train-mode",

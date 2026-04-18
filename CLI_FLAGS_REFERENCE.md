@@ -99,6 +99,8 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--initial-head-lr` | required | Initial head learning rate for refinement. |
 | `--initial-backbone-lr` | required | Initial backbone learning rate for refinement. |
 | `--batch-size` | `224` | Batch size forwarded to the trainer. |
+| `--num-workers` | `2` | DataLoader worker count forwarded to the trainer. |
+| `--prefetch-factor` | `1` | Prefetch depth per worker forwarded to the trainer. |
 | `--patience` | `1` | Early-stopping patience forwarded to the trainer. |
 | `--dataset-root` | `Dataset_Final` | Dataset root forwarded to the trainer. |
 | `--optimizer` | `adamw` | Optimizer forwarded to the trainer. |
