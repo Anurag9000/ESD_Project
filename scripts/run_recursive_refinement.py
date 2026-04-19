@@ -259,7 +259,7 @@ def run_training(
         "--stage-early-stopping-patience",
         str(args.patience),
         "--classifier-train-mode",
-        "progressive",
+        "full_model",
         "--classifier-early-stopping-metric",
         args.metric,
         "--head-lr",
