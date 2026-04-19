@@ -36,18 +36,18 @@ Executes the staged pipeline:
 
 Each phase writes into its own folder under `Results/<run>/progressive/phases/<phase_name>/`.
 ```bash
-./run_training.sh --backbone convnextv2_nano --num-workers 2 --prefetch-factor 1
+./run_training.sh --phase0-mim --backbone convnextv2_nano --num-workers 2 --prefetch-factor 1
 ```
 
 ### Manual Execution (Standardized Params)
 ```bash
-./run_training.sh --backbone convnextv2_nano --num-workers 2 --prefetch-factor 1
+./run_training.sh --phase0-mim --backbone convnextv2_nano --num-workers 2 --prefetch-factor 1
 ```
 
 ### Default Hyperparameters
 | Parameter | Value |
 | :-- | :-- |
-| `batch_size` | `224` |
+| `batch_size` | `320` |
 | `optimizer` | `adamw` |
 | `scheduler` | `warmup + cosine decay` |
 | `sampling_strategy` | `balanced` |

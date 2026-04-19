@@ -10,7 +10,7 @@ export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:T
 
 INITIAL_CHECKPOINT="${INITIAL_CHECKPOINT:-}"
 DATASET_ROOT="${DATASET_ROOT:-Dataset_Final}"
-BACKBONE_NAME="${BACKBONE_NAME:-convnextv2_tiny}"
+BACKBONE_NAME="${BACKBONE_NAME:-convnextv2_nano}"
 for ((i = 1; i <= $#; i++)); do
   arg="${!i}"
   case "$arg" in
@@ -153,18 +153,24 @@ if [[ ! -f "$FINAL_CHECKPOINT" ]]; then
 fi
 
 FINAL_TEST_OUTPUT_DIR="$RUN_ROOT/final_test_evaluation"
+FINAL_TEST_COMPLETE_MARKER="$FINAL_TEST_OUTPUT_DIR/.final_test_complete"
 echo "" >& 2
 echo "=== Pipeline complete. Running final test-set evaluation ==="  >& 2
 echo "    Checkpoint : $FINAL_CHECKPOINT"  >& 2
 echo "    Output dir : $FINAL_TEST_OUTPUT_DIR"  >& 2
 
-python scripts/evaluate_saved_classifier.py \
-  --checkpoint "$FINAL_CHECKPOINT" \
-  --output-dir "$FINAL_TEST_OUTPUT_DIR" \
-  --dataset-root "$DATASET_ROOT" \
-  --batch-size 320 \
-  --evaluation-stage final_test_evaluation \
-  --phase-name final_test \
-  --splits test
+if [[ -f "$FINAL_TEST_COMPLETE_MARKER" ]]; then
+  echo "=== Final test evaluation already complete; skipping ===" >& 2
+else
+  python scripts/evaluate_saved_classifier.py \
+    --checkpoint "$FINAL_CHECKPOINT" \
+    --output-dir "$FINAL_TEST_OUTPUT_DIR" \
+    --dataset-root "$DATASET_ROOT" \
+    --batch-size 320 \
+    --evaluation-stage final_test_evaluation \
+    --phase-name final_test \
+    --splits test
+  touch "$FINAL_TEST_COMPLETE_MARKER"
+fi
 
 echo "=== Final test evaluation written to $FINAL_TEST_OUTPUT_DIR ===" >& 2

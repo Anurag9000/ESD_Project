@@ -55,11 +55,8 @@ source .venv/bin/activate
 # - Phase 0 MIM trains the full backbone with the same balanced class sampler and an effective 320 batch size via 8-image micro-batches plus 40-step accumulation, then SupCon/CE re-freeze the earliest 40 leaf modules
 # - validation triggered by train-step patience
 # - patience 3 across SupCon, CE head, CE stages, and recursive stages
-# - startup + phase-end clean test-set visualizations
-./run_training.sh --backbone <your_backbone> --num-workers 2 --prefetch-factor 1
-
-# Optional Phase 0 MIM pretraining can be enabled before SupCon:
-# ./run_training.sh --phase0-mim --phase0-mim-batch-size 8 --phase0-mim-accum-steps 40 --backbone <your_backbone> --num-workers 2 --prefetch-factor 1
+# - automatic same-command resume from the incomplete phase's own step_last.pt or last.pt
+./run_training.sh --phase0-mim --backbone convnextv2_nano --num-workers 2 --prefetch-factor 1
 ```
 
 ### Resume After Interruption (Exact Same Command)
@@ -67,9 +64,9 @@ source .venv/bin/activate
 cd /home/anurag-basistha/Projects/ESD
 source .venv/bin/activate
 
-# Automatically detects the most recent run, finds step_last.pt or last.pt,
-# and resumes from the exact last training step.
-./run_training.sh --backbone <your_backbone> --num-workers 2 --prefetch-factor 1
+# Same command as fresh launch. Completed phases are skipped; the incomplete
+# phase resumes from its own step_last.pt or last.pt.
+./run_training.sh --phase0-mim --backbone convnextv2_nano --num-workers 2 --prefetch-factor 1
 ```
 
 ### End-of-Run Test Report
