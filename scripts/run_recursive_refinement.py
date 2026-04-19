@@ -37,6 +37,10 @@ def decision_path(iteration_dir: Path) -> Path:
     return iteration_dir / "acceptance_decision.json"
 
 
+def training_complete_path(iteration_dir: Path) -> Path:
+    return iteration_dir / ".recursive_training_complete"
+
+
 def best_eval_checkpoint(iteration_dir: Path) -> Path:
     return iteration_dir / "best.pt"
 
@@ -57,7 +61,7 @@ def evaluation_checkpoint(iteration_dir: Path) -> Path:
 
 
 def iteration_finished(iteration_dir: Path) -> bool:
-    return best_eval_checkpoint(iteration_dir).exists() and latest_checkpoint(iteration_dir).exists()
+    return training_complete_path(iteration_dir).exists() and best_eval_checkpoint(iteration_dir).exists()
 
 
 def parse_args() -> argparse.Namespace:
@@ -285,6 +289,7 @@ def run_training(
         command.append("--skip-supcon")
     command.extend(extra_args)
     subprocess.run(command, check=True)
+    training_complete_path(iteration_dir).touch()
 
 
 def finalize_iteration(

@@ -8,7 +8,7 @@ source .venv/bin/activate
 
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
-BACKBONE_NAME="${BACKBONE_NAME:-convnextv2_tiny}"
+BACKBONE_NAME="${BACKBONE_NAME:-convnextv2_nano}"
 WEIGHTS_MODE="${WEIGHTS_MODE:-default}"
 for ((i = 1; i <= $#; i++)); do
   arg="${!i}"
@@ -138,28 +138,35 @@ PHASE0_ENCODER_CHECKPOINT=""
 if [[ "$ENABLE_PHASE0_MIM" -eq 1 ]]; then
   PHASE0_OUTPUT_DIR="$RUN_ROOT/phase0_mim"
   PHASE0_LOG_FILE="$LOG_ROOT/phase0_mim.log.jsonl"
+  PHASE0_COMPLETE_MARKER="$PHASE0_OUTPUT_DIR/.phase0_complete"
   PHASE0_ARGS=()
-  echo "🧠 Running Phase 0 MIM pretraining before SupCon/CE..."
-  python scripts/train_phase0_mim.py \
-    --dataset-root "$DATASET_ROOT" \
-    --output-dir "$PHASE0_OUTPUT_DIR" \
-    --log-file "$PHASE0_LOG_FILE" \
-    --backbone "$BACKBONE_NAME" \
-    --weights "$WEIGHTS_MODE" \
-    --image-size "$IMAGE_SIZE" \
-    --batch-size "$PHASE0_MIM_BATCH_SIZE" \
-    --num-workers "$NUM_WORKERS" \
-    --prefetch-factor "$PREFETCH_FACTOR" \
-    --epochs "$PHASE0_MIM_EPOCHS" \
-    --grad-accum-steps "$PHASE0_MIM_ACCUM_STEPS" \
-    --mask-ratio "$PHASE0_MIM_MASK_RATIO" \
-    --patch-size "$PHASE0_MIM_PATCH_SIZE" \
-    --decoder-dim "$PHASE0_MIM_DECODER_DIM" \
-    --learning-rate "$PHASE0_MIM_LR" \
-    --weight-decay "$PHASE0_MIM_WEIGHT_DECAY" \
-    --train-loss-window "$PHASE0_MIM_TRAIN_LOSS_WINDOW" \
-    --seed "$SEED"
   PHASE0_ENCODER_CHECKPOINT="$PHASE0_OUTPUT_DIR/phase0_encoder_final.pth"
+  if [[ -f "$PHASE0_ENCODER_CHECKPOINT" ]]; then
+    echo "✅ Phase 0 MIM already complete; using $PHASE0_ENCODER_CHECKPOINT"
+    touch "$PHASE0_COMPLETE_MARKER"
+  else
+    echo "🧠 Running/resuming Phase 0 MIM pretraining before SupCon/CE..."
+    python scripts/train_phase0_mim.py \
+      --dataset-root "$DATASET_ROOT" \
+      --output-dir "$PHASE0_OUTPUT_DIR" \
+      --log-file "$PHASE0_LOG_FILE" \
+      --backbone "$BACKBONE_NAME" \
+      --weights "$WEIGHTS_MODE" \
+      --image-size "$IMAGE_SIZE" \
+      --batch-size "$PHASE0_MIM_BATCH_SIZE" \
+      --num-workers "$NUM_WORKERS" \
+      --prefetch-factor "$PREFETCH_FACTOR" \
+      --epochs "$PHASE0_MIM_EPOCHS" \
+      --grad-accum-steps "$PHASE0_MIM_ACCUM_STEPS" \
+      --mask-ratio "$PHASE0_MIM_MASK_RATIO" \
+      --patch-size "$PHASE0_MIM_PATCH_SIZE" \
+      --decoder-dim "$PHASE0_MIM_DECODER_DIM" \
+      --learning-rate "$PHASE0_MIM_LR" \
+      --weight-decay "$PHASE0_MIM_WEIGHT_DECAY" \
+      --train-loss-window "$PHASE0_MIM_TRAIN_LOSS_WINDOW" \
+      --seed "$SEED"
+    touch "$PHASE0_COMPLETE_MARKER"
+  fi
   if [[ ! -f "$PHASE0_ENCODER_CHECKPOINT" ]]; then
     echo "Phase 0 did not produce $PHASE0_ENCODER_CHECKPOINT" >&2
     exit 1
@@ -168,7 +175,10 @@ if [[ "$ENABLE_PHASE0_MIM" -eq 1 ]]; then
 fi
 
 AUTO_RESUME_ARGS=()
-if [[ -f "$PROGRESSIVE_OUTPUT_DIR/step_last.pt" ]]; then
+PROGRESSIVE_COMPLETE_MARKER="$PROGRESSIVE_OUTPUT_DIR/.progressive_complete"
+if [[ -f "$PROGRESSIVE_COMPLETE_MARKER" && -f "$PROGRESSIVE_OUTPUT_DIR/best.pt" ]]; then
+  echo "✅ Progressive SupCon/CE already complete; using $PROGRESSIVE_OUTPUT_DIR/best.pt"
+elif [[ -f "$PROGRESSIVE_OUTPUT_DIR/step_last.pt" ]]; then
   echo "🔄 Auto-resuming from EXACT LAST STEP: $PROGRESSIVE_OUTPUT_DIR/step_last.pt"
   AUTO_RESUME_ARGS=(--resume-checkpoint "$PROGRESSIVE_OUTPUT_DIR/step_last.pt")
 elif [[ -f "$PROGRESSIVE_OUTPUT_DIR/last.pt" ]]; then
@@ -176,16 +186,19 @@ elif [[ -f "$PROGRESSIVE_OUTPUT_DIR/last.pt" ]]; then
   AUTO_RESUME_ARGS=(--resume-checkpoint "$PROGRESSIVE_OUTPUT_DIR/last.pt")
 fi
 
-python scripts/train_efficientnet_b0_progressive.py \
-  --dataset-root "$DATASET_ROOT" \
-  --sampling-strategy balanced \
-  --output-dir "$PROGRESSIVE_OUTPUT_DIR" \
-  --log-file "$PROGRESSIVE_LOG_FILE" \
-  --backbone "$BACKBONE_NAME" \
-  --weights "$WEIGHTS_MODE" \
-  "${PHASE0_ARGS[@]}" \
-  "${AUTO_RESUME_ARGS[@]}" \
-  "${FILTERED_ARGS[@]}"
+if [[ ! -f "$PROGRESSIVE_COMPLETE_MARKER" || ! -f "$PROGRESSIVE_OUTPUT_DIR/best.pt" ]]; then
+  python scripts/train_efficientnet_b0_progressive.py \
+    --dataset-root "$DATASET_ROOT" \
+    --sampling-strategy balanced \
+    --output-dir "$PROGRESSIVE_OUTPUT_DIR" \
+    --log-file "$PROGRESSIVE_LOG_FILE" \
+    --backbone "$BACKBONE_NAME" \
+    --weights "$WEIGHTS_MODE" \
+    "${PHASE0_ARGS[@]}" \
+    "${AUTO_RESUME_ARGS[@]}" \
+    "${FILTERED_ARGS[@]}"
+  touch "$PROGRESSIVE_COMPLETE_MARKER"
+fi
 
 PROGRESSIVE_BEST_CHECKPOINT="$PROGRESSIVE_OUTPUT_DIR/best.pt"
 if [[ ! -f "$PROGRESSIVE_BEST_CHECKPOINT" ]]; then

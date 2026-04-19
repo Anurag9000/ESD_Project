@@ -43,7 +43,7 @@ except ImportError:  # pragma: no cover - surfaced explicitly when backbone crea
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
-DEFAULT_BACKBONE_NAME = "convnextv2_tiny"
+DEFAULT_BACKBONE_NAME = "convnextv2_nano"
 DEFAULT_BATCH_SIZE = 320
 # The repo-wide training taxonomy is now strictly 3 classes.
 # Physical folders stay untouched; all datasets are projected into this order.

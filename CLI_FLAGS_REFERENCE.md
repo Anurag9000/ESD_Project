@@ -27,7 +27,7 @@ Live logs now print pure accuracy plus `per_class_accuracy` and `per_class_avg_c
 | `--head-lr` | `1e-3` | Learning rate for classifier head warmup. |
 | `--backbone-lr` | `1e-5` | Learning rate for classifier backbone phases. |
 | `--weight-decay` | `1e-4` | Optimizer weight decay. |
-| `--backbone` | `convnextv2_tiny` | Backbone selection. The trainer accepts any timm backbone name; registered aliases resolve pretrained/scratch defaults cleanly. |
+| `--backbone` | `convnextv2_nano` | Backbone selection. The trainer accepts any timm backbone name; registered aliases resolve pretrained/scratch defaults cleanly. |
 | `--optimizer` | `adamw` | Optimizer family: `adamw` or `sam`. |
 | `--precision` | `mixed` | Training precision: `mixed`, `32`, or `64`. |
 | `--adam-beta1` | `0.9` | Adam beta1. |
@@ -95,7 +95,7 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--dataset-root` | `Dataset_Final` | Dataset root used to build the clean train split. |
 | `--output-dir` | `Results/phase0_mim` | Phase 0 checkpoint output root. |
 | `--log-file` | `logs/phase0_mim.log.jsonl` | Structured Phase 0 JSONL log. |
-| `--backbone` | `convnextv2_tiny` | Backbone selection used for the encoder. Any timm backbone string is accepted. |
+| `--backbone` | `convnextv2_nano` | Backbone selection used for the encoder. Any timm backbone string is accepted. |
 | `--weights` | `default` | For Phase 0, `default` means use the pure `.fcmae` backbone weights; `none` means scratch init. |
 | `--image-size` | `224` | Input resolution for masking and reconstruction. |
 | `--augment-repeats` | `16` | Passed through to the repo dataset builder for split construction. |
@@ -126,7 +126,7 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--base-output-dir` | required | Root output directory for recursive refinement. |
 | `--base-log-file` | required | JSONL log file for recursive refinement. |
 | `--initial-checkpoint` | required | Seed checkpoint for the first refinement pass. |
-| `--backbone` | `convnextv2_tiny` | Backbone name forwarded to the recursive trainer. Any timm backbone string is accepted. |
+| `--backbone` | `convnextv2_nano` | Backbone name forwarded to the recursive trainer. Any timm backbone string is accepted. |
 | `--weights` | `default` | Pretrained-weight mode forwarded to the recursive trainer. |
 | `--metric` | required | Accept/reject metric: `val_loss` or `val_raw_acc`. |
 | `--threshold` | required | Stop threshold for recursive refinement. |
@@ -274,7 +274,7 @@ These are not `argparse` flags, but they control the shell wrappers and the acti
 - `run_training.sh` supports optional Phase 0 MIM pretraining via `--phase0-mim` plus `--phase0-mim-*` controls; when enabled it exports `phase0_mim/phase0_encoder_final.pth` and passes it into the progressive trainer via `--phase0-encoder-checkpoint`.
 - `--phase0-mim-train-loss-window` controls the Phase 0 early-stopping window in effective optimizer batches. The default is `5000`.
 - Phase 0 uses the same balanced class sampler as SupCon and CE. It defaults to `batch-size 8` with `grad-accum-steps 40`, giving the same effective batch size of 320 without exceeding 6GB VRAM.
-- `run_training.sh` auto-resumes from `step_last.pt` first, then `last.pt`.
+- Re-running the exact same `run_training.sh` command is the resume path. The wrapper skips completed Phase 0/progressive stages and resumes the incomplete stage from that stage's own `step_last.pt` first, then `last.pt`.
 - `run_full_training_pipeline.sh` ignores user-supplied `--dataset-root`, `--batch-size`, `--output-dir`, `--log-file`, `--resume-checkpoint`, `--resume-mode`, `--resume-phase-index`, `--classifier-train-mode`, `--classifier-early-stopping-metric`, `--head-lr`, `--backbone-lr`, `--stage-early-stopping-patience`, and `--optimizer`.
 - `scripts/run_recursive_refinement.py` validates pass-through trainer flags against the main trainer parser and raises on unsupported options instead of silently ignoring them.
 - `run_full_training_pipeline.sh` hardcodes the recursive refinement recipe to `batch-size 320`, `patience 3`, `resume-phase-index 1`, `optimizer adamw`, `sampling-strategy balanced`, `skip-supcon`, `classifier-train-mode full_model`, and `frozen-core-backbone-modules 40` for both recursive passes. This means recursive refinement starts directly in `ce_full_model`: classifier head plus the backbone tail after the frozen 40-module stem/core train from the first step. Recursive candidate scoring evaluates only the validation split; the test split is reserved for the final test bundle.
