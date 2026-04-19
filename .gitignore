@@ -1,0 +1,57 @@
+.venv/
+__pycache__/
+*.py[cod]
+
+Dataset_Final/
+Dataset_Final_original_backup.zip
+external_datasets/
+
+runs/smoke_*/
+Results/smoke_*/
+logs/smoke_*
+/Results/
+/logs/
+
+.DS_Store
+/post-checkout
+/post-commit
+/post-merge
+/pre-push
+
+# Accidental Android Studio / Gradle project clutter at repo root
+/.gradle/
+/.idea/
+/app/
+/gradle/
+/build.gradle.kts
+/settings.gradle.kts
+/gradle.properties
+/local.properties
+/gradlew
+/gradlew.bat
+
+# Android module local build metadata
+/SmartBin_Android/.kotlin/
+
+# Local Android verification artifacts
+/.tooling/__pycache__/
+/.tooling/phone_screens/
+/.tooling/screens/
+/.tooling/jdk-21/
+/.tooling/temurin21.tar.gz
+Dataset_Final.zip
+
+Dataset_Mock/
+Results/demo_run_*/
+logs/demo_run_*/dataset_audit/
+dataset_tars/
+dataset_audit/incoming/
+
+# Local/external image datasets and generated image visualizations should not be
+# committed. Keep metrics/checkpoints/logs, but leave images local-only.
+Test_Dataset_Real/
+Results/**/*.jpg
+Results/**/*.jpeg
+Results/**/*.png
+Results/**/*.webp
+Results/**/*.gif
