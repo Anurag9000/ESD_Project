@@ -19,6 +19,7 @@ try:
         DEFAULT_BACKBONE_NAME,
         BACKBONE_REGISTRY,
         build_datasets,
+        make_balanced_sampler,
         evaluation_tensor_from_image,
         load_resume_checkpoint,
         log_json_event,
@@ -31,6 +32,7 @@ except ModuleNotFoundError:
         DEFAULT_BACKBONE_NAME,
         BACKBONE_REGISTRY,
         build_datasets,
+        make_balanced_sampler,
         evaluation_tensor_from_image,
         load_resume_checkpoint,
         log_json_event,
@@ -241,11 +243,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Mirror the main trainer's runtime bad-sample cleanup flag for dataset construction.",
     )
-    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--batch-size", type=int, default=240)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--prefetch-factor", type=int, default=1)
     parser.add_argument("--epochs", type=int, default=20)
-    parser.add_argument("--grad-accum-steps", type=int, default=8)
+    parser.add_argument("--grad-accum-steps", type=int, default=1)
     parser.add_argument("--mask-ratio", type=float, default=0.6)
     parser.add_argument("--patch-size", type=int, default=32)
     parser.add_argument("--decoder-dim", type=int, default=512)
@@ -325,11 +327,13 @@ def main() -> int:
     )
 
     train_dataset, _, _, _, _ = build_datasets(args)
-    phase0_dataset = Phase0WasteDataset(train_dataset.samples, train_dataset.classes, args.image_size)
+    phase0_dataset = train_dataset
+    phase0_sampler = make_balanced_sampler(phase0_dataset, phase0_dataset.classes, args.batch_size, args.seed + 202)
     loader = DataLoader(
         phase0_dataset,
         batch_size=args.batch_size,
-        shuffle=True,
+        shuffle=False,
+        sampler=phase0_sampler,
         num_workers=args.num_workers,
         pin_memory=torch.cuda.is_available(),
         persistent_workers=args.num_workers > 0,
@@ -347,6 +351,8 @@ def main() -> int:
             "phase0_source": getattr(model, "phase0_source", None),
             "encoder_all_parameters_trainable": all(parameter.requires_grad for parameter in model.encoder.parameters()),
             "frozen_backbone_modules": 0,
+            "sampler": "balanced_class_epoch_sampler",
+            "batch_size": int(args.batch_size),
         },
     )
     model.train()

@@ -52,7 +52,7 @@ source .venv/bin/activate
 
 # Launches the full staged lifecycle automatically.
 # Defaults now include:
-# - Phase 0 MIM trains the full backbone, then SupCon/CE re-freeze the earliest 40 leaf modules
+# - Phase 0 MIM trains the full backbone with the same balanced class sampler and 240 batch default, then SupCon/CE re-freeze the earliest 40 leaf modules
 # - validation triggered by train-step patience
 # - patience 1 across SupCon, CE head, CE stages, and recursive stages
 # - startup + phase-end clean test-set visualizations

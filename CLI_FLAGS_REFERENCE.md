@@ -102,11 +102,11 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--class-mapping` | `""` | Optional JSON merge map passed to the repo dataset builder. |
 | `--auto-split-ratios` | `0.7,0.2,0.1` | Auto-split ratios when the dataset root has no explicit train/val/test layout. |
 | `--runtime-bad-sample-cleanup` | `false` | Mirror the main trainer's runtime bad-sample cleanup behavior. |
-| `--batch-size` | `8` | Micro-batch size for Phase 0 masking reconstruction. |
+| `--batch-size` | `240` | Batch size for Phase 0 masking reconstruction. Uses the same class-balanced sampler as the supervised stages. |
 | `--num-workers` | `2` | DataLoader worker count. |
 | `--prefetch-factor` | `1` | Prefetch depth per worker. |
 | `--epochs` | `20` | Phase 0 training epochs. |
-| `--grad-accum-steps` | `8` | Gradient accumulation factor. |
+| `--grad-accum-steps` | `1` | Gradient accumulation factor. Phase 0 now defaults to a real 240-sample batch instead of a micro-batch. |
 | `--mask-ratio` | `0.6` | Fraction of patches masked before reconstruction. |
 | `--patch-size` | `32` | Patch size used by the spatial mask generator. |
 | `--decoder-dim` | `512` | Hidden width of the reconstruction decoder. |
@@ -270,6 +270,7 @@ These are not `argparse` flags, but they control the shell wrappers and the acti
 - `run_training.sh` ignores user-supplied `--dataset-root`, `--batch-size`, `--output-dir`, and `--log-file` because those are wrapper-managed.
 - `run_training.sh` always injects `--dataset-root "$DATASET_ROOT"` and `--sampling-strategy balanced` into the progressive trainer.
 - `run_training.sh` supports optional Phase 0 MIM pretraining via `--phase0-mim` plus `--phase0-mim-*` controls; when enabled it exports `phase0_mim/phase0_encoder_final.pth` and passes it into the progressive trainer via `--phase0-encoder-checkpoint`.
+- Phase 0 uses the same balanced class sampler as SupCon and CE, and defaults to `batch-size 240` so the batch semantics are consistent across the full pipeline.
 - `run_training.sh` auto-resumes from `step_last.pt` first, then `last.pt`.
 - `run_full_training_pipeline.sh` ignores user-supplied `--dataset-root`, `--batch-size`, `--output-dir`, `--log-file`, `--resume-checkpoint`, `--resume-mode`, `--resume-phase-index`, `--classifier-train-mode`, `--classifier-early-stopping-metric`, `--head-lr`, `--backbone-lr`, `--stage-early-stopping-patience`, and `--optimizer`.
 - `scripts/run_recursive_refinement.py` validates pass-through trainer flags against the main trainer parser and raises on unsupported options instead of silently ignoring them.
