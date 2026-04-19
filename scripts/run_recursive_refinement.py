@@ -325,7 +325,7 @@ def finalize_iteration(
     return decision
 
 
-def evaluate_iteration(iteration_dir: Path, dataset_root: str, batch_size: int) -> None:
+def evaluate_iteration(iteration_dir: Path, dataset_root: str, batch_size: int, num_workers: int) -> None:
     checkpoint = evaluation_checkpoint(iteration_dir)
     if not checkpoint.exists():
         raise FileNotFoundError(f"No evaluation checkpoint found in {iteration_dir}")
@@ -341,6 +341,8 @@ def evaluate_iteration(iteration_dir: Path, dataset_root: str, batch_size: int) 
             dataset_root,
             "--batch-size",
             str(batch_size),
+            "--num-workers",
+            str(num_workers),
         ],
         check=True,
     )
@@ -444,7 +446,7 @@ def main() -> int:
                 backbone_lr=float(config["backbone_lr"]),
             )
 
-        evaluate_iteration(iteration_dir, args.dataset_root, args.batch_size)
+        evaluate_iteration(iteration_dir, args.dataset_root, args.batch_size, args.num_workers)
         decision = finalize_iteration(
             iteration_dir=iteration_dir,
             config=config,

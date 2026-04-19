@@ -85,20 +85,38 @@ def build_eval_loader(dataset, batch_size: int, num_workers: int) -> DataLoader:
     return DataLoader(**loader_kwargs)
 
 
+def reset_generated_evaluation_dir(output_dir: Path) -> None:
+    if not output_dir.exists() or not any(output_dir.iterdir()):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return
+
+    generated_roots = {
+        "evaluation_manifest.json",
+        "evaluation_summary.json",
+        "evaluation.log.jsonl",
+        "train_metrics.csv",
+        "val_metrics.csv",
+        "test_metrics.csv",
+        "train",
+        "val",
+        "test",
+    }
+    existing_names = {entry.name for entry in output_dir.iterdir()}
+    unrelated = sorted(existing_names - generated_roots)
+    if unrelated:
+        raise ValueError(
+            f"Refusing to clear non-empty evaluation directory {output_dir} because it contains unrelated files: "
+            f"{unrelated}"
+        )
+    shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+
 def main() -> int:
     args = parse_args()
     checkpoint_path = Path(args.checkpoint)
     output_dir = Path(args.output_dir)
-    if output_dir.exists() and any(output_dir.iterdir()):
-        expected_roots = {"evaluation_manifest.json", "evaluation_summary.json", "evaluation.log.jsonl"}
-        existing_names = {entry.name for entry in output_dir.iterdir()}
-        if not existing_names.issubset(expected_roots | {"train", "val", "test"}):
-            raise ValueError(
-                f"Refusing to clear non-empty evaluation directory {output_dir} because it contains unrelated files: "
-                f"{sorted(existing_names)}"
-            )
-        shutil.rmtree(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    reset_generated_evaluation_dir(output_dir)
 
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
     checkpoint_args = checkpoint.get("args")
@@ -161,14 +179,15 @@ def main() -> int:
         dataset = datasets_by_split[split]
         loader = build_eval_loader(dataset, eval_args.batch_size, eval_args.num_workers)
         logits, targets = collect_logits_and_labels(
-            model,
-            loader,
-            device,
-            eval_args.max_eval_batches,
-            empty_log_path,
-            int(eval_args.log_eval_every_steps),
-            split,
-            eval_args,
+            model=model,
+            loader=loader,
+            device=device,
+            max_batches=eval_args.max_eval_batches,
+            log_path=empty_log_path,
+            log_every_eval_steps=int(eval_args.log_eval_every_steps),
+            criterion=None,
+            split=split,
+            args=eval_args,
         )
         collapsed_logits, collapsed_targets, runtime_class_names, collapse_info = collapse_logits_and_targets_to_runtime_classes(
             logits,
