@@ -1706,6 +1706,27 @@ def model_dtype_for_args(args: argparse.Namespace) -> torch.dtype:
     return torch.float64 if str(args.precision) == "64" else torch.float32
 
 
+def json_safe_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, argparse.Namespace):
+        return json_safe_value(vars(value))
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, torch.Tensor):
+        tensor = value.detach().cpu()
+        return tensor.item() if tensor.numel() == 1 else json_safe_value(tensor.tolist())
+    if isinstance(value, dict):
+        return {str(key): json_safe_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [json_safe_value(item) for item in value]
+    if hasattr(value, "__dict__"):
+        return json_safe_value(vars(value))
+    return str(value)
+
+
 def autocast_enabled(device: torch.device, args: argparse.Namespace) -> bool:
     return device.type == "cuda" and str(args.precision) == "mixed"
 
@@ -3194,7 +3215,7 @@ def compute_correct_confidence_by_class(
 
 def save_json(path: Path, payload: object) -> None:
     with path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2)
+        json.dump(json_safe_value(payload), handle, indent=2)
         handle.write("\n")
 
 
@@ -3289,7 +3310,7 @@ def save_confusion_matrix_plot(
 
 def append_jsonl(path: Path, payload: object) -> None:
     with path.open("a", encoding="utf-8") as handle:
-        json.dump(payload, handle)
+        json.dump(json_safe_value(payload), handle)
         handle.write("\n")
 
 
@@ -3475,7 +3496,8 @@ from datetime import datetime
 def append_to_csv(csv_path: Path, data: dict[str, Any]) -> None:
     flat_data: dict[str, Any] = {}
     for k, v in data.items():
-        flat_data[k] = json.dumps(v) if isinstance(v, (list, dict)) else v
+        safe_value = json_safe_value(v)
+        flat_data[k] = json.dumps(safe_value) if isinstance(safe_value, (list, dict)) else safe_value
     if not csv_path.exists():
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=list(flat_data.keys()), extrasaction="ignore", restval="")
@@ -3510,6 +3532,7 @@ def append_to_csv(csv_path: Path, data: dict[str, Any]) -> None:
 
 
 def log_json_event(path: Path, payload: dict[str, Any]) -> None:
+    payload = json_safe_value(payload)
     if "timestamp" not in payload:
         payload = {"timestamp": datetime.now().astimezone().isoformat(timespec="seconds"), **payload}
     
