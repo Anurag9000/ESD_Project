@@ -77,8 +77,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-supcon", action="store_true")
     parser.add_argument("--resume-phase-index", type=int, default=1)
     parser.add_argument("--min-delta", type=float, default=0.0)
-    parser.add_argument("extra_args", nargs=argparse.REMAINDER)
-    return parser.parse_args()
+    parser.add_argument("extra_args", nargs=argparse.REMAINDER, default=[])
+    namespace, unknown = parser.parse_known_args()
+    extra_args = list(getattr(namespace, "extra_args", []))
+    if extra_args and extra_args[0] == "--":
+        extra_args = extra_args[1:]
+    namespace.extra_args = [*extra_args, *unknown]
+    return namespace
 
 
 def state_path(base_output_dir: Path) -> Path:

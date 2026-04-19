@@ -12,6 +12,7 @@ INITIAL_CHECKPOINT="${INITIAL_CHECKPOINT:-}"
 RUN_ROOT="${RUN_ROOT:-Results/convnextv2_nano_master_run}"
 LOG_ROOT="${LOG_ROOT:-logs/convnextv2_nano_master_run}"
 DATASET_ROOT="${DATASET_ROOT:-Dataset_Final}"
+INITIAL_CHECKPOINT="${INITIAL_CHECKPOINT:-$RUN_ROOT/progressive/best.pt}"
 
 if [[ -z "$INITIAL_CHECKPOINT" ]]; then
   echo "INITIAL_CHECKPOINT must point to the progressive best checkpoint." >&2

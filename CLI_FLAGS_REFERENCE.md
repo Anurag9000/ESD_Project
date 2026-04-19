@@ -227,7 +227,7 @@ These are not `argparse` flags, but they control the shell wrappers and the acti
 | `RUN_ROOT` | `Results/convnextv2_nano_all_classes_<RUN_STAMP>` in `run_training.sh`, `Results/convnextv2_nano_master_run` in `run_full_training_pipeline.sh` | Output root for checkpoints and artifacts. |
 | `LOG_ROOT` | `logs/convnextv2_nano_all_classes_<RUN_STAMP>` in `run_training.sh`, `logs/convnextv2_nano_master_run` in `run_full_training_pipeline.sh` | Log root for JSONL/CSV artifacts. |
 | `DATASET_ROOT` | `Dataset_Final` | Corpus root used by both wrappers. |
-| `INITIAL_CHECKPOINT` | required in `run_full_training_pipeline.sh` | Seed checkpoint for the recursive refinement stages. |
+| `INITIAL_CHECKPOINT` | defaults to `$RUN_ROOT/progressive/best.pt` in `run_full_training_pipeline.sh` | Seed checkpoint for the recursive refinement stages. |
 | `PYTORCH_CUDA_ALLOC_CONF` | `expandable_segments:True` when unset | CUDA allocator setting injected by the wrappers for safer memory behavior. |
 
 ## Wrapper Behavior That Overrides CLI Inputs
@@ -236,4 +236,5 @@ These are not `argparse` flags, but they control the shell wrappers and the acti
 - `run_training.sh` always injects `--dataset-root "$DATASET_ROOT"` and `--sampling-strategy balanced` into the progressive trainer.
 - `run_training.sh` auto-resumes from `step_last.pt` first, then `last.pt`.
 - `run_full_training_pipeline.sh` ignores user-supplied `--dataset-root`, `--batch-size`, `--output-dir`, `--log-file`, `--resume-checkpoint`, `--resume-mode`, `--resume-phase-index`, `--classifier-train-mode`, `--classifier-early-stopping-metric`, `--head-lr`, `--backbone-lr`, `--stage-early-stopping-patience`, and `--optimizer`.
+- `scripts/train_efficientnet_b0_progressive.py` now ignores unrecognized trainer flags with a warning instead of aborting on strict argparse parsing.
 - `run_full_training_pipeline.sh` hardcodes the recursive refinement recipe to `batch-size 224`, `patience 1`, `resume-phase-index 1`, `optimizer adamw`, `sampling-strategy balanced`, `skip-supcon`, `classifier-train-mode progressive`, and `ce-max-unfreeze-modules 40` for both recursive passes.
