@@ -266,7 +266,7 @@ def run_training(
         f"{head_lr:.12g}",
         "--backbone-lr",
         f"{backbone_lr:.12g}",
-        "--ce-max-unfreeze-modules",
+        "--frozen-core-backbone-modules",
         "40",
         "--output-dir",
         str(iteration_dir),

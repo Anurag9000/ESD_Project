@@ -17,7 +17,7 @@ Live logs now print pure accuracy plus `per_class_accuracy` and `per_class_avg_c
 | `--projection-dim` | `128` | Width of the SupCon projection head. |
 | `--unfreeze-chunk-size` | `20` | Number of backbone leaf modules unfrozen per progressive step. |
 | `--skip-supcon` | `false` | Skip the SupCon stage entirely when enabled. |
-| `--classifier-train-mode` | `progressive` | Choose `progressive` unfreezing or `full_model` training; `full_model` is still capped by `--ce-max-unfreeze-modules`. |
+| `--classifier-train-mode` | `progressive` | Choose `progressive` unfreezing or `full_model` training; both modes preserve `--frozen-core-backbone-modules`. |
 | `--classifier-early-stopping-metric` | `val_loss` | Classifier phase selection metric: `val_loss` or `val_raw_acc`. |
 | `--reject-current-phase-on-global-miss` / `--no-reject-current-phase-on-global-miss` | `true` | Gate whether a phase that fails to beat the global best may seed the next phase. |
 | `--supcon-temperature` | `0.07` | Temperature for the SupCon loss. |
@@ -43,8 +43,9 @@ Live logs now print pure accuracy plus `per_class_accuracy` and `per_class_avg_c
 | `--weights` | `default` | Use pretrained weights (`default`) or scratch initialization (`none`). |
 | `--augment-repeats` | `16` | Deterministic augmentation variants per source image. |
 | `--augment-gaussian-sigmas` | `0.5` | Stochastic augmentation sigma scale. |
-| `--supcon-unfreeze-backbone-modules` | `40` | Upper bound on how deep SupCon may unfreeze. |
-| `--ce-max-unfreeze-modules` | `40` | Upper bound on how deep CE may unfreeze, including the `full_model` path. |
+| `--frozen-core-backbone-modules` | `40` | Number of earliest backbone leaf modules kept frozen in every SupCon, CE, and recursive phase. Default freezes the stem/core 40 modules. |
+| `--supcon-unfreeze-backbone-modules` | `None` | Optional extra cap on how many tail modules SupCon may unfreeze. When unset, SupCon may train only the tail left after the frozen 40-module core. |
+| `--ce-max-unfreeze-modules` | `None` | Optional extra cap on how many tail modules CE may unfreeze, including the `full_model` path. When unset, CE may train only the tail left after the frozen 40-module core. |
 | `--output-dir` | `Results/metric_learning_experiment` | Main training output root. |
 | `--log-file` | `logs/metric_learning_experiment.log.jsonl` | Structured JSONL log path. |
 | `--resume-checkpoint` | `""` | Explicit checkpoint to resume from. |
@@ -240,4 +241,4 @@ These are not `argparse` flags, but they control the shell wrappers and the acti
 - `run_training.sh` auto-resumes from `step_last.pt` first, then `last.pt`.
 - `run_full_training_pipeline.sh` ignores user-supplied `--dataset-root`, `--batch-size`, `--output-dir`, `--log-file`, `--resume-checkpoint`, `--resume-mode`, `--resume-phase-index`, `--classifier-train-mode`, `--classifier-early-stopping-metric`, `--head-lr`, `--backbone-lr`, `--stage-early-stopping-patience`, and `--optimizer`.
 - `scripts/run_recursive_refinement.py` validates pass-through trainer flags against the main trainer parser and raises on unsupported options instead of silently ignoring them.
-- `run_full_training_pipeline.sh` hardcodes the recursive refinement recipe to `batch-size 224`, `patience 1`, `resume-phase-index 1`, `optimizer adamw`, `sampling-strategy balanced`, `skip-supcon`, `classifier-train-mode full_model`, and `ce-max-unfreeze-modules 40` for both recursive passes. This means recursive refinement starts directly in `ce_full_model`: classifier head plus the allowed 40-module backbone tail train from the first step, with the frozen core still locked. Recursive candidate scoring evaluates only the validation split; the test split is reserved for the final test bundle.
+- `run_full_training_pipeline.sh` hardcodes the recursive refinement recipe to `batch-size 224`, `patience 1`, `resume-phase-index 1`, `optimizer adamw`, `sampling-strategy balanced`, `skip-supcon`, `classifier-train-mode full_model`, and `frozen-core-backbone-modules 40` for both recursive passes. This means recursive refinement starts directly in `ce_full_model`: classifier head plus the backbone tail after the frozen 40-module stem/core train from the first step. Recursive candidate scoring evaluates only the validation split; the test split is reserved for the final test bundle.

@@ -54,11 +54,11 @@ The pipeline follows the research-validated principle: **Contrastive representat
 | **Stopping:**        | Early stopping patience=1 on SupCon val_loss |
 | **Goal:**            | Start adapting only the semantic tail while the frozen core stays intact |
 
-### Stage 3 — SupCon Last-40 Modules
+### Stage 3 — SupCon Full Tail After Frozen Core
 | Parameter            | Value  |
 | :------------------- | :----- |
-| **Trainable:**       | Top 40 leaf modules (of 79 total for the default `convnextv2_nano`) + SupCon head |
-| **Frozen forever:**  | First 39 leaf modules (stem, early stages: edges, textures, patterns) remain frozen in the default backbone |
+| **Trainable:**       | Tail after the frozen core; for default `convnextv2_nano`, top 39 leaf modules (79 total - 40 frozen core) + SupCon head |
+| **Frozen forever:**  | First 40 leaf modules (stem, early stages: edges, textures, patterns) remain frozen in the default backbone |
 | **Loss:**            | Supervised Contrastive (SupCon) |
 | **Head LR:**         | `3e-3` |
 | **Backbone LR:**     | `5e-5` |
@@ -87,10 +87,10 @@ The pipeline follows the research-validated principle: **Contrastive representat
 | **Phase rejection:** | If a phase fails to beat the global best, its weights are NOT used to initialise the next phase (global best is restored) |
 | **Goal:**            | Begin supervised backbone adaptation while preserving the frozen core |
 
-### Stage 6 — CE Last-40 Modules
+### Stage 6 — CE Full Tail After Frozen Core
 | Parameter            | Value  |
 | :------------------- | :----- |
-| **Trainable:**       | Top 40 semantic leaf modules + CE head |
+| **Trainable:**       | Tail after the frozen core; for default `convnextv2_nano`, top 39 semantic leaf modules + CE head |
 | **Loss:**            | Cross-Entropy |
 | **Head LR:**         | `1e-5` |
 | **Backbone LR:**     | `1e-5` |
@@ -100,7 +100,7 @@ The pipeline follows the research-validated principle: **Contrastive representat
 
 ### Stage 7 — Recursive val_loss Refinement
 - Runs `run_recursive_refinement.py` with `metric=val_loss`, `threshold=1e-4`.
-- Uses the same 40-module frozen core as the main CE/SupCon pipeline; recursive refinement is progressive, not full-model.
+- Uses the same 40-module frozen core as the main CE/SupCon pipeline; recursive refinement starts directly in full-tail `ce_full_model`, not progressive head-only.
 - Automatically halves learning rates on plateau and repeats until loss stops improving.
 - Produces `accepted_best.pt`.
 

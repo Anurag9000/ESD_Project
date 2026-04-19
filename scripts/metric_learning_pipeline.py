@@ -1446,11 +1446,7 @@ def build_supcon_phase_plan(total_modules: int, args: argparse.Namespace) -> lis
     phases: list[PhaseSpec] = []
     phases.append(PhaseSpec(name="supcon_head_only", unfrozen_backbone_modules=0))
 
-    effective_max = min(
-        total_modules,
-        getattr(args, "supcon_unfreeze_backbone_modules", total_modules),
-        getattr(args, "ce_max_unfreeze_modules", total_modules),
-    )
+    effective_max = effective_unfrozen_backbone_cap(total_modules, args, "supcon")
     count = 0
     phase_index = 0
     while count < effective_max:
@@ -1463,13 +1459,13 @@ def build_supcon_phase_plan(total_modules: int, args: argparse.Namespace) -> lis
 def build_classifier_phase_plan(total_modules: int, args: argparse.Namespace) -> list[PhaseSpec]:
     """Build the ordered list of classifier training phases.
 
-    The permanent freeze boundary is enforced here: the CE progressive loop
-    never unfreezes more than `ce_max_unfreeze_modules` leaf modules, matching
-    the SupCon boundary so the low-level texture/pattern encoders stay frozen.
+    The permanent freeze boundary is enforced here: CE never unfreezes into
+    the first `frozen_core_backbone_modules` leaf modules. Optional legacy caps
+    can reduce the trainable tail further, but cannot thaw the frozen core.
     """
     phases: list[PhaseSpec] = []
     if args.classifier_train_mode == "full_model":
-        effective_max = min(total_modules, getattr(args, "ce_max_unfreeze_modules", total_modules))
+        effective_max = effective_unfrozen_backbone_cap(total_modules, args, "ce")
         phases.append(PhaseSpec(name="ce_full_model", unfrozen_backbone_modules=effective_max))
         return phases
     # ── Stage 3: CE head warm-up (backbone fully frozen) ─────────────────────
@@ -1477,10 +1473,9 @@ def build_classifier_phase_plan(total_modules: int, args: argparse.Namespace) ->
     # This prevents random ce_head gradients from corrupting contrastive features.
     phases.append(PhaseSpec(name="ce_head_only", unfrozen_backbone_modules=0))
     # ── Stage 4: CE progressive unfreezing ────────────────────────────────────
-    # HARD CAP: never exceed ce_max_unfreeze_modules (default=40).
-    # This keeps the low-level stem and early texture encoders frozen in both
-    # SupCon and CE phases — only the semantic tail is adapted.
-    effective_max = min(total_modules, getattr(args, "ce_max_unfreeze_modules", total_modules))
+    # HARD BOUNDARY: never thaw the frozen core. Only the semantic tail beyond
+    # frozen_core_backbone_modules is eligible for CE adaptation.
+    effective_max = effective_unfrozen_backbone_cap(total_modules, args, "ce")
     count = 0
     phase_index = 0
     while count < effective_max:
@@ -1488,6 +1483,27 @@ def build_classifier_phase_plan(total_modules: int, args: argparse.Namespace) ->
         phase_index += 1
         phases.append(PhaseSpec(name=f"ce_last_{count}_modules", unfrozen_backbone_modules=count))
     return phases
+
+
+def effective_unfrozen_backbone_cap(total_modules: int, args: argparse.Namespace, stage: str) -> int:
+    frozen_core = min(total_modules, max(0, int(getattr(args, "frozen_core_backbone_modules", 40))))
+    default_tail = max(0, total_modules - frozen_core)
+    if stage == "supcon":
+        stage_cap = getattr(args, "supcon_unfreeze_backbone_modules", None)
+        shared_cap = getattr(args, "ce_max_unfreeze_modules", None)
+        caps = [default_tail]
+        if stage_cap is not None:
+            caps.append(int(stage_cap))
+        if shared_cap is not None:
+            caps.append(int(shared_cap))
+        return max(0, min(total_modules, *caps))
+    if stage == "ce":
+        stage_cap = getattr(args, "ce_max_unfreeze_modules", None)
+        caps = [default_tail]
+        if stage_cap is not None:
+            caps.append(int(stage_cap))
+        return max(0, min(total_modules, *caps))
+    raise ValueError(f"Unknown backbone unfreeze stage: {stage}")
 
 
 def backbone_leaf_modules(model: MetricLearningEfficientNetB0) -> list[tuple[str, nn.Module]]:
@@ -1679,10 +1695,10 @@ def classifier_phase_learning_rates(
     if args.classifier_train_mode != "progressive" or total_backbone_modules <= 0 or unfrozen_backbone_modules <= 0:
         return head_lr, backbone_lr
 
-    # BUG FIX: use effective_total (capped at ce_max_unfreeze_modules) as the
-    # denominator, NOT total_backbone_modules. That keeps the final progressive
-    # phase aligned with the actual unfreeze ceiling, so head LR decays fully.
-    effective_total = min(total_backbone_modules, getattr(args, "ce_max_unfreeze_modules", total_backbone_modules))
+    # Use the actual trainable tail size after the frozen-core boundary as the
+    # denominator, not total_backbone_modules. That keeps the final progressive
+    # phase aligned with the real unfreeze ceiling, so head LR decays fully.
+    effective_total = effective_unfrozen_backbone_cap(total_backbone_modules, args, "ce")
     if effective_total <= 0:
         return head_lr, backbone_lr
 
@@ -4061,16 +4077,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--augment-repeats", type=int, default=16)
     parser.add_argument("--augment-gaussian-sigmas", type=float, default=0.5)
     # SupCon and CE both respect the same permanent frozen-core boundary by default.
-    # Only the top semantic tail is eligible for progressive unfreezing.
-    parser.add_argument("--supcon-unfreeze-backbone-modules", type=int, default=40)
+    # Only the semantic tail after this frozen core is eligible for unfreezing.
     parser.add_argument(
-        "--ce-max-unfreeze-modules",
+        "--frozen-core-backbone-modules",
         type=int,
         default=40,
         help=(
-            "Hard cap on backbone leaf modules unfrozen during CE progressive training. "
-            "Default=40 matches --supcon-unfreeze-backbone-modules, permanently locking "
-            "the low-level frozen core in both SupCon and CE phases."
+            "Number of earliest backbone leaf modules that stay frozen in every SupCon, CE, "
+            "and recursive phase. Default=40; for convnextv2_nano this leaves 39 of 79 "
+            "backbone leaf modules eligible for training."
+        ),
+    )
+    parser.add_argument("--supcon-unfreeze-backbone-modules", type=int, default=None)
+    parser.add_argument(
+        "--ce-max-unfreeze-modules",
+        type=int,
+        default=None,
+        help=(
+            "Optional extra cap on backbone leaf modules unfrozen during CE training. "
+            "When unset, CE may train only the tail left after --frozen-core-backbone-modules. "
+            "This cap can reduce the trainable tail, but cannot thaw the frozen core."
         ),
     )
     parser.add_argument("--output-dir", default="Results/metric_learning_experiment")
@@ -4305,7 +4331,17 @@ def run_experiment(args: argparse.Namespace) -> int:
         raise ValueError("--head-early-stopping-patience must be >= 1")
     if args.stage_early_stopping_patience < 1:
         raise ValueError("--stage-early-stopping-patience must be >= 1")
-    if args.supcon_unfreeze_backbone_modules > args.ce_max_unfreeze_modules:
+    if args.frozen_core_backbone_modules < 0:
+        raise ValueError("--frozen-core-backbone-modules must be >= 0")
+    if args.supcon_unfreeze_backbone_modules is not None and args.supcon_unfreeze_backbone_modules < 0:
+        raise ValueError("--supcon-unfreeze-backbone-modules must be >= 0 when set")
+    if args.ce_max_unfreeze_modules is not None and args.ce_max_unfreeze_modules < 0:
+        raise ValueError("--ce-max-unfreeze-modules must be >= 0 when set")
+    if (
+        args.supcon_unfreeze_backbone_modules is not None
+        and args.ce_max_unfreeze_modules is not None
+        and args.supcon_unfreeze_backbone_modules > args.ce_max_unfreeze_modules
+    ):
         raise ValueError(
             "--supcon-unfreeze-backbone-modules must be <= --ce-max-unfreeze-modules "
             "so the permanent frozen-core boundary is respected across the full pipeline."
@@ -5958,7 +5994,8 @@ def run_experiment(args: argparse.Namespace) -> int:
             "phase_plan": [asdict(phase) for phase in supcon_phases],
             "best_val_loss": supcon_best_loss,
             "best_epoch": supcon_best_epoch,
-            "unfrozen_backbone_modules": args.supcon_unfreeze_backbone_modules,
+            "frozen_core_backbone_modules": args.frozen_core_backbone_modules,
+            "unfreeze_cap": effective_unfrozen_backbone_cap(len(backbone_modules), args, "supcon"),
         },
         "classifier": {
             "phase_plan": [asdict(phase) for phase in phases],
