@@ -325,10 +325,11 @@ def finalize_iteration(
     return decision
 
 
-def evaluate_iteration(iteration_dir: Path, dataset_root: str, batch_size: int, num_workers: int) -> None:
+def evaluate_iteration(iteration_dir: Path, dataset_root: str, batch_size: int, num_workers: int, metric: str, iteration_index: int) -> None:
     checkpoint = evaluation_checkpoint(iteration_dir)
     if not checkpoint.exists():
         raise FileNotFoundError(f"No evaluation checkpoint found in {iteration_dir}")
+    phase_name = f"{metric}_iteration_{iteration_index:03d}"
     subprocess.run(
         [
             sys.executable,
@@ -343,6 +344,10 @@ def evaluate_iteration(iteration_dir: Path, dataset_root: str, batch_size: int, 
             str(batch_size),
             "--num-workers",
             str(num_workers),
+            "--evaluation-stage",
+            "recursive_refinement",
+            "--phase-name",
+            phase_name,
         ],
         check=True,
     )
@@ -446,7 +451,7 @@ def main() -> int:
                 backbone_lr=float(config["backbone_lr"]),
             )
 
-        evaluate_iteration(iteration_dir, args.dataset_root, args.batch_size, args.num_workers)
+        evaluate_iteration(iteration_dir, args.dataset_root, args.batch_size, args.num_workers, args.metric, iteration_index)
         decision = finalize_iteration(
             iteration_dir=iteration_dir,
             config=config,

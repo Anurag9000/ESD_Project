@@ -139,6 +139,8 @@ python scripts/evaluate_saved_classifier.py \
   --output-dir "$FINAL_TEST_OUTPUT_DIR" \
   --dataset-root "$DATASET_ROOT" \
   --batch-size 224 \
+  --evaluation-stage final_test_evaluation \
+  --phase-name final_test \
   --splits test
 
 echo "=== Final test evaluation written to $FINAL_TEST_OUTPUT_DIR ===" >& 2

@@ -20,6 +20,7 @@ from metric_learning_pipeline import (
     compute_correct_confidence_by_class,
     save_classification_report_csv,
     save_confusion_matrix_csv,
+    log_json_event,
     model_dtype_for_args,
     release_training_memory,
     save_confusion_matrix_plot,
@@ -47,6 +48,8 @@ def parse_args() -> argparse.Namespace:
         help="JSON string for custom class mapping, e.g. '{\"Fiber\": [\"paper\", \"cardboard\"]}'"
     )
     parser.add_argument("--splits", nargs="+", default=["val", "test"])
+    parser.add_argument("--evaluation-stage", default="checkpoint_evaluation")
+    parser.add_argument("--phase-name", default="")
     return parser.parse_args()
 
 
@@ -158,6 +161,8 @@ def main() -> int:
         "other_label": args.other_label,
         "splits": list(args.splits),
         "source_class_names": class_names,
+        "evaluation_stage": args.evaluation_stage,
+        "phase_name": args.phase_name,
     }
     save_json(output_dir / "evaluation_manifest.json", manifest)
 
@@ -178,6 +183,16 @@ def main() -> int:
             raise ValueError(f"Unsupported split {split!r}; expected one of train/val/test.")
         dataset = datasets_by_split[split]
         loader = build_eval_loader(dataset, eval_args.batch_size, eval_args.num_workers)
+        log_json_event(
+            empty_log_path,
+            {
+                "event": "validation_started" if split == "val" else "final_evaluation_started",
+                "stage": args.evaluation_stage,
+                "phase_name": args.phase_name or None,
+                "split": split,
+                "eval_batches": len(loader),
+            },
+        )
         logits, targets = collect_logits_and_labels(
             model=model,
             loader=loader,
@@ -188,6 +203,8 @@ def main() -> int:
             criterion=None,
             split=split,
             args=eval_args,
+            stage=args.evaluation_stage,
+            phase_name=args.phase_name or None,
         )
         collapsed_logits, collapsed_targets, runtime_class_names, collapse_info = collapse_logits_and_targets_to_runtime_classes(
             logits,
@@ -267,6 +284,20 @@ def main() -> int:
             f"{split.title()} Confusion Matrix",
         )
         summary["splits"][split] = split_summary
+        log_json_event(
+            empty_log_path,
+            {
+                "event": "validation_finished" if split == "val" else "final_evaluation_finished",
+                "stage": args.evaluation_stage,
+                "phase_name": args.phase_name or None,
+                "split": split,
+                "eval_batches": len(loader),
+                "loss": loss_value,
+                "accuracy": metrics["accuracy"],
+                "per_class_accuracy": metrics["per_class_accuracy"],
+                "per_class_avg_confidence": metrics["per_class_avg_confidence"],
+            },
+        )
         release_training_memory(device, loader)
 
     save_json(output_dir / "evaluation_summary.json", summary)

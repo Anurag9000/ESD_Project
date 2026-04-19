@@ -125,6 +125,8 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--other-label` | `other` | Label name used for collapsed non-selected classes. |
 | `--class-mapping` | `""` | JSON string for runtime class collapsing. |
 | `--splits` | `["val", "test"]` | Splits to evaluate. |
+| `--evaluation-stage` | `checkpoint_evaluation` | Stage label written to terminal, JSONL, and CSV eval logs. Recursive refinement sets this to `recursive_refinement`; final test sets this to `final_test_evaluation`. |
+| `--phase-name` | `""` | Optional phase label written to eval logs, such as `val_loss_iteration_001`, `val_raw_acc_iteration_001`, or `final_test`. |
 
 The saved-classifier evaluator now writes `metrics.json`, `summary.json`, `correct_confidence_by_class.json`, `confmat_counts_<split>.csv`, `confmat_rate_pct_<split>.csv`, `classification_report_<split>.csv`, `confusion_matrix.png`, `reliability_diagram.png`, and `confidence_histogram.png` for each requested split.
 

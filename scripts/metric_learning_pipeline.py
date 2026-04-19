@@ -2700,6 +2700,9 @@ def collect_logits_and_labels(
     criterion: nn.Module | None,
     split: str,
     args: argparse.Namespace | None = None,
+    stage: str = "checkpoint_evaluation",
+    phase_name: str | None = None,
+    eval_context: dict[str, object] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     model.eval()
     eval_args = args or argparse.Namespace(
@@ -2710,6 +2713,7 @@ def collect_logits_and_labels(
         class_loss_weight_map_resolved={},
         targeted_confusion_penalties_resolved=[],
     )
+    eval_context = dict(eval_context or {})
     logits_list: list[torch.Tensor] = []
     labels_list: list[torch.Tensor] = []
     total_batches = min(len(loader), max_batches) if max_batches > 0 else len(loader)
@@ -2755,7 +2759,7 @@ def collect_logits_and_labels(
             if eval_step % log_every_eval_steps == 0:
                 event = {
                     "event": "eval_step",
-                    "stage": "final_evaluation",
+                    "stage": stage,
                     "split": split,
                     "eval_step": eval_step,
                     "batch_size": labels.size(0),
@@ -2763,7 +2767,10 @@ def collect_logits_and_labels(
                     "acc": batch_acc,
                     "per_class_accuracy": batch_per_class_accuracy,
                     "per_class_avg_confidence": batch_per_class_avg_confidence,
+                    **eval_context,
                 }
+                if phase_name is not None:
+                    event["phase_name"] = phase_name
                 if loss is not None:
                     event["loss"] = float(loss.item())
                 log_json_event(
@@ -3423,6 +3430,15 @@ def format_console_event(payload: dict[str, Any]) -> str | None:
             f"epoch={payload.get('epoch_in_phase')}",
             f"validation_index={payload.get('validation_index')}",
             f"epoch_step={payload.get('epoch_step')}",
+            f"eval_batches={payload.get('eval_batches')}",
+        ]
+        return " ".join(piece for piece in pieces if piece)
+    if event == "final_evaluation_started":
+        pieces = [
+            f"[{timestamp}] final_evaluation_started",
+            f"stage={payload.get('stage')}",
+            f"phase_name={phase_name}" if phase_name is not None else None,
+            f"split={payload.get('split')}",
             f"eval_batches={payload.get('eval_batches')}",
         ]
         return " ".join(piece for piece in pieces if piece)
@@ -5635,17 +5651,28 @@ def run_experiment(args: argparse.Namespace) -> int:
     model.load_state_dict(best_classifier_state)
     release_training_memory(device, train_loader, val_loader, supcon_train_loader, supcon_val_loader)
 
-    log_json_event(log_path, {"event": "final_evaluation_started", "split": "val", "eval_batches": val_eval_batches})
-    val_logits, val_targets = collect_logits_and_labels(
-        model,
-        val_loader,
-        device,
-        args.max_eval_batches,
+    log_json_event(
         log_path,
-        args.log_eval_every_steps,
-        classifier_criterion,
-        "val",
-        args,
+        {
+            "event": "validation_started",
+            "stage": "post_progressive_evaluation",
+            "phase_name": "best_classifier_validation",
+            "split": "val",
+            "eval_batches": val_eval_batches,
+        },
+    )
+    val_logits, val_targets = collect_logits_and_labels(
+        model=model,
+        loader=val_loader,
+        device=device,
+        max_batches=args.max_eval_batches,
+        log_path=log_path,
+        log_every_eval_steps=args.log_eval_every_steps,
+        criterion=classifier_criterion,
+        split="val",
+        args=args,
+        stage="post_progressive_evaluation",
+        phase_name="best_classifier_validation",
     )
     release_training_memory(device, val_loader)
     val_metrics = compute_classification_metrics(val_logits, val_targets, train_dataset.classes, args.confidence_threshold)
@@ -5653,7 +5680,9 @@ def run_experiment(args: argparse.Namespace) -> int:
     log_json_event(
         log_path,
         {
-            "event": "final_evaluation_finished",
+            "event": "validation_finished",
+            "stage": "post_progressive_evaluation",
+            "phase_name": "best_classifier_validation",
             "split": "val",
             "eval_batches": val_eval_batches,
             "accuracy": val_metrics["accuracy"],
@@ -5664,17 +5693,28 @@ def run_experiment(args: argparse.Namespace) -> int:
     )
 
     if args.run_final_test:
-        log_json_event(log_path, {"event": "final_evaluation_started", "split": "test", "eval_batches": test_eval_batches})
-        test_logits, test_targets = collect_logits_and_labels(
-            model,
-            test_loader,
-            device,
-            args.max_eval_batches,
+        log_json_event(
             log_path,
-            args.log_eval_every_steps,
-            classifier_criterion,
-            "test",
-            args,
+            {
+                "event": "final_evaluation_started",
+                "stage": "final_test_evaluation",
+                "phase_name": "final_test",
+                "split": "test",
+                "eval_batches": test_eval_batches,
+            },
+        )
+        test_logits, test_targets = collect_logits_and_labels(
+            model=model,
+            loader=test_loader,
+            device=device,
+            max_batches=args.max_eval_batches,
+            log_path=log_path,
+            log_every_eval_steps=args.log_eval_every_steps,
+            criterion=classifier_criterion,
+            split="test",
+            args=args,
+            stage="final_test_evaluation",
+            phase_name="final_test",
         )
         release_training_memory(device, test_loader)
         test_metrics = compute_classification_metrics(test_logits, test_targets, train_dataset.classes, args.confidence_threshold)
@@ -5688,6 +5728,8 @@ def run_experiment(args: argparse.Namespace) -> int:
             log_path,
             {
                 "event": "final_evaluation_finished",
+                "stage": "final_test_evaluation",
+                "phase_name": "final_test",
                 "split": "test",
                 "eval_batches": test_eval_batches,
                 "accuracy": test_metrics["accuracy"],
