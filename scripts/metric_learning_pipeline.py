@@ -4784,6 +4784,10 @@ def run_experiment(args: argparse.Namespace) -> int:
                 "phase0_encoder_checkpoint": str(phase0_path),
                 "backbone_name": args.backbone,
                 "weights_mode": args.weights,
+                "phase0_stage_trainability": {
+                    "phase0": "all_backbone_parameters_trainable",
+                    "supcon_and_ce": f"frozen_core_{int(getattr(args, 'frozen_core_backbone_modules', 40))}_modules",
+                },
             },
         )
     backbone_modules = backbone_leaf_modules(model)

@@ -326,6 +326,8 @@ def main() -> int:
             "backbone": args.backbone,
             "resolved_model_name": getattr(model.encoder, "default_cfg", {}).get("architecture", args.backbone),
             "phase0_source": getattr(model, "phase0_source", None),
+            "encoder_all_parameters_trainable": all(parameter.requires_grad for parameter in model.encoder.parameters()),
+            "frozen_backbone_modules": 0,
         },
     )
     model.train()
