@@ -27,6 +27,7 @@ from metric_learning_pipeline import (
     model_dtype_for_args,
     parse_json_class_mapping,
     project_class_name_to_training_taxonomy,
+    resolve_runtime_selected_classes,
     release_training_memory,
     save_classification_report_csv,
     save_confusion_matrix_csv,
@@ -47,7 +48,7 @@ class NoAugDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, index: int) -> tuple[torch.Tensor, int]:
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, int, str]:
         path, label = self.samples[index]
         try:
             with warnings.catch_warnings():
@@ -56,12 +57,12 @@ class NoAugDataset(Dataset):
             tensor = evaluation_tensor_from_image(img, self.image_size)
         except Exception:
             tensor = torch.zeros(3, self.image_size, self.image_size)
-        return tensor, label
+        return tensor, label, path
 
 
 def collate(batch):
-    tensors, labels = zip(*batch)
-    return torch.stack(tensors), torch.tensor(labels, dtype=torch.long)
+    tensors, labels, paths = zip(*batch)
+    return torch.stack(tensors), torch.tensor(labels, dtype=torch.long), list(paths)
 
 
 def parse_args() -> argparse.Namespace:
@@ -74,6 +75,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-eval-batches", type=int, default=0)
     parser.add_argument("--confidence-threshold", type=float, default=None)
     parser.add_argument("--selected-class", action="append", default=[])
+    parser.add_argument(
+        "--selected-only",
+        action="store_true",
+        help="Strictly evaluate only the selected runtime classes and ignore all other logits.",
+    )
     parser.add_argument("--other-label", default="other")
     parser.add_argument("--class-mapping", default="", help="JSON string for runtime class collapsing.")
     return parser.parse_args()
@@ -183,6 +189,7 @@ def main() -> int:
         "checkpoint": str(checkpoint_path),
         "dataset_root": str(dataset_root),
         "selected_classes": list(args.selected_class),
+        "selected_only": bool(args.selected_only),
         "other_label": args.other_label,
         "source_class_names": source_class_names,
         "runtime_class_names": runtime_class_names,
@@ -194,32 +201,65 @@ def main() -> int:
     save_json(output_dir / "holdout_manifest.json", manifest)
 
     loader = build_loader(NoAugDataset(remapped_samples, int(eval_args.image_size)), eval_args.batch_size, eval_args.num_workers)
-    logits, targets = [], []
+    logits, targets, prediction_rows = [], [], []
     with torch.no_grad():
-        for images, labels in loader:
+        for images, labels, paths in loader:
             images = images.to(device, non_blocking=True, dtype=model_dtype_for_args(eval_args))
             labels = labels.to(device, non_blocking=True)
             with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
                 emb = model.encode(images)
                 batch_logits = model.classify(emb, labels=None)
-            logits.append(batch_logits.detach().cpu().numpy())
-            targets.append(labels.detach().cpu().numpy())
+            batch_logits_np = batch_logits.detach().cpu().numpy()
+            labels_np = labels.detach().cpu().numpy()
+            logits.append(batch_logits_np)
+            targets.append(labels_np)
+            batch_probabilities = torch.softmax(torch.from_numpy(batch_logits_np), dim=1).numpy()
+            for path, true_index, prob_row in zip(paths, labels_np, batch_probabilities):
+                pred_index = int(np.argmax(prob_row))
+                prediction_rows.append(
+                    {
+                        "path": path,
+                        "true_class": runtime_class_names[int(true_index)],
+                        "pred_class": runtime_class_names[pred_index],
+                        "confidence": float(prob_row[pred_index]),
+                        "correct": bool(pred_index == int(true_index)),
+                    }
+                )
 
     logits_concat = np.concatenate(logits, axis=0) if logits else np.empty((0, len(runtime_class_names)), dtype=np.float32)
     targets_concat = np.concatenate(targets, axis=0) if targets else np.empty((0,), dtype=np.int64)
-    collapsed_logits, collapsed_targets, runtime_class_names, collapse_info = collapse_logits_and_targets_to_runtime_classes(
-        logits_concat,
-        targets_concat,
-        runtime_class_names,
-        selected_classes=list(args.selected_class),
-        class_mapping=class_mapping_dict,
-        other_label=args.other_label,
-    )
+    if args.selected_only:
+        resolved_selected = resolve_runtime_selected_classes(runtime_class_names, list(args.selected_class))
+        selected_indices = [runtime_class_names.index(name) for name in resolved_selected]
+        selected_mask = np.asarray([int(target) in selected_indices for target in targets_concat], dtype=bool)
+        strict_logits = logits_concat[:, selected_indices]
+        strict_targets = np.asarray(
+            [selected_indices.index(int(target)) for target in targets_concat[selected_mask]],
+            dtype=np.int64,
+        )
+        collapsed_logits = strict_logits[selected_mask]
+        collapsed_targets = strict_targets
+        runtime_class_names = resolved_selected
+        collapse_info = {
+            "mode": "strict_selected_only",
+            "selected_classes": list(resolved_selected),
+            "collapse_applied": True,
+            "dropped_source_classes": [name for name in TRAINING_CLASS_ORDER if name not in resolved_selected],
+        }
+    else:
+        collapsed_logits, collapsed_targets, runtime_class_names, collapse_info = collapse_logits_and_targets_to_runtime_classes(
+            logits_concat,
+            targets_concat,
+            runtime_class_names,
+            selected_classes=list(args.selected_class),
+            class_mapping=class_mapping_dict,
+            other_label=args.other_label,
+        )
     metrics = compute_classification_metrics(
         collapsed_logits,
         collapsed_targets,
         runtime_class_names,
-        float(eval_args.confidence_threshold if hasattr(eval_args, "confidence_threshold") else 0.8),
+        float(eval_args.confidence_threshold if hasattr(eval_args, "confidence_threshold") else 0.0),
     )
     confidence = compute_correct_confidence_by_class(collapsed_logits, collapsed_targets, runtime_class_names)
     probabilities = torch.softmax(torch.from_numpy(collapsed_logits), dim=1).numpy() if collapsed_logits.size else np.empty((0, len(runtime_class_names)), dtype=np.float32)
@@ -231,6 +271,28 @@ def main() -> int:
     save_confusion_matrix_csv(output_dir / "confmat_counts_test.csv", confmat, runtime_class_names, percent=False)
     save_confusion_matrix_csv(output_dir / "confmat_rate_pct_test.csv", confmat, runtime_class_names, percent=True)
     save_classification_report_csv(output_dir / "classification_report_test.csv", metrics, runtime_class_names)
+    save_json(output_dir / "all_predictions.json", prediction_rows)
+    wrong_predictions = [row for row in prediction_rows if not row["correct"]]
+    save_json(output_dir / "wrong_predictions.json", wrong_predictions)
+    wrong_csv_path = output_dir / "wrong_predictions.csv"
+    with wrong_csv_path.open("w", encoding="utf-8", newline="") as handle:
+        import csv
+
+        writer = csv.DictWriter(handle, fieldnames=["path", "true_class", "pred_class", "confidence", "correct"])
+        writer.writeheader()
+        writer.writerows(prediction_rows)
+
+    wrong_dir = output_dir / "wrong_predictions"
+    wrong_dir.mkdir(parents=True, exist_ok=True)
+    for row in wrong_predictions:
+        source_path = Path(row["path"])
+        class_dir = wrong_dir / row["true_class"] / row["pred_class"]
+        class_dir.mkdir(parents=True, exist_ok=True)
+        target_path = class_dir / source_path.name
+        try:
+            shutil.copy2(source_path, target_path)
+        except Exception:
+            pass
     save_json(
         output_dir / "summary.json",
         {
