@@ -5,13 +5,13 @@ This file serves as the definitive context for AI agents operating within the ES
 ## 1. Source of Truth (Technical Docs)
 - **`README.md`**: Platform summary and execution commands.
 - **`ARCHITECTURE_AND_PLAN.md`**: Model specs and multi-phase training orchestration.
-- **`DATASET_SPECIFICATION.md`**: Definitive 1.04M image counts and 15-class taxonomy.
+- **`DATASET_SPECIFICATION.md`**: Definitive corpus counts and 6-class logical training taxonomy.
 - **`PYTORCH_SETUP.md`**: Environment and runtime configuration.
 
 ## 2. Definitive State
-- **Core Model:** EfficientNet-B0 (5.3M params).
-- **Core Dataset:** WSS-308K (308,008 verified images, ≥200px resolution floor).
-- **Taxonomy:** 8 Material Classes — clothes, ewaste, glass, hard_plastic, metal, organic, paper, soft_plastic. NO battery (purged, insufficient count post-200px filter), NO shoes (purged, 100% sub-200px thumbnails), NO plastic, NO cardboard (merged into paper), NO medical, NO ceramic.
+- **Core Model:** Configurable backbone; default ConvNeXt V2 Nano FCMAE.
+- **Core Dataset:** WSS-304K physical corpus (304,258 verified images, ≥224px resolution floor); 299,818 samples participate in default training after taxonomy projection.
+- **Taxonomy:** 6 logical training classes — clothes, glass, metal, organic, paper, plastic. `ewaste` is excluded at load time. `hard_plastic` and `soft_plastic` are merged into `plastic`. NO battery, NO shoes, NO cardboard (merged into paper), NO medical, NO ceramic.
 - **Mobile Stack:** Jetpack Compose, OSM (MapLibre), WebSockets.
 
 ## 3. Mandatory Constraints

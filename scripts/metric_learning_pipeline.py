@@ -44,6 +44,22 @@ except ImportError:  # pragma: no cover - surfaced explicitly when backbone crea
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 DEFAULT_BACKBONE_NAME = "convnextv2_nano"
+DEFAULT_BATCH_SIZE = 240
+TRAINING_CLASS_ORDER = ("clothes", "glass", "metal", "organic", "paper", "plastic")
+TRAINING_CLASS_MAPPING: dict[str, list[str]] = {
+    "plastic": ["hard_plastic", "soft_plastic"],
+}
+TRAINING_EXCLUDED_CLASSES = frozenset({"ewaste"})
+LEGACY_8_CLASS_TAXONOMY = (
+    "clothes",
+    "ewaste",
+    "glass",
+    "hard_plastic",
+    "metal",
+    "organic",
+    "paper",
+    "soft_plastic",
+)
 SPLIT_OFFSETS = {"train": 0, "val": 10_000_000, "test": 20_000_000}
 SHADOW_PROBABILITY = 0.20
 GLARE_PROBABILITY = 0.25
@@ -116,6 +132,216 @@ def create_backbone(backbone_name: str, weights_mode: str) -> nn.Module:
     return timm.create_model(model_name, pretrained=pretrained, num_classes=0)
 
 
+def parse_json_class_mapping(spec: str | None) -> dict[str, list[str]]:
+    if not spec:
+        return {}
+    parsed = json.loads(spec)
+    if not isinstance(parsed, dict):
+        raise ValueError("--class-mapping must be a JSON object mapping target class to source class list.")
+    mapping: dict[str, list[str]] = {}
+    for target, sources in parsed.items():
+        if not isinstance(target, str) or not isinstance(sources, list) or not all(isinstance(source, str) for source in sources):
+            raise ValueError("--class-mapping must look like '{\"target\": [\"source_a\", \"source_b\"]}'.")
+        mapping[target] = list(sources)
+    return mapping
+
+
+def enforced_training_class_mapping(custom_mapping: dict[str, list[str]] | None = None) -> dict[str, list[str]]:
+    """Return the repo-wide training taxonomy mapping.
+
+    Physical dataset folders stay untouched, but every training/evaluation split
+    is projected into this logical taxonomy before sampling/model construction:
+    ewaste is excluded and hard/soft plastic become one plastic class.
+    """
+    merged: dict[str, list[str]] = {target: list(sources) for target, sources in TRAINING_CLASS_MAPPING.items()}
+    for target, sources in (custom_mapping or {}).items():
+        if target in TRAINING_EXCLUDED_CLASSES:
+            continue
+        target_sources = merged.setdefault(target, [])
+        for source in sources:
+            if source not in TRAINING_EXCLUDED_CLASSES and source not in target_sources:
+                target_sources.append(source)
+    return merged
+
+
+def project_class_name_to_training_taxonomy(
+    source_name: str,
+    class_mapping: dict[str, list[str]] | None = None,
+) -> str | None:
+    if source_name in TRAINING_EXCLUDED_CLASSES:
+        return None
+    effective_mapping = enforced_training_class_mapping(class_mapping)
+    for target, sources in effective_mapping.items():
+        if source_name in sources:
+            return target if target in TRAINING_CLASS_ORDER else None
+    return source_name if source_name in TRAINING_CLASS_ORDER else None
+
+
+def project_samples_to_training_taxonomy(
+    source_classes: list[str],
+    samples: list[tuple[str, int]],
+    class_mapping: dict[str, list[str]] | None = None,
+) -> tuple[list[str], dict[str, int], list[tuple[str, int]], dict[str, Any]]:
+    """Drop excluded source classes and remap folders into logical train classes."""
+    effective_mapping = enforced_training_class_mapping(class_mapping)
+
+    remapped_names: list[str] = []
+    dropped_counts: dict[str, int] = {}
+    source_counts: dict[str, int] = {}
+    for _, old_target in samples:
+        source_name = source_classes[int(old_target)]
+        source_counts[source_name] = source_counts.get(source_name, 0) + 1
+        target_name = project_class_name_to_training_taxonomy(source_name, effective_mapping)
+        if target_name is None:
+            dropped_counts[source_name] = dropped_counts.get(source_name, 0) + 1
+            continue
+        remapped_names.append(target_name)
+
+    present = set(remapped_names)
+    new_classes = [class_name for class_name in TRAINING_CLASS_ORDER if class_name in present]
+    new_class_to_idx = {class_name: index for index, class_name in enumerate(new_classes)}
+
+    new_samples: list[tuple[str, int]] = []
+    for path, old_target in samples:
+        source_name = source_classes[int(old_target)]
+        target_name = project_class_name_to_training_taxonomy(source_name, effective_mapping)
+        if target_name is None or target_name not in new_class_to_idx:
+            continue
+        new_samples.append((path, new_class_to_idx[target_name]))
+
+    metadata = {
+        "logical_class_order": list(TRAINING_CLASS_ORDER),
+        "class_mapping": effective_mapping,
+        "excluded_classes": sorted(TRAINING_EXCLUDED_CLASSES),
+        "source_classes": list(source_classes),
+        "source_counts": source_counts,
+        "dropped_counts": dropped_counts,
+        "logical_classes": new_classes,
+        "logical_sample_count": len(new_samples),
+    }
+    return new_classes, new_class_to_idx, new_samples, metadata
+
+
+def clone_state_dict(state_dict: dict[str, Any]) -> dict[str, Any]:
+    cloned: dict[str, Any] = {}
+    for key, value in state_dict.items():
+        if torch.is_tensor(value):
+            cloned[key] = value.detach().clone()
+        else:
+            cloned[key] = copy.deepcopy(value)
+    return cloned
+
+
+def adapt_checkpoint_state_dict_to_training_taxonomy(
+    state_dict: dict[str, torch.Tensor],
+    source_class_names: list[str],
+    target_class_names: list[str],
+    *,
+    class_mapping: dict[str, list[str]] | None = None,
+    head_prefix: str = "ce_head",
+) -> tuple[dict[str, torch.Tensor], dict[str, Any]]:
+    """Rewrite a checkpoint head to match the repo's current logical taxonomy.
+
+    This keeps all backbone / embedding weights unchanged and only remaps the
+    final classification head. Exact one-to-one classes are copied directly.
+    Merged classes use a bias-weighted average of the legacy source rows, with
+    the merged bias set to logsumexp of the source biases.
+    """
+    source_class_names = list(source_class_names)
+    target_class_names = list(target_class_names)
+    effective_mapping = enforced_training_class_mapping(class_mapping)
+    projected_source_targets = {
+        source_name: project_class_name_to_training_taxonomy(source_name, effective_mapping)
+        for source_name in source_class_names
+    }
+
+    if source_class_names == target_class_names:
+        return clone_state_dict(state_dict), {
+            "applied": False,
+            "reason": "source_and_target_taxonomies_match",
+            "source_class_names": source_class_names,
+            "target_class_names": target_class_names,
+        }
+
+    weight_key = f"{head_prefix}.weight"
+    bias_key = f"{head_prefix}.bias"
+    if weight_key not in state_dict:
+        raise ValueError(f"Checkpoint state_dict is missing {weight_key!r}.")
+    old_weight = state_dict[weight_key]
+    old_bias = state_dict.get(bias_key)
+    if old_weight.ndim != 2:
+        raise ValueError(f"Expected {weight_key!r} to be a 2D tensor, got shape {tuple(old_weight.shape)}.")
+    if old_weight.shape[0] != len(source_class_names):
+        raise ValueError(
+            f"Cannot adapt checkpoint head: {weight_key} has {old_weight.shape[0]} rows but "
+            f"{len(source_class_names)} source classes were supplied."
+        )
+    if old_bias is not None and old_bias.shape[0] != len(source_class_names):
+        raise ValueError(
+            f"Cannot adapt checkpoint head: {bias_key} has {old_bias.shape[0]} rows but "
+            f"{len(source_class_names)} source classes were supplied."
+        )
+
+    target_to_source_indices: dict[str, list[int]] = {
+        target_name: [
+            index
+            for index, source_name in enumerate(source_class_names)
+            if projected_source_targets.get(source_name) == target_name
+        ]
+        for target_name in target_class_names
+    }
+    missing_targets = [target for target, indices in target_to_source_indices.items() if not indices]
+    if missing_targets:
+        raise ValueError(
+            "Could not adapt checkpoint head to the current taxonomy because these target classes have no source "
+            f"counterparts: {missing_targets}. Source classes: {source_class_names}"
+        )
+
+    adapted = clone_state_dict(state_dict)
+    adapted_weight = old_weight.new_zeros((len(target_class_names), old_weight.shape[1]))
+    adapted_bias = old_bias.new_zeros(len(target_class_names)) if old_bias is not None else None
+    merged_sources: dict[str, list[str]] = {}
+
+    for target_index, target_name in enumerate(target_class_names):
+        source_indices = target_to_source_indices[target_name]
+        source_names = [source_class_names[index] for index in source_indices]
+        if len(source_indices) == 1:
+            source_index = source_indices[0]
+            adapted_weight[target_index] = old_weight[source_index]
+            if adapted_bias is not None and old_bias is not None:
+                adapted_bias[target_index] = old_bias[source_index]
+            continue
+
+        source_weight_rows = old_weight[source_indices].float()
+        if old_bias is not None:
+            source_bias_rows = old_bias[source_indices].float()
+            mixing_weights = torch.softmax(source_bias_rows, dim=0).unsqueeze(1)
+            merged_weight = (mixing_weights * source_weight_rows).sum(dim=0)
+            merged_bias = torch.logsumexp(source_bias_rows, dim=0)
+            adapted_bias[target_index] = merged_bias.to(dtype=old_bias.dtype)
+        else:
+            merged_weight = source_weight_rows.mean(dim=0)
+        adapted_weight[target_index] = merged_weight.to(dtype=old_weight.dtype)
+        merged_sources[target_name] = source_names
+
+    adapted[weight_key] = adapted_weight
+    if adapted_bias is not None:
+        adapted[bias_key] = adapted_bias
+
+    return adapted, {
+        "applied": True,
+        "reason": "taxonomy_projection",
+        "source_class_names": source_class_names,
+        "target_class_names": target_class_names,
+        "merged_sources": merged_sources,
+        "excluded_source_classes": sorted(
+            source_name
+            for source_name in source_class_names
+            if projected_source_targets.get(source_name) is None
+        ),
+    }
+
+
 class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
     def __init__(
         self,
@@ -157,47 +383,21 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
         self.class_to_idx = self.base_dataset.class_to_idx
         self.samples = list(self.base_dataset.samples if samples is None else samples)
         
-        # Apply Mapping if provided
-        if class_mapping:
-            self.apply_class_mapping(class_mapping)
+        self.apply_class_mapping(class_mapping or {})
             
         self.targets = [target for _, target in self.samples]
         self.current_epoch = 0
 
     def apply_class_mapping(self, class_mapping: dict[str, list[str]]) -> None:
-        # 1. Define new logical classes
-        new_classes = sorted(list(class_mapping.keys()))
-        
-        # Add any unmapped classes to the new class list to ensure data isn't lost
-        mapped_sources = set()
-        for sources in class_mapping.values():
-            mapped_sources.update(sources)
-        
-        for old_cls in self.classes:
-            if old_cls not in mapped_sources and old_cls not in new_classes:
-                new_classes.append(old_cls)
-        
-        new_classes = sorted(list(set(new_classes)))
-        new_class_to_idx = {cls_name: i for i, cls_name in enumerate(new_classes)}
-        
-        # 2. Re-map every sample
-        new_samples = []
-        for path, old_idx in self.samples:
-            old_name = self.classes[old_idx]
-            
-            # Find target class
-            new_name = old_name # Default
-            for target, sources in class_mapping.items():
-                if old_name in sources:
-                    new_name = target
-                    break
-            
-            new_samples.append((path, new_class_to_idx[new_name]))
-            
-        # 3. Update state
+        new_classes, new_class_to_idx, new_samples, metadata = project_samples_to_training_taxonomy(
+            list(self.classes),
+            list(self.samples),
+            class_mapping,
+        )
         self.classes = new_classes
         self.class_to_idx = new_class_to_idx
         self.samples = new_samples
+        self.taxonomy_metadata = metadata
 
     def __len__(self) -> int:
         return len(self.samples) * self.augment_repeats
@@ -1066,12 +1266,13 @@ class BalancedClassEpochSampler(Sampler[int]):
         self.start_index = 0
         if not self.classes:
             raise ValueError("Balanced sampling requires at least one class.")
-        if self.batch_size % len(self.classes) != 0:
+        if self.batch_size < len(self.classes):
             raise ValueError(
-                "Balanced sampling requires --batch-size to be divisible by the number of classes "
-                "so each batch can contain the same number of samples per class."
+                "Balanced sampling requires --batch-size to be at least the number of classes "
+                "so every batch can include every class."
             )
         self.samples_per_class = self.batch_size // len(self.classes)
+        self.remainder_samples = self.batch_size % len(self.classes)
         class_counts = [len(self.class_source_indices.get(class_index, [])) for class_index in range(len(self.classes))]
         missing_classes = [self.classes[class_index] for class_index, count in enumerate(class_counts) if count <= 0]
         if missing_classes:
@@ -1106,7 +1307,7 @@ class BalancedClassEpochSampler(Sampler[int]):
             if not source_indices:
                 continue
             rng.shuffle(source_indices)
-            target_len = self.num_batches * self.samples_per_class
+            target_len = self.num_batches * (self.samples_per_class + (1 if self.remainder_samples > 0 else 0))
             stream: list[int] = []
             while len(stream) < target_len:
                 stream.extend(source_indices)
@@ -1114,16 +1315,21 @@ class BalancedClassEpochSampler(Sampler[int]):
             per_class_streams[class_index] = stream[:target_len]
 
         flat_indices: list[int] = []
+        stream_offsets = {class_index: 0 for class_index in per_class_streams}
         for batch_index in range(self.num_batches):
+            batch_class_order = class_order[batch_index % len(class_order) :] + class_order[: batch_index % len(class_order)]
+            extra_classes = set(batch_class_order[: self.remainder_samples])
             for class_index in class_order:
                 stream = per_class_streams.get(class_index)
                 if stream is None:
                     continue
-                start = batch_index * self.samples_per_class
-                end = start + self.samples_per_class
+                batch_quota = self.samples_per_class + (1 if class_index in extra_classes else 0)
+                start = stream_offsets[class_index]
+                end = start + batch_quota
                 for offset, source_index in enumerate(stream[start:end]):
                     variant_index = rng.randrange(self.augment_repeats)
                     flat_indices.append(source_index + (variant_index * self.source_count))
+                stream_offsets[class_index] = end
         return iter(flat_indices[self.start_index :])
 
     def __len__(self) -> int:
@@ -1200,8 +1406,7 @@ def build_datasets(
     DeterministicSupConDataset,
     DeterministicSupConDataset,
 ]:
-    import json as json_lib
-    class_mapping = json_lib.loads(args.class_mapping) if args.class_mapping else None
+    class_mapping = parse_json_class_mapping(getattr(args, "class_mapping", ""))
     
     root = Path(args.dataset_root)
     if has_explicit_split_layout(root):
@@ -1302,35 +1507,15 @@ def build_auto_split_datasets(
 ) -> tuple[DeterministicAugmentedImageFolder, DeterministicAugmentedImageFolder, DeterministicAugmentedImageFolder]:
     ratios = parse_auto_split_ratios(args.auto_split_ratios)
     base_dataset = datasets.ImageFolder(root)
-    
-    # No default class mapping needed - hard_plastic and soft_plastic are distinct classes
-    effective_mapping = class_mapping if class_mapping else {}
-    
-    new_classes = set(base_dataset.classes)
-    for target, sources in effective_mapping.items():
-        for s in sources:
-            if s in new_classes:
-                new_classes.remove(s)
-        new_classes.add(target)
-            
-    new_classes = sorted(list(new_classes))
-    new_class_to_idx = {cls: i for i, cls in enumerate(new_classes)}
-    
-    # Create a reverse lookup for fast class re-mapping
-    reverse_map = {}
-    for target, sources in effective_mapping.items():
-        for s in sources:
-            reverse_map[s] = target
-
-    for i in range(len(base_dataset.samples)):
-        path, old_target = base_dataset.samples[i]
-        old_class = base_dataset.classes[old_target]
-        new_class = reverse_map.get(old_class, old_class)
-        base_dataset.samples[i] = (path, new_class_to_idx[new_class])
-        
+    new_classes, new_class_to_idx, new_samples, taxonomy_metadata = project_samples_to_training_taxonomy(
+        list(base_dataset.classes),
+        list(base_dataset.samples),
+        class_mapping,
+    )
     base_dataset.classes = new_classes
     base_dataset.class_to_idx = new_class_to_idx
-    base_dataset.targets = [s[1] for s in base_dataset.samples]
+    base_dataset.samples = new_samples
+    base_dataset.targets = [sample[1] for sample in base_dataset.samples]
 
     # ── Source-level stratified split ────────────────────────────────────────
     # Within each class, group images by their semantic source prefix (derived
@@ -1385,13 +1570,17 @@ def build_auto_split_datasets(
         "seed": int(args.seed),
         "split_ratios": {"train": ratios[0], "val": ratios[1], "test": ratios[2]},
         "class_names": list(base_dataset.classes),
+        "taxonomy": taxonomy_metadata,
         "split_counts": split_counts,
         "source_samples": len(base_dataset.samples),
         "train_samples": len(train_samples),
         "val_samples": len(val_samples),
         "test_samples": len(test_samples),
     }
-    save_json(root / "auto_split_manifest.json", manifest)
+    manifest_output_dir = Path(getattr(args, "output_dir", "")) if getattr(args, "output_dir", "") else None
+    if manifest_output_dir is not None:
+        manifest_output_dir.mkdir(parents=True, exist_ok=True)
+        save_json(manifest_output_dir / "auto_split_manifest.json", manifest)
 
     train_dataset = DeterministicAugmentedImageFolder(
         None,
@@ -3996,7 +4185,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--dataset-root", default="Dataset_Final")
     parser.add_argument("--image-size", type=int, default=224)
-    parser.add_argument("--batch-size", type=int, default=224)
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--prefetch-factor", type=int, default=1)
     parser.add_argument("--embedding-dim", type=int, default=128)
@@ -4032,11 +4221,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--precision", choices=("mixed", "32", "64"), default="mixed")
     parser.add_argument("--adam-beta1", type=float, default=0.9)
     parser.add_argument("--adam-beta2", type=float, default=0.999)
-    # label_smoothing=0.1 is mandatory for the imbalanced 8-class setup.
-    # organic=168K (55%), metal=55K (18%), ewaste=2K (0.7%). Hard labels (0.0) make
-    # the model fanatically confident on dominant classes, hurting calibration
-    # and recall on rare classes (ewaste, soft_plastic, glass). 0.1 distributes
-    # 1.25% probability mass across all 8 classes, preventing overconfident outputs.
+    # label_smoothing=0.1 is mandatory for the imbalanced 6-class logical setup.
+    # ewaste is excluded, and hard_plastic/soft_plastic are trained as one plastic head.
     parser.add_argument("--label-smoothing", type=float, default=0.1)
     parser.add_argument("--confidence-gap-penalty-weight", type=float, default=0.0)
     parser.add_argument("--class-loss-weight", action="append", default=[])
@@ -4102,7 +4288,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default="Results/metric_learning_experiment")
     parser.add_argument("--log-file", default="logs/metric_learning_experiment.log.jsonl")
     parser.add_argument("--resume-checkpoint", default="")
-    parser.add_argument("--class-mapping", type=str, default="", help="JSON string for training-time class merging")
+    parser.add_argument(
+        "--class-mapping",
+        type=str,
+        default="",
+        help=(
+            "Optional extra JSON training-time class merging. The repo always enforces "
+            "ewaste exclusion and hard_plastic+soft_plastic -> plastic before this is applied."
+        ),
+    )
     parser.add_argument("--auto-split-ratios", default="0.7,0.2,0.1")
     parser.add_argument("--resume-mode", choices=("latest", "global_best", "phase_best"), default="latest")
     parser.add_argument("--resume-phase-index", type=int, default=0)
@@ -4399,6 +4593,9 @@ def run_experiment(args: argparse.Namespace) -> int:
 
     train_dataset, val_dataset, test_dataset, supcon_train_dataset, supcon_val_dataset = build_datasets(args)
     args.class_names_resolved = train_dataset.classes
+    args.training_class_order = list(TRAINING_CLASS_ORDER)
+    args.training_class_mapping = enforced_training_class_mapping(parse_json_class_mapping(getattr(args, "class_mapping", "")))
+    args.training_excluded_classes = sorted(TRAINING_EXCLUDED_CLASSES)
     args.class_loss_weight_map_resolved = parse_class_loss_weight_specs(list(args.class_loss_weight), train_dataset.class_to_idx)
     args.targeted_confusion_penalties_resolved = parse_targeted_confusion_penalty_specs(
         list(args.targeted_confusion_penalty),
@@ -4461,6 +4658,14 @@ def run_experiment(args: argparse.Namespace) -> int:
             "val_steps_per_eval": len(val_loader),
             "test_steps_per_eval": len(test_loader),
             "sampling_strategy": args.sampling_strategy,
+            "class_names": train_dataset.classes,
+            "class_to_idx": train_dataset.class_to_idx,
+            "training_class_order": list(TRAINING_CLASS_ORDER),
+            "training_class_mapping": args.training_class_mapping,
+            "training_excluded_classes": args.training_excluded_classes,
+            "train_taxonomy": getattr(train_dataset, "taxonomy_metadata", {}),
+            "val_taxonomy": getattr(val_dataset, "taxonomy_metadata", {}),
+            "test_taxonomy": getattr(test_dataset, "taxonomy_metadata", {}),
             "train_loss_validation_patience": args.train_loss_validation_patience,
             "validation_patience": args.validation_patience,
             "supcon_early_stopping_patience": args.supcon_early_stopping_patience,
@@ -4484,7 +4689,27 @@ def run_experiment(args: argparse.Namespace) -> int:
         backbone_name=args.backbone,
     ).to(device=device, dtype=model_dtype)
     if resume_checkpoint is not None:
-        model.load_state_dict(checkpoint_state_for_mode(resume_checkpoint, args.resume_mode))
+        resume_state_dict = checkpoint_state_for_mode(resume_checkpoint, args.resume_mode)
+        source_class_names = list(resume_checkpoint.get("class_names", []))
+        target_class_names = list(train_dataset.classes)
+        if source_class_names and source_class_names != target_class_names:
+            resume_state_dict, adaptation_report = adapt_checkpoint_state_dict_to_training_taxonomy(
+                resume_state_dict,
+                source_class_names,
+                target_class_names,
+                class_mapping=args.training_class_mapping,
+            )
+            log_json_event(
+                log_path,
+                {
+                    "event": "checkpoint_taxonomy_adapted",
+                    "resume_mode": args.resume_mode,
+                    "source_class_names": source_class_names,
+                    "target_class_names": target_class_names,
+                    "adaptation": adaptation_report,
+                },
+            )
+        model.load_state_dict(resume_state_dict)
     backbone_modules = backbone_leaf_modules(model)
     train_progress = (
         dict(resume_checkpoint.get("train_progress", {}))

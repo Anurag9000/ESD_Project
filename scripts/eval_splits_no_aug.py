@@ -16,7 +16,7 @@ Usage (from repo root, venv activated):
     python scripts/eval_splits_no_aug.py \\
         --checkpoint Results/convnextv2_nano_master_run/loss_cleanup/best.pt \\
         --dataset-root Dataset_Final \\
-        --batch-size 224
+        --batch-size 240
 """
 from __future__ import annotations
 
@@ -47,10 +47,13 @@ warnings.filterwarnings(
 try:
     from metric_learning_pipeline import (
         MetricLearningEfficientNetB0,
+        adapt_checkpoint_state_dict_to_training_taxonomy,
         evaluation_tensor_from_image,
         model_dtype_for_args,
         allocate_split_counts,
         compute_classification_metrics,
+        parse_json_class_mapping,
+        project_samples_to_training_taxonomy,
         save_confidence_histogram,
         save_json,
         save_reliability_diagram,
@@ -60,10 +63,13 @@ except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).parent))
     from metric_learning_pipeline import (
         MetricLearningEfficientNetB0,
+        adapt_checkpoint_state_dict_to_training_taxonomy,
         evaluation_tensor_from_image,
         model_dtype_for_args,
         allocate_split_counts,
         compute_classification_metrics,
+        parse_json_class_mapping,
+        project_samples_to_training_taxonomy,
         save_confidence_histogram,
         save_json,
         save_reliability_diagram,
@@ -119,32 +125,14 @@ def build_splits(
     Mirrors build_auto_split_datasets() exactly without writing the manifest.
     """
     base_dataset = datasets.ImageFolder(str(dataset_root))
-
-    effective_mapping = class_mapping if class_mapping else {}
-
-    new_classes = set(base_dataset.classes)
-    for target, sources in effective_mapping.items():
-        for source_name in sources:
-            if source_name in new_classes:
-                new_classes.remove(source_name)
-        new_classes.add(target)
-
-    new_classes = sorted(list(new_classes))
-    new_class_to_idx = {cls: i for i, cls in enumerate(new_classes)}
-
-    reverse_map: dict[str, str] = {}
-    for target, sources in effective_mapping.items():
-        for source_name in sources:
-            reverse_map[source_name] = target
-
-    for i in range(len(base_dataset.samples)):
-        path, old_target = base_dataset.samples[i]
-        old_class = base_dataset.classes[old_target]
-        new_class = reverse_map.get(old_class, old_class)
-        base_dataset.samples[i] = (path, new_class_to_idx[new_class])
-
+    new_classes, new_class_to_idx, new_samples, _ = project_samples_to_training_taxonomy(
+        list(base_dataset.classes),
+        list(base_dataset.samples),
+        class_mapping,
+    )
     base_dataset.classes = new_classes
     base_dataset.class_to_idx = new_class_to_idx
+    base_dataset.samples = new_samples
     base_dataset.targets = [sample[1] for sample in base_dataset.samples]
 
     def source_prefix(path: str) -> str:
@@ -389,10 +377,14 @@ def parse_args() -> argparse.Namespace:
                    help="Path to model checkpoint (best.pt).")
     p.add_argument("--dataset-root", default="Dataset_Final")
     p.add_argument("--output-dir",   default="Results/eval_cleaned_splits")
-    p.add_argument("--batch-size",   type=int, default=224)
+    p.add_argument("--batch-size",   type=int, default=240)
     p.add_argument("--splits",       nargs="+", default=["train", "val", "test"])
     p.add_argument("--seed",         type=int, default=42)
-    p.add_argument("--class-mapping", default="", help="Optional JSON class mapping to mirror checkpoint training.")
+    p.add_argument(
+        "--class-mapping",
+        default="",
+        help="Optional extra JSON mapping. The repo always excludes ewaste and merges hard/soft plastic -> plastic.",
+    )
     return p.parse_args()
 
 
@@ -416,8 +408,7 @@ def main() -> int:
     # ── Load model ────────────────────────────────────────────────────────────
     ckpt          = torch.load(args.checkpoint, map_location="cpu")
     ckpt_args     = ckpt.get("args", {})
-    class_names   = list(ckpt["class_names"])
-    num_classes   = len(class_names)
+    source_class_names = list(ckpt["class_names"])
     image_size    = int(ckpt_args.get("image_size",    224))
     embedding_dim = int(ckpt_args.get("embedding_dim", 128))
     projection_dim= int(ckpt_args.get("projection_dim",128))
@@ -430,7 +421,23 @@ def main() -> int:
     use_autocast = device.type == "cuda"
 
     print(f"  Device       : {device}")
-    print(f"  Classes ({num_classes:>3}) : {class_names}\n")
+
+    # ── Build splits (mirrors pipeline logic exactly) ─────────────────────────
+    print(f"  Building splits from disk (seed={args.seed}) …")
+    checkpoint_class_mapping = parse_json_class_mapping(ckpt_args.get("class_mapping", ""))
+    cli_class_mapping = parse_json_class_mapping(args.class_mapping)
+    class_mapping = cli_class_mapping if cli_class_mapping is not None else checkpoint_class_mapping
+    train_s, val_s, test_s, disk_classes = build_splits(
+        dataset_root,
+        seed=args.seed,
+        class_mapping=class_mapping,
+    )
+    print(f"    train={len(train_s):,}  val={len(val_s):,}  test={len(test_s):,}")
+    runtime_class_names = list(disk_classes)
+    num_classes = len(runtime_class_names)
+    print(f"  Classes ({num_classes:>3}) : {runtime_class_names}\n")
+    if not runtime_class_names:
+        raise ValueError("The current split builder produced no logical classes.")
 
     model = MetricLearningEfficientNetB0(
         num_classes=num_classes,
@@ -440,27 +447,17 @@ def main() -> int:
         args=model_args,
         backbone_name=str(ckpt_args.get("backbone", "convnextv2_nano")),
     ).to(device=device, dtype=model_dtype)
-    model.load_state_dict(ckpt["model_state_dict"])
-    model.eval()
-
-    # ── Build splits (mirrors pipeline logic exactly) ─────────────────────────
-    print(f"  Building splits from disk (seed={args.seed}) …")
-    import json as json_lib
-    checkpoint_class_mapping = json_lib.loads(ckpt_args.get("class_mapping", "")) if ckpt_args.get("class_mapping") else None
-    cli_class_mapping = json_lib.loads(args.class_mapping) if args.class_mapping else None
-    class_mapping = cli_class_mapping if cli_class_mapping is not None else checkpoint_class_mapping
-    train_s, val_s, test_s, disk_classes = build_splits(
-        dataset_root,
-        seed=args.seed,
-        class_mapping=class_mapping,
-    )
-    print(f"    train={len(train_s):,}  val={len(val_s):,}  test={len(test_s):,}")
-    if disk_classes != class_names:
-        raise ValueError(
-            "Checkpoint class names do not match the dataset split classes.\n"
-            f"checkpoint={class_names}\n"
-            f"dataset={disk_classes}"
+    model_state_dict = ckpt["model_state_dict"]
+    if source_class_names != runtime_class_names:
+        model_state_dict, adaptation_report = adapt_checkpoint_state_dict_to_training_taxonomy(
+            model_state_dict,
+            source_class_names,
+            runtime_class_names,
+            class_mapping=ckpt_args.get("training_class_mapping"),
         )
+        print(f"  Checkpoint adaptation: {adaptation_report}")
+    model.load_state_dict(model_state_dict)
+    model.eval()
 
     split_map = {"train": train_s, "val": val_s, "test": test_s}
 
@@ -476,7 +473,7 @@ def main() -> int:
             samples=samples,
             model=model,
             device=device,
-            class_names=class_names,
+            class_names=runtime_class_names,
             image_size=image_size,
             batch_size=args.batch_size,
             use_autocast=use_autocast,

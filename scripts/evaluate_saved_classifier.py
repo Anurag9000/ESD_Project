@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 
 from metric_learning_pipeline import (
     MetricLearningEfficientNetB0,
+    adapt_checkpoint_state_dict_to_training_taxonomy,
     build_datasets,
     class_counts,
     collect_logits_and_labels,
@@ -35,7 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--dataset-root", default="")
-    parser.add_argument("--batch-size", type=int, default=224)
+    parser.add_argument("--batch-size", type=int, default=240)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--max-eval-batches", type=int, default=0)
     parser.add_argument("--confidence-threshold", type=float, default=None)
@@ -134,13 +135,8 @@ def main() -> int:
         "test": test_dataset,
     }
 
-    class_names = list(checkpoint["class_names"])
-    if train_dataset.classes != class_names:
-        raise ValueError(
-            "Checkpoint class names do not match the current dataset classes.\n"
-            f"checkpoint={class_names}\n"
-            f"dataset={train_dataset.classes}"
-        )
+    source_class_names = list(checkpoint["class_names"])
+    class_names = list(train_dataset.classes)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = MetricLearningEfficientNetB0(
@@ -151,7 +147,17 @@ def main() -> int:
         args=eval_args,
         backbone_name=str(getattr(eval_args, "backbone", "convnextv2_nano")),
     ).to(device=device, dtype=model_dtype_for_args(eval_args))
-    model.load_state_dict(checkpoint["model_state_dict"])
+    model_state_dict = checkpoint["model_state_dict"]
+    if source_class_names != class_names:
+        model_state_dict, adaptation_report = adapt_checkpoint_state_dict_to_training_taxonomy(
+            model_state_dict,
+            source_class_names,
+            class_names,
+            class_mapping=checkpoint_args.get("training_class_mapping"),
+        )
+    else:
+        adaptation_report = {"applied": False, "reason": "already_aligned"}
+    model.load_state_dict(model_state_dict)
     model.eval()
 
     manifest: dict[str, Any] = {
@@ -160,7 +166,9 @@ def main() -> int:
         "selected_classes": list(args.selected_class),
         "other_label": args.other_label,
         "splits": list(args.splits),
-        "source_class_names": class_names,
+        "source_class_names": source_class_names,
+        "runtime_class_names": class_names,
+        "checkpoint_taxonomy_adaptation": adaptation_report,
         "evaluation_stage": args.evaluation_stage,
         "phase_name": args.phase_name,
     }

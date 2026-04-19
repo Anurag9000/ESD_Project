@@ -15,23 +15,17 @@ from typing import Any
 
 TARGET_CLASS_MAP = {
     "cardboard": "paper",
-    "e-waste": "ewaste",
     "glass": "glass",
     "metal": "metal",
     "paper": "paper",
 }
 
 PLASTIC_SUBCLASS_MAP = {
-    "plastic bags": "soft_plastic",
-    "cigarette butt": "soft_plastic",
-    "plastic bottles": "hard_plastic",
-    "plastic containers": "hard_plastic",
-    "plastic cups": "hard_plastic",
-}
-
-FLAT_PLASTIC_DISTRIBUTION = {
-    "hard_plastic": 1325,
-    "soft_plastic": 808,
+    "plastic bags": "plastic",
+    "cigarette butt": "plastic",
+    "plastic bottles": "plastic",
+    "plastic containers": "plastic",
+    "plastic cups": "plastic",
 }
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
@@ -44,8 +38,7 @@ class IntegrationStats:
     skipped_conflict: int = 0
     skipped_medical: int = 0
     skipped_unsupported: int = 0
-    flat_plastic_hard: int = 0
-    flat_plastic_soft: int = 0
+    plastic: int = 0
 
 
 def parse_args() -> argparse.Namespace:
@@ -262,26 +255,16 @@ def main() -> int:
             args.dry_run,
         )
         if record is not None:
-            if target_label == "hard_plastic":
-                stats.flat_plastic_hard += 1
-            else:
-                stats.flat_plastic_soft += 1
+            stats.plastic += 1
             new_records.append(record)
 
     if flat_plastic_files:
-        hard_weight = FLAT_PLASTIC_DISTRIBUTION["hard_plastic"]
-        soft_weight = FLAT_PLASTIC_DISTRIBUTION["soft_plastic"]
-        total_weight = hard_weight + soft_weight
         for image_path in flat_plastic_files:
             digest = hash_file(image_path)
             if digest in seen_hashes:
-                if seen_hashes[digest] == "hard_plastic":
-                    stats.skipped_duplicate += 1
-                else:
-                    stats.skipped_duplicate += 1
+                stats.skipped_duplicate += 1
                 continue
-            bucket = int(digest[:16], 16) % total_weight
-            target_label = "soft_plastic" if bucket < soft_weight else "hard_plastic"
+            target_label = "plastic"
             record = copy_image(
                 image_path,
                 dataset_root,
@@ -296,10 +279,7 @@ def main() -> int:
                 args.dry_run,
             )
             if record is not None:
-                if target_label == "hard_plastic":
-                    stats.flat_plastic_hard += 1
-                else:
-                    stats.flat_plastic_soft += 1
+                stats.plastic += 1
                 new_records.append(record)
 
     if not args.dry_run and new_records:
@@ -319,8 +299,7 @@ def main() -> int:
         "skipped_conflict": stats.skipped_conflict,
         "skipped_medical": stats.skipped_medical,
         "skipped_unsupported": stats.skipped_unsupported,
-        "flat_plastic_hard": stats.flat_plastic_hard,
-        "flat_plastic_soft": stats.flat_plastic_soft,
+        "plastic": stats.plastic,
         "label_counts": dict(sorted(label_counts.items())),
         "dry_run": args.dry_run,
         "keep_source": args.keep_source,

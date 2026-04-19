@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import sys
 import math
+import csv
 from pathlib import Path
 
 import matplotlib
@@ -41,6 +42,7 @@ from metric_learning_pipeline import (
     IMAGENET_STD,
     DEFAULT_BACKBONE_NAME,
     MetricLearningEfficientNetB0,
+    adapt_checkpoint_state_dict_to_training_taxonomy,
     build_datasets,
     model_dtype_for_args,
 )
@@ -237,6 +239,23 @@ def generate_umap_thumbnail_map(
     canvas.save(output_path)
     print(f"  [UMAP] Saved → {output_path}")
 
+    np.savez_compressed(
+        output_dir / "umap_embeddings_test_set.npz",
+        coords=coords.astype(np.float32, copy=False),
+        predicted_class_indices=pred_np.astype(np.int64, copy=False),
+        class_names=np.asarray(class_names, dtype=object),
+        epoch_label=np.asarray([epoch_label], dtype=object),
+        thumbnail_size=np.asarray([thumb_size], dtype=np.int64),
+        sample_count=np.asarray([len(coords)], dtype=np.int64),
+    )
+    with (output_dir / "umap_embeddings_test_set.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["sample_index", "umap_x", "umap_y", "predicted_class_index", "predicted_class_name"])
+        for index, (coord, pred_index) in enumerate(zip(coords, pred_np)):
+            writer.writerow([index, f"{coord[0]:.8f}", f"{coord[1]:.8f}", int(pred_index), class_names[int(pred_index)]])
+    print(f"  [UMAP] Saved → {output_dir / 'umap_embeddings_test_set.npz'}")
+    print(f"  [UMAP] Saved → {output_dir / 'umap_embeddings_test_set.csv'}")
+
 # Main entry-point
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -280,7 +299,17 @@ def run(
         args=ckpt_args,
         backbone_name=backbone_name,
     ).to(device=device, dtype=dtype)
-    model.load_state_dict(ckpt["model_state_dict"])
+    model_state_dict = ckpt["model_state_dict"]
+    if list(ckpt["class_names"]) != class_names:
+        model_state_dict, adaptation_report = adapt_checkpoint_state_dict_to_training_taxonomy(
+            model_state_dict,
+            list(ckpt["class_names"]),
+            class_names,
+            class_mapping=getattr(ckpt_args, "training_class_mapping", None),
+        )
+    else:
+        adaptation_report = {"applied": False, "reason": "already_aligned"}
+    model.load_state_dict(model_state_dict)
     model.eval()
 
     # ── 1. UMAP thumbnail map ────────────────────────────────────────────────

@@ -10,7 +10,7 @@ Live logs now print pure accuracy plus `per_class_accuracy` and `per_class_avg_c
 | --- | --- | --- |
 | `--dataset-root` | `Dataset_Final` | Root of the physical dataset tree. |
 | `--image-size` | `224` | Training crop / resize size. |
-| `--batch-size` | `224` | Physical batch size per optimizer step. |
+| `--batch-size` | `240` | Physical batch size per optimizer step. |
 | `--num-workers` | `2` | `DataLoader` worker count. |
 | `--prefetch-factor` | `1` | Prefetch depth per worker. |
 | `--embedding-dim` | `128` | Width of the learned embedding layer. |
@@ -83,8 +83,8 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 
 | Setting | Default used by wrapper | What it does |
 | --- | --- | --- |
-| `output_dir` | `Results/convnextv2_nano_progressive_all_classes` | Output root for the progressive pretraining run. |
-| `log_file` | `logs/convnextv2_nano_progressive_all_classes.log.jsonl` | Log file for the progressive pretraining run. |
+| `output_dir` | `Results/convnextv2_nano_progressive_six_classes` | Output root for the progressive pretraining run. |
+| `log_file` | `logs/convnextv2_nano_progressive_six_classes.log.jsonl` | Log file for the progressive pretraining run. |
 
 ## Recursive Refinement: `scripts/run_recursive_refinement.py`
 
@@ -99,7 +99,7 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--threshold` | required | Stop threshold for recursive refinement. |
 | `--initial-head-lr` | required | Initial head learning rate for refinement. |
 | `--initial-backbone-lr` | required | Initial backbone learning rate for refinement. |
-| `--batch-size` | `224` | Batch size forwarded to the trainer. |
+| `--batch-size` | `240` | Batch size forwarded to the trainer. |
 | `--num-workers` | `2` | DataLoader worker count forwarded to the trainer. |
 | `--prefetch-factor` | `1` | Prefetch depth per worker forwarded to the trainer. |
 | `--patience` | `1` | Early-stopping patience forwarded to the trainer. |
@@ -118,7 +118,7 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--checkpoint` | required | Checkpoint to evaluate. |
 | `--output-dir` | required | Output directory for metrics and plots. |
 | `--dataset-root` | `""` | Dataset root; falls back to checkpoint/runtime context when empty. |
-| `--batch-size` | `224` | Evaluation batch size. |
+| `--batch-size` | `240` | Evaluation batch size. |
 | `--num-workers` | `2` | Evaluation loader worker count. |
 | `--max-eval-batches` | `0` | Debug cap on evaluation batches. |
 | `--confidence-threshold` | `None` | Optional confidence threshold override; otherwise inherit runtime/checkpoint defaults. |
@@ -138,7 +138,7 @@ The saved-classifier evaluator now writes `metrics.json`, `summary.json`, `corre
 | `--checkpoint` | required | Checkpoint to evaluate. |
 | `--dataset-root` | required | External holdout dataset root. |
 | `--output-dir` | required | Output directory for holdout reports. |
-| `--batch-size` | `224` | Evaluation batch size. |
+| `--batch-size` | `240` | Evaluation batch size. |
 | `--num-workers` | `2` | Evaluation loader worker count. |
 | `--max-eval-batches` | `0` | Debug cap on evaluation batches. |
 | `--confidence-threshold` | `None` | Optional confidence threshold override. |
@@ -153,7 +153,7 @@ The saved-classifier evaluator now writes `metrics.json`, `summary.json`, `corre
 | `--checkpoint` | required | Checkpoint to evaluate. |
 | `--dataset-root` | `Dataset_Final` | Dataset root. |
 | `--output-dir` | `Results/eval_cleaned_splits` | Output directory for split metrics and plots. |
-| `--batch-size` | `224` | Evaluation batch size. |
+| `--batch-size` | `240` | Evaluation batch size. |
 | `--splits` | `["train", "val", "test"]` | Splits to evaluate. |
 | `--seed` | `42` | Deterministic split seed. |
 | `--class-mapping` | `""` | Optional JSON class merge map. |
@@ -227,8 +227,8 @@ These are not `argparse` flags, but they control the shell wrappers and the acti
 | Knob | Default | What it does |
 | --- | --- | --- |
 | `RUN_STAMP` | auto-generated current timestamp | Run identity used by the wrappers. Reuse the same value to resume the same run tree. |
-| `RUN_ROOT` | `Results/convnextv2_nano_all_classes_<RUN_STAMP>` in `run_training.sh`, `Results/convnextv2_nano_master_run` in `run_full_training_pipeline.sh` | Output root for checkpoints and artifacts. |
-| `LOG_ROOT` | `logs/convnextv2_nano_all_classes_<RUN_STAMP>` in `run_training.sh`, `logs/convnextv2_nano_master_run` in `run_full_training_pipeline.sh` | Log root for JSONL/CSV artifacts. |
+| `RUN_ROOT` | `Results/convnextv2_nano_six_classes_<RUN_STAMP>` in `run_training.sh`, `Results/convnextv2_nano_master_run` in `run_full_training_pipeline.sh` | Output root for checkpoints and artifacts. |
+| `LOG_ROOT` | `logs/convnextv2_nano_six_classes_<RUN_STAMP>` in `run_training.sh`, `logs/convnextv2_nano_master_run` in `run_full_training_pipeline.sh` | Log root for JSONL/CSV artifacts. |
 | `DATASET_ROOT` | `Dataset_Final` | Corpus root used by both wrappers. |
 | `INITIAL_CHECKPOINT` | defaults to `$RUN_ROOT/progressive/best.pt` in `run_full_training_pipeline.sh` | Seed checkpoint for the recursive refinement stages. |
 | `RECURSIVE_ACCEPTANCE_MIN_DELTA` | `0.0` | Minimum improvement required to accept a recursive candidate in `run_full_training_pipeline.sh`. |
@@ -241,4 +241,4 @@ These are not `argparse` flags, but they control the shell wrappers and the acti
 - `run_training.sh` auto-resumes from `step_last.pt` first, then `last.pt`.
 - `run_full_training_pipeline.sh` ignores user-supplied `--dataset-root`, `--batch-size`, `--output-dir`, `--log-file`, `--resume-checkpoint`, `--resume-mode`, `--resume-phase-index`, `--classifier-train-mode`, `--classifier-early-stopping-metric`, `--head-lr`, `--backbone-lr`, `--stage-early-stopping-patience`, and `--optimizer`.
 - `scripts/run_recursive_refinement.py` validates pass-through trainer flags against the main trainer parser and raises on unsupported options instead of silently ignoring them.
-- `run_full_training_pipeline.sh` hardcodes the recursive refinement recipe to `batch-size 224`, `patience 1`, `resume-phase-index 1`, `optimizer adamw`, `sampling-strategy balanced`, `skip-supcon`, `classifier-train-mode full_model`, and `frozen-core-backbone-modules 40` for both recursive passes. This means recursive refinement starts directly in `ce_full_model`: classifier head plus the backbone tail after the frozen 40-module stem/core train from the first step. Recursive candidate scoring evaluates only the validation split; the test split is reserved for the final test bundle.
+- `run_full_training_pipeline.sh` hardcodes the recursive refinement recipe to `batch-size 240`, `patience 1`, `resume-phase-index 1`, `optimizer adamw`, `sampling-strategy balanced`, `skip-supcon`, `classifier-train-mode full_model`, and `frozen-core-backbone-modules 40` for both recursive passes. This means recursive refinement starts directly in `ce_full_model`: classifier head plus the backbone tail after the frozen 40-module stem/core train from the first step. Recursive candidate scoring evaluates only the validation split; the test split is reserved for the final test bundle.

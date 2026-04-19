@@ -11,7 +11,12 @@ from pathlib import Path
 
 # Add project root to path so we can import the pipeline
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from scripts.metric_learning_pipeline import MetricLearningEfficientNetB0, model_dtype_for_args
+from scripts.metric_learning_pipeline import (
+    MetricLearningEfficientNetB0,
+    TRAINING_CLASS_ORDER,
+    adapt_checkpoint_state_dict_to_training_taxonomy,
+    model_dtype_for_args,
+)
 
 class InferenceESDModel(torch.nn.Module):
     """
@@ -36,7 +41,8 @@ def main():
         
     print(f"Loading {ckpt_path} ...")
     ckpt = torch.load(ckpt_path, map_location="cpu")
-    class_names = ckpt["class_names"]
+    source_class_names = ckpt["class_names"]
+    class_names = list(TRAINING_CLASS_ORDER)
     
     ckpt_args = ckpt.get("args", {})
     num_classes = len(class_names)
@@ -44,7 +50,10 @@ def main():
     projection_dim = int(ckpt_args.get("projection_dim", 128))
     image_size = int(ckpt_args.get("image_size", 224))
     
-    model_args = argparse.Namespace(precision=ckpt_args.get("precision", "mixed"))
+    model_args = argparse.Namespace(
+        precision=ckpt_args.get("precision", "mixed"),
+        backbone=ckpt_args.get("backbone", "convnextv2_nano"),
+    )
     
     print("Instantiating original custom architecture...")
     model = MetricLearningEfficientNetB0(
@@ -52,11 +61,21 @@ def main():
         weights_mode="none", 
         embedding_dim=embedding_dim,
         projection_dim=projection_dim,
-        args=model_args
+        args=model_args,
+        backbone_name=str(ckpt_args.get("backbone", "convnextv2_nano")),
     )
     
     # Load weights
-    model.load_state_dict(ckpt["model_state_dict"])
+    model_state_dict = ckpt["model_state_dict"]
+    if source_class_names != class_names:
+        model_state_dict, adaptation_report = adapt_checkpoint_state_dict_to_training_taxonomy(
+            model_state_dict,
+            list(source_class_names),
+            class_names,
+            class_mapping=ckpt_args.get("training_class_mapping"),
+        )
+        print("Checkpoint adaptation:", adaptation_report)
+    model.load_state_dict(model_state_dict)
     model.eval()
     
     print("Wrapping model for inference-only trace...")

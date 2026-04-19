@@ -8,24 +8,22 @@ This document defines the current architectural specifications and training meth
 - **Parameters:** Backbone-dependent
 - **Precision:** FP16 Mixed Precision via `torch.amp`
 - **Optimization:** AdamW with per-stage learning rate groups
-- **Output Classes:** **8**
+- **Output Classes:** **6**
 
 ---
 
-## 2. Class Taxonomy (8 Classes — Ground Reality)
+## 2. Class Taxonomy (6 Logical Training Classes)
 
 | Index | Class Name    | Image Count | Description                              |
 | :---- | :------------ | :---------- | :--------------------------------------- |
 | 0     | `clothes`     | 40,295      | Textiles, apparel, woven fabrics         |
-| 1     | `ewaste`      | 4,440       | Electronic components, PCBs, hardware    |
-| 2     | `glass`       | 12,055      | Silica-based containers (clear/pigmented)|
-| 3     | `hard_plastic`| 16,677      | Rigid polymers, containers, bottles      |
-| 4     | `metal`       | 57,795      | Ferrous/non-ferrous metals, aluminum     |
-| 5     | `organic`     | 152,745     | Biodegradable: food, vegetation          |
-| 6     | `paper`       | 14,270      | Cellulose flat material, cardboard       |
-| 7     | `soft_plastic`| 5,981       | Flexible films, bags, thin sheets        |
+| 1     | `glass`       | 12,055      | Silica-based containers (clear/pigmented)|
+| 2     | `metal`       | 57,795      | Ferrous/non-ferrous metals, aluminum     |
+| 3     | `organic`     | 152,745     | Biodegradable: food, vegetation          |
+| 4     | `paper`       | 14,270      | Cellulose flat material, cardboard       |
+| 5     | `plastic`     | 22,658      | Combined `hard_plastic` + `soft_plastic` |
 
-> **Eliminated:** `battery` (only 29 images survived the 224px floor) and `shoes` (100% sub-224px thumbnails, zero training value).
+> **Physical folders are not rewritten.** The loader excludes `ewaste` and maps `hard_plastic` + `soft_plastic` into `plastic` before splitting, sampling, SupCon, CE, recursive refinement, and evaluation.
 
 ---
 
@@ -63,7 +61,7 @@ The pipeline follows the research-validated principle: **Contrastive representat
 | **Head LR:**         | `3e-3` |
 | **Backbone LR:**     | `5e-5` |
 | **Stopping:**        | Early stopping patience=1 on SupCon val_loss |
-| **Goal:**            | Adapt the high-level semantic representations specifically to distinguish waste categories (ewaste vs soft_plastic vs organic etc) while keeping universally-useful low-level encoders intact |
+| **Goal:**            | Adapt the high-level semantic representations specifically to distinguish the six logical waste categories while keeping universally-useful low-level encoders intact |
 
 ### Stage 4 — CE Head Warm-up (Backbone Re-frozen)
 | Parameter            | Value  |

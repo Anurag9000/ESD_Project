@@ -6,8 +6,8 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 
 ### Machine Learning Engine
 - **Backbone:** Configurable; default ConvNeXt V2 Nano FCMAE
-- **Corpus:** 304,258 verified images (WSS-304K, post-decontamination + 224px resolution floor)
-- **Taxonomy:** **8 material classes** — clothes, ewaste, glass, hard_plastic, metal, organic, paper, soft_plastic
+- **Corpus:** 304,258 verified physical images on disk; 299,818 images participate in the default logical training taxonomy after excluding `ewaste`
+- **Taxonomy:** **6 logical training classes** — clothes, glass, metal, organic, paper, plastic (`hard_plastic` + `soft_plastic`)
 - **Orchestration:** 8-stage pipeline: SupCon Head → SupCon Last-20 → SupCon full tail after frozen core → CE Head → CE Last-20 → CE full tail after frozen core → Recursive val_loss → Recursive val_raw_acc, with the same frozen 40-module stem/core preserved through recursive refinement
 - **Logging:** Pure accuracy plus per-class accuracy and per-class average confidence; thresholded accuracy is not printed in live logs.
 - **Balancing:** Balanced per-batch class cycling (default in all training scripts)
@@ -25,8 +25,8 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 
 | Metric               | Specification                                                                 |
 | :------------------- | :---------------------------------------------------------------------------- |
-| **Current Taxonomy** | **8 material classes** (clothes, ewaste, glass, hard_plastic, metal, organic, paper, soft_plastic) |
-| **Total Images**     | **304,258 verified (≥224px floor, post-decontamination)**                     |
+| **Current Taxonomy** | **6 logical training classes** (clothes, glass, metal, organic, paper, plastic) |
+| **Total Images**     | **299,818 trainable logical samples from 304,258 verified physical images**   |
 | **Class Balancing**  | Balanced per-batch class cycling                                              |
 | **Unfreeze Step**    | 20 leaf modules per SupCon and CE progressive phase                           |
 | **Optimization**     | AdamW + warmup-cosine decay (default)                                         |

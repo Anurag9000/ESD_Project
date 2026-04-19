@@ -17,11 +17,15 @@ from torchvision import datasets
 
 from metric_learning_pipeline import (
     MetricLearningEfficientNetB0,
+    TRAINING_CLASS_ORDER,
+    adapt_checkpoint_state_dict_to_training_taxonomy,
     collapse_logits_and_targets_to_runtime_classes,
     compute_classification_metrics,
     compute_correct_confidence_by_class,
     evaluation_tensor_from_image,
     model_dtype_for_args,
+    parse_json_class_mapping,
+    project_class_name_to_training_taxonomy,
     release_training_memory,
     save_classification_report_csv,
     save_confusion_matrix_csv,
@@ -64,7 +68,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--dataset-root", required=True)
     parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--batch-size", type=int, default=224)
+    parser.add_argument("--batch-size", type=int, default=240)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--max-eval-batches", type=int, default=0)
     parser.add_argument("--confidence-threshold", type=float, default=None)
@@ -105,7 +109,8 @@ def build_loader(dataset: Dataset, batch_size: int, num_workers: int) -> DataLoa
 
 
 def normalize_class_name(name: str) -> str:
-    return name.strip().lower().replace(" ", "_").replace("-", "_")
+    normalized = name.strip().lower().replace(" ", "_").replace("-", "_")
+    return "ewaste" if normalized in {"e_waste", "electronic_waste"} else normalized
 
 
 def main() -> int:
@@ -124,49 +129,66 @@ def main() -> int:
 
     eval_args = make_eval_args(checkpoint_args, args)
     dataset = datasets.ImageFolder(str(dataset_root))
-    class_names = list(checkpoint["class_names"])
-    checkpoint_class_to_idx = {name: idx for idx, name in enumerate(class_names)}
-    normalized_checkpoint_class_to_name = {normalize_class_name(name): name for name in class_names}
+    source_class_names = list(checkpoint["class_names"])
+    runtime_class_names = list(TRAINING_CLASS_ORDER)
+    runtime_class_to_idx = {name: idx for idx, name in enumerate(runtime_class_names)}
     remapped_samples: list[tuple[str, int]] = []
     missing_classes: list[str] = []
     holdout_class_remap: dict[str, str] = {}
+    dropped_classes: dict[str, int] = {}
+    runtime_class_mapping = parse_json_class_mapping(args.class_mapping)
     for path, target in dataset.samples:
         holdout_class_name = dataset.classes[target]
-        class_name = normalized_checkpoint_class_to_name.get(normalize_class_name(holdout_class_name), holdout_class_name)
-        if class_name not in checkpoint_class_to_idx:
+        normalized_holdout_class = normalize_class_name(holdout_class_name)
+        class_name = project_class_name_to_training_taxonomy(normalized_holdout_class)
+        if class_name is None:
+            dropped_classes[holdout_class_name] = dropped_classes.get(holdout_class_name, 0) + 1
+            continue
+        if class_name not in runtime_class_to_idx:
             missing_classes.append(holdout_class_name)
             continue
         holdout_class_remap[holdout_class_name] = class_name
-        remapped_samples.append((path, checkpoint_class_to_idx[class_name]))
+        remapped_samples.append((path, runtime_class_to_idx[class_name]))
     if missing_classes and not args.class_mapping and not args.selected_class:
         raise ValueError(
-            "Holdout dataset contains classes that do not exist in the checkpoint taxonomy. "
+            "Holdout dataset contains classes that do not exist in the current runtime taxonomy. "
             f"Missing classes: {sorted(set(missing_classes))}"
         )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = MetricLearningEfficientNetB0(
-        num_classes=len(class_names),
+        num_classes=len(runtime_class_names),
         weights_mode=eval_args.weights,
         embedding_dim=int(eval_args.embedding_dim),
         projection_dim=int(eval_args.projection_dim),
         args=eval_args,
         backbone_name=str(getattr(eval_args, "backbone", "convnextv2_nano")),
     ).to(device=device, dtype=model_dtype_for_args(eval_args))
-    model.load_state_dict(checkpoint["model_state_dict"])
+    model_state_dict = checkpoint["model_state_dict"]
+    if source_class_names != runtime_class_names:
+        model_state_dict, adaptation_report = adapt_checkpoint_state_dict_to_training_taxonomy(
+            model_state_dict,
+            source_class_names,
+            runtime_class_names,
+            class_mapping=checkpoint_args.get("training_class_mapping"),
+        )
+    else:
+        adaptation_report = {"applied": False, "reason": "already_aligned"}
+    model.load_state_dict(model_state_dict)
     model.eval()
 
-    import json as json_lib
-
-    class_mapping_dict = json_lib.loads(args.class_mapping) if args.class_mapping else None
+    class_mapping_dict = runtime_class_mapping if args.class_mapping else None
     manifest = {
         "checkpoint": str(checkpoint_path),
         "dataset_root": str(dataset_root),
         "selected_classes": list(args.selected_class),
         "other_label": args.other_label,
-        "source_class_names": class_names,
+        "source_class_names": source_class_names,
+        "runtime_class_names": runtime_class_names,
+        "checkpoint_taxonomy_adaptation": adaptation_report,
         "holdout_classes": list(dataset.classes),
         "holdout_class_remap": holdout_class_remap,
+        "dropped_classes": dropped_classes,
     }
     save_json(output_dir / "holdout_manifest.json", manifest)
 
@@ -182,12 +204,12 @@ def main() -> int:
             logits.append(batch_logits.detach().cpu().numpy())
             targets.append(labels.detach().cpu().numpy())
 
-    logits_concat = np.concatenate(logits, axis=0) if logits else np.empty((0, len(class_names)), dtype=np.float32)
+    logits_concat = np.concatenate(logits, axis=0) if logits else np.empty((0, len(runtime_class_names)), dtype=np.float32)
     targets_concat = np.concatenate(targets, axis=0) if targets else np.empty((0,), dtype=np.int64)
     collapsed_logits, collapsed_targets, runtime_class_names, collapse_info = collapse_logits_and_targets_to_runtime_classes(
         logits_concat,
         targets_concat,
-        class_names,
+        runtime_class_names,
         selected_classes=list(args.selected_class),
         class_mapping=class_mapping_dict,
         other_label=args.other_label,

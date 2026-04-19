@@ -71,7 +71,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--threshold", type=float, required=True)
     parser.add_argument("--initial-head-lr", type=float, required=True)
     parser.add_argument("--initial-backbone-lr", type=float, required=True)
-    parser.add_argument("--batch-size", type=int, default=224)
+    parser.add_argument("--batch-size", type=int, default=240)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--prefetch-factor", type=int, default=1)
     parser.add_argument("--patience", type=int, default=1)

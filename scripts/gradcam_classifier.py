@@ -17,8 +17,11 @@ from torchvision import datasets
 
 from metric_learning_pipeline import (
     MetricLearningEfficientNetB0,
+    TRAINING_CLASS_ORDER,
+    adapt_checkpoint_state_dict_to_training_taxonomy,
     evaluation_tensor_from_image,
     model_dtype_for_args,
+    project_class_name_to_training_taxonomy,
     save_json,
 )
 
@@ -146,7 +149,8 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     checkpoint, checkpoint_args = load_checkpoint(checkpoint_path)
-    class_names = list(checkpoint["class_names"])
+    source_class_names = list(checkpoint["class_names"])
+    class_names = list(TRAINING_CLASS_ORDER)
     image_size = int(checkpoint_args.get("image_size", 224))
     weights_mode = str(checkpoint_args.get("weights", "default"))
     backbone_name = str(checkpoint_args.get("backbone", "convnextv2_nano"))
@@ -165,12 +169,28 @@ def main() -> int:
         args=model_args,
         backbone_name=backbone_name,
     ).to(device=device, dtype=dtype)
-    model.load_state_dict(checkpoint["model_state_dict"])
+    model_state_dict = checkpoint["model_state_dict"]
+    if source_class_names != class_names:
+        model_state_dict, adaptation_report = adapt_checkpoint_state_dict_to_training_taxonomy(
+            model_state_dict,
+            source_class_names,
+            class_names,
+            class_mapping=checkpoint_args.get("training_class_mapping"),
+        )
+    else:
+        adaptation_report = {"applied": False, "reason": "already_aligned"}
+    model.load_state_dict(model_state_dict)
     model.eval()
 
     dataset = datasets.ImageFolder(str(dataset_root))
-    class_to_index = {name: idx for idx, name in enumerate(dataset.classes)}
-    selected_classes = [class_name for class_name in args.class_name if class_name in class_to_index] or list(dataset.classes)
+    class_to_index = {name: idx for idx, name in enumerate(class_names)}
+    selected_classes = [class_name for class_name in args.class_name if class_name in class_to_index] or list(class_names)
+    projected_samples: dict[str, list[Path]] = {class_name: [] for class_name in class_names}
+    for sample_path, physical_index in dataset.samples:
+        physical_class = dataset.classes[int(physical_index)]
+        logical_class = project_class_name_to_training_taxonomy(physical_class)
+        if logical_class in projected_samples:
+            projected_samples[logical_class].append(Path(sample_path))
     rng = random.Random(args.seed)
     target_module = select_target_module(model.backbone)
 
@@ -178,6 +198,10 @@ def main() -> int:
         "checkpoint": str(checkpoint_path),
         "dataset_root": str(dataset_root),
         "selected_classes": selected_classes,
+        "physical_classes": list(dataset.classes),
+        "logical_classes": class_names,
+        "source_class_names": source_class_names,
+        "checkpoint_taxonomy_adaptation": adaptation_report,
         "samples_per_class": int(args.samples_per_class),
         "backbone": backbone_name,
     }
@@ -186,24 +210,24 @@ def main() -> int:
     summary: dict[str, Any] = {"classes": {}, "checkpoint": str(checkpoint_path)}
     for class_name in selected_classes:
         class_index = class_to_index[class_name]
-        class_samples = [sample for sample in dataset.samples if sample[1] == class_index]
+        class_samples = projected_samples.get(class_name, [])
         if not class_samples:
             continue
         chosen_samples = class_samples if args.samples_per_class <= 0 else rng.sample(class_samples, min(args.samples_per_class, len(class_samples)))
         class_dir = output_dir / class_name
         class_dir.mkdir(parents=True, exist_ok=True)
         overlays: list[str] = []
-        for sample_index, (sample_path, _) in enumerate(chosen_samples, start=1):
+        for sample_index, sample_path in enumerate(chosen_samples, start=1):
             overlay, _, predicted_index = generate_gradcam(
                 model=model,
                 target_module=target_module,
-                image_path=Path(sample_path),
+                image_path=sample_path,
                 class_index=class_index,
                 image_size=image_size,
                 device=device,
                 dtype=dtype,
             )
-            predicted_name = dataset.classes[predicted_index] if 0 <= predicted_index < len(dataset.classes) else str(predicted_index)
+            predicted_name = class_names[predicted_index] if 0 <= predicted_index < len(class_names) else str(predicted_index)
             filename = f"{sample_index:02d}_{Path(sample_path).stem}_pred_{predicted_name}.png"
             overlay.save(class_dir / filename)
             overlays.append(filename)

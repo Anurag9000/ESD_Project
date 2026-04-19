@@ -70,7 +70,7 @@ python scripts/run_recursive_refinement.py \
   --sampling-strategy balanced \
   --skip-supcon \
   --optimizer adamw \
-  --batch-size 224 \
+  --batch-size 240 \
   --patience 1 \
   --resume-phase-index 1 \
   "${FILTERED_ARGS[@]}"
@@ -113,7 +113,7 @@ python scripts/run_recursive_refinement.py \
   --sampling-strategy balanced \
   --skip-supcon \
   --optimizer adamw \
-  --batch-size 224 \
+  --batch-size 240 \
   --patience 1 \
   --resume-phase-index 1 \
   "${FILTERED_ARGS[@]}"
@@ -139,7 +139,7 @@ python scripts/evaluate_saved_classifier.py \
   --checkpoint "$FINAL_CHECKPOINT" \
   --output-dir "$FINAL_TEST_OUTPUT_DIR" \
   --dataset-root "$DATASET_ROOT" \
-  --batch-size 224 \
+  --batch-size 240 \
   --evaluation-stage final_test_evaluation \
   --phase-name final_test \
   --splits test

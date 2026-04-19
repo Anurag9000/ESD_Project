@@ -31,8 +31,7 @@ IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGENET_STD  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 CLASS_NAMES = [
-    'clothes', 'ewaste', 'glass',
-    'hard_plastic', 'metal', 'organic', 'paper', 'soft_plastic'
+    'clothes', 'glass', 'metal', 'organic', 'paper', 'plastic'
 ]
 
 
