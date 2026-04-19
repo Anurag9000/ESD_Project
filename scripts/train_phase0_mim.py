@@ -202,6 +202,7 @@ def save_phase0_checkpoint(
     epoch: int,
     step: int,
     best_loss: float,
+    train_steps_without_improvement: int,
     args: argparse.Namespace,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -213,6 +214,8 @@ def save_phase0_checkpoint(
         "epoch": int(epoch),
         "step": int(step),
         "best_loss": float(best_loss),
+        "best_train_step_loss": float(best_loss),
+        "train_steps_without_improvement": int(train_steps_without_improvement),
         "args": vars(args),
     }
     torch.save(payload, path)
@@ -250,6 +253,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--weight-decay", type=float, default=0.05)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-steps", type=int, default=0)
+    parser.add_argument(
+        "--early-stopping-patience",
+        type=int,
+        default=1000,
+        help="Stop Phase 0 if the train-step loss has not improved for this many batch steps.",
+    )
+    parser.add_argument(
+        "--early-stopping-min-delta",
+        type=float,
+        default=1e-4,
+        help="Minimum loss decrease required to reset Phase 0 batch-step patience.",
+    )
     parser.add_argument("--resume-checkpoint", default="")
     return parser
 
@@ -266,6 +281,10 @@ def main() -> int:
         raise ValueError("--epochs must be >= 1")
     if args.max_steps < 0:
         raise ValueError("--max-steps must be >= 0")
+    if args.early_stopping_patience < 1:
+        raise ValueError("--early-stopping-patience must be >= 1")
+    if args.early_stopping_min_delta < 0:
+        raise ValueError("--early-stopping-min-delta must be >= 0")
     if not (0.0 < args.mask_ratio < 1.0):
         raise ValueError("--mask-ratio must be between 0 and 1")
     if args.patch_size < 1:
@@ -343,13 +362,25 @@ def main() -> int:
     start_epoch = 0
     global_step = 0
     best_loss = math.inf
+    train_steps_without_improvement = 0
     if resume_checkpoint is not None:
         model.load_state_dict(resume_checkpoint["model_state_dict"])
         optimizer.load_state_dict(resume_checkpoint["optimizer_state_dict"])
         scaler.load_state_dict(resume_checkpoint["scaler_state_dict"])
         start_epoch = int(resume_checkpoint.get("epoch", -1)) + 1
         global_step = int(resume_checkpoint.get("step", 0))
-        best_loss = float(resume_checkpoint.get("best_loss", math.inf))
+        best_loss = float(
+            resume_checkpoint.get(
+                "best_train_step_loss",
+                resume_checkpoint.get("best_loss", math.inf),
+            )
+        )
+        train_steps_without_improvement = int(
+            resume_checkpoint.get(
+                "train_steps_without_improvement",
+                resume_checkpoint.get("epochs_without_improvement", 0),
+            )
+        )
         log_json_event(
             log_path,
             {
@@ -358,6 +389,7 @@ def main() -> int:
                 "start_epoch": start_epoch,
                 "global_step": global_step,
                 "best_loss": best_loss,
+                "train_steps_without_improvement": train_steps_without_improvement,
             },
         )
 
@@ -365,6 +397,7 @@ def main() -> int:
     last_checkpoint = output_dir / "last.pt"
     best_checkpoint = output_dir / "best.pt"
     phase0_encoder_export = output_dir / "phase0_encoder_final.pth"
+    stop_training = False
 
     for epoch in range(start_epoch, args.epochs):
         epoch_loss_sum = 0.0
@@ -381,9 +414,55 @@ def main() -> int:
                 loss = ((reconstructed - images) ** 2 * pixel_mask).sum() / (pixel_mask.sum() * images.shape[1] + 1e-8)
                 loss = loss / args.grad_accum_steps
 
+            step_loss = float(loss.detach().item()) * args.grad_accum_steps
             scaler.scale(loss).backward()
-            epoch_loss_sum += float(loss.detach().item()) * args.grad_accum_steps * images.shape[0]
+            epoch_loss_sum += step_loss * images.shape[0]
             epoch_sample_count += int(images.shape[0])
+
+            if step_loss < best_loss - args.early_stopping_min_delta:
+                best_loss = step_loss
+                train_steps_without_improvement = 0
+                save_phase0_checkpoint(
+                    best_checkpoint,
+                    model=model,
+                    optimizer=optimizer,
+                    scaler=scaler,
+                    epoch=epoch,
+                    step=global_step,
+                    best_loss=best_loss,
+                    train_steps_without_improvement=train_steps_without_improvement,
+                    args=args,
+                )
+            else:
+                train_steps_without_improvement += 1
+
+            if train_steps_without_improvement >= args.early_stopping_patience:
+                save_phase0_checkpoint(
+                    output_dir / "step_last.pt",
+                    model=model,
+                    optimizer=optimizer,
+                    scaler=scaler,
+                    epoch=epoch,
+                    step=global_step,
+                    best_loss=best_loss,
+                    train_steps_without_improvement=train_steps_without_improvement,
+                    args=args,
+                )
+                log_json_event(
+                    log_path,
+                    {
+                        "event": "phase0_early_stopping_triggered",
+                        "epoch": epoch + 1,
+                        "global_step": global_step,
+                        "patience_reached": train_steps_without_improvement,
+                        "best_loss": best_loss,
+                        "current_step_loss": step_loss,
+                        "early_stopping_patience": args.early_stopping_patience,
+                        "early_stopping_min_delta": args.early_stopping_min_delta,
+                    },
+                )
+                stop_training = True
+                break
 
             if step_index % args.grad_accum_steps == 0 or step_index == len(loader):
                 scaler.step(optimizer)
@@ -398,6 +477,7 @@ def main() -> int:
                     epoch=epoch,
                     step=global_step,
                     best_loss=best_loss,
+                    train_steps_without_improvement=train_steps_without_improvement,
                     args=args,
                 )
                 log_json_event(
@@ -406,16 +486,18 @@ def main() -> int:
                         "event": "phase0_train_step",
                         "epoch": epoch + 1,
                         "step": global_step,
-                        "loss": float(loss.detach().item() * args.grad_accum_steps),
+                        "loss": step_loss,
                         "batch_size": int(images.shape[0]),
                         "mask_ratio": float(args.mask_ratio),
                         "backbone": args.backbone,
+                        "best_loss": best_loss,
+                        "train_steps_without_improvement": train_steps_without_improvement,
                     },
                 )
                 if args.max_steps > 0 and global_step >= args.max_steps:
                     break
 
-            progress.set_postfix(loss=float(loss.detach().item() * args.grad_accum_steps))
+            progress.set_postfix(loss=step_loss, best=best_loss, wait=train_steps_without_improvement)
 
         epoch_loss = epoch_loss_sum / max(1, epoch_sample_count)
         if args.max_steps > 0 and global_step >= args.max_steps:
@@ -427,20 +509,9 @@ def main() -> int:
                 epoch=epoch,
                 step=global_step,
                 best_loss=best_loss,
+                train_steps_without_improvement=train_steps_without_improvement,
                 args=args,
             )
-            if epoch_loss < best_loss:
-                best_loss = epoch_loss
-                save_phase0_checkpoint(
-                    best_checkpoint,
-                    model=model,
-                    optimizer=optimizer,
-                    scaler=scaler,
-                    epoch=epoch,
-                    step=global_step,
-                    best_loss=best_loss,
-                    args=args,
-                )
             log_json_event(
                 log_path,
                 {
@@ -453,24 +524,13 @@ def main() -> int:
 
         save_phase0_checkpoint(
             last_checkpoint,
-            model=model,
-            optimizer=optimizer,
-            scaler=scaler,
-            epoch=epoch,
-            step=global_step,
-            best_loss=best_loss,
-            args=args,
-        )
-        if epoch_loss < best_loss:
-            best_loss = epoch_loss
-            save_phase0_checkpoint(
-                best_checkpoint,
                 model=model,
                 optimizer=optimizer,
                 scaler=scaler,
                 epoch=epoch,
                 step=global_step,
                 best_loss=best_loss,
+                train_steps_without_improvement=train_steps_without_improvement,
                 args=args,
             )
         log_json_event(
@@ -480,9 +540,12 @@ def main() -> int:
                 "epoch": epoch + 1,
                 "epoch_loss": epoch_loss,
                 "best_loss": best_loss,
+                "train_steps_without_improvement": train_steps_without_improvement,
                 "global_step": global_step,
             },
         )
+        if stop_training:
+            break
 
     torch.save(model.encoder.state_dict(), phase0_encoder_export)
     log_json_event(
@@ -490,8 +553,10 @@ def main() -> int:
         {
             "event": "phase0_finished",
             "best_loss": best_loss,
+            "train_steps_without_improvement": train_steps_without_improvement,
             "encoder_export": str(phase0_encoder_export),
             "best_checkpoint": str(best_checkpoint),
+            "stop_reason": "early_stopping" if stop_training else "epoch_limit_or_step_cap",
         },
     )
     print(f"Phase 0 complete. Encoder exported to {phase0_encoder_export}")

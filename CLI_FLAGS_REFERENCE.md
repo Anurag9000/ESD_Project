@@ -113,6 +113,8 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--learning-rate` | `1.5e-4` | AdamW learning rate for Phase 0. |
 | `--weight-decay` | `0.05` | AdamW weight decay for Phase 0. |
 | `--seed` | `42` | RNG seed. |
+| `--early-stopping-patience` | `1000` | Stop Phase 0 after this many train batches without a new best reconstruction loss. |
+| `--early-stopping-min-delta` | `1e-4` | Minimum train-batch loss decrease required to reset Phase 0 patience. |
 | `--resume-checkpoint` | `""` | Optional Phase 0 checkpoint to resume from. |
 
 ## Recursive Refinement: `scripts/run_recursive_refinement.py`
