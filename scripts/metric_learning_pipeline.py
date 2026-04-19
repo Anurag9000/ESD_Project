@@ -2681,6 +2681,14 @@ def collect_logits_and_labels(
     args: argparse.Namespace | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     model.eval()
+    eval_args = args or argparse.Namespace(
+        precision="mixed",
+        label_smoothing=0.0,
+        confidence_threshold=0.0,
+        confidence_gap_penalty_weight=0.0,
+        class_loss_weight_map_resolved={},
+        targeted_confusion_penalties_resolved=[],
+    )
     logits_list: list[torch.Tensor] = []
     labels_list: list[torch.Tensor] = []
     total_batches = min(len(loader), max_batches) if max_batches > 0 else len(loader)
@@ -2693,14 +2701,14 @@ def collect_logits_and_labels(
             leave=False,
         )
         for eval_step, (images, labels) in progress:
-            images = move_images_to_device(images, device, args) if args is not None else images.to(device, non_blocking=True)
+            images = move_images_to_device(images, device, eval_args)
             labels = labels.to(device, non_blocking=True)
-            with torch.amp.autocast("cuda", enabled=args is not None and autocast_enabled(device, args)):
+            with torch.amp.autocast("cuda", enabled=autocast_enabled(device, eval_args)):
                 embeddings = model.encode(images)
                 if criterion is not None:
                     margin_logits = model.classify(embeddings, labels)
                     logits = model.classify(embeddings, labels=None)
-                    loss, _, _, _ = classifier_loss_from_logits(margin_logits, logits, labels, args)
+                    loss, _, _, _ = classifier_loss_from_logits(margin_logits, logits, labels, eval_args)
                 else:
                     logits = model.classify(embeddings, labels=None)
                     loss = None
