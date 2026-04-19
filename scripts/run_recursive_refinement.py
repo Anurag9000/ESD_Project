@@ -74,7 +74,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=240)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--prefetch-factor", type=int, default=1)
-    parser.add_argument("--patience", type=int, default=1)
+    parser.add_argument("--patience", type=int, default=3)
     parser.add_argument("--dataset-root", default="Dataset_Final")
     parser.add_argument("--optimizer", default="adamw")
     parser.add_argument("--sampling-strategy", choices=("balanced", "weighted", "shuffle"), default="balanced")

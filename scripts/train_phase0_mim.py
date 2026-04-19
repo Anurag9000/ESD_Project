@@ -204,7 +204,8 @@ def save_phase0_checkpoint(
     epoch: int,
     step: int,
     best_loss: float,
-    train_steps_without_improvement: int,
+    train_loss_window_images_without_improvement: int,
+    loss_plateau_windows_without_improvement: int,
     args: argparse.Namespace,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -217,7 +218,9 @@ def save_phase0_checkpoint(
         "step": int(step),
         "best_loss": float(best_loss),
         "best_train_step_loss": float(best_loss),
-        "train_steps_without_improvement": int(train_steps_without_improvement),
+        "train_loss_window_images_without_improvement": int(train_loss_window_images_without_improvement),
+        "train_loss_window_steps_without_improvement": int(train_loss_window_images_without_improvement),
+        "loss_plateau_windows_without_improvement": int(loss_plateau_windows_without_improvement),
         "args": vars(args),
     }
     torch.save(payload, path)
@@ -256,10 +259,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-steps", type=int, default=0)
     parser.add_argument(
+        "--train-loss-window",
+        type=int,
+        default=2000,
+        help="Phase 0 uses this many train images to form one plateau window before checking patience.",
+    )
+    parser.add_argument(
         "--early-stopping-patience",
         type=int,
-        default=1000,
-        help="Stop Phase 0 if the train-step loss has not improved for this many batch steps.",
+        default=3,
+        help="Stop Phase 0 after this many plateau windows without a new best train loss.",
     )
     parser.add_argument(
         "--early-stopping-min-delta",
@@ -283,6 +292,8 @@ def main() -> int:
         raise ValueError("--epochs must be >= 1")
     if args.max_steps < 0:
         raise ValueError("--max-steps must be >= 0")
+    if args.train_loss_window < 1:
+        raise ValueError("--train-loss-window must be >= 1")
     if args.early_stopping_patience < 1:
         raise ValueError("--early-stopping-patience must be >= 1")
     if args.early_stopping_min_delta < 0:
@@ -353,6 +364,8 @@ def main() -> int:
             "frozen_backbone_modules": 0,
             "sampler": "balanced_class_epoch_sampler",
             "batch_size": int(args.batch_size),
+            "train_loss_window_images": int(args.train_loss_window),
+            "early_stopping_patience": int(args.early_stopping_patience),
         },
     )
     model.train()
@@ -368,7 +381,8 @@ def main() -> int:
     start_epoch = 0
     global_step = 0
     best_loss = math.inf
-    train_steps_without_improvement = 0
+    train_loss_window_images_without_improvement = 0
+    loss_plateau_windows_without_improvement = 0
     if resume_checkpoint is not None:
         model.load_state_dict(resume_checkpoint["model_state_dict"])
         optimizer.load_state_dict(resume_checkpoint["optimizer_state_dict"])
@@ -381,9 +395,15 @@ def main() -> int:
                 resume_checkpoint.get("best_loss", math.inf),
             )
         )
-        train_steps_without_improvement = int(
+        train_loss_window_images_without_improvement = int(
             resume_checkpoint.get(
-                "train_steps_without_improvement",
+                "train_loss_window_images_without_improvement",
+                resume_checkpoint.get("train_loss_window_steps_without_improvement", 0),
+            )
+        )
+        loss_plateau_windows_without_improvement = int(
+            resume_checkpoint.get(
+                "loss_plateau_windows_without_improvement",
                 resume_checkpoint.get("epochs_without_improvement", 0),
             )
         )
@@ -395,7 +415,8 @@ def main() -> int:
                 "start_epoch": start_epoch,
                 "global_step": global_step,
                 "best_loss": best_loss,
-                "train_steps_without_improvement": train_steps_without_improvement,
+                "train_loss_window_images_without_improvement": train_loss_window_images_without_improvement,
+                "loss_plateau_windows_without_improvement": loss_plateau_windows_without_improvement,
             },
         )
 
@@ -427,7 +448,8 @@ def main() -> int:
 
             if step_loss < best_loss - args.early_stopping_min_delta:
                 best_loss = step_loss
-                train_steps_without_improvement = 0
+                train_loss_window_images_without_improvement = 0
+                loss_plateau_windows_without_improvement = 0
                 save_phase0_checkpoint(
                     best_checkpoint,
                     model=model,
@@ -436,13 +458,18 @@ def main() -> int:
                     epoch=epoch,
                     step=global_step,
                     best_loss=best_loss,
-                    train_steps_without_improvement=train_steps_without_improvement,
+                    train_loss_window_images_without_improvement=train_loss_window_images_without_improvement,
+                    loss_plateau_windows_without_improvement=loss_plateau_windows_without_improvement,
                     args=args,
                 )
             else:
-                train_steps_without_improvement += 1
+                train_loss_window_images_without_improvement += int(images.shape[0])
 
-            if train_steps_without_improvement >= args.early_stopping_patience:
+            if train_loss_window_images_without_improvement >= args.train_loss_window:
+                loss_plateau_windows_without_improvement += 1
+                train_loss_window_images_without_improvement = 0
+
+            if loss_plateau_windows_without_improvement >= args.early_stopping_patience:
                 save_phase0_checkpoint(
                     output_dir / "step_last.pt",
                     model=model,
@@ -451,7 +478,8 @@ def main() -> int:
                     epoch=epoch,
                     step=global_step,
                     best_loss=best_loss,
-                    train_steps_without_improvement=train_steps_without_improvement,
+                    train_loss_window_images_without_improvement=train_loss_window_images_without_improvement,
+                    loss_plateau_windows_without_improvement=loss_plateau_windows_without_improvement,
                     args=args,
                 )
                 log_json_event(
@@ -460,7 +488,9 @@ def main() -> int:
                         "event": "phase0_early_stopping_triggered",
                         "epoch": epoch + 1,
                         "global_step": global_step,
-                        "patience_reached": train_steps_without_improvement,
+                        "patience_reached": loss_plateau_windows_without_improvement,
+                        "train_loss_window_images": args.train_loss_window,
+                        "train_loss_window_images_without_improvement": train_loss_window_images_without_improvement,
                         "best_loss": best_loss,
                         "current_step_loss": step_loss,
                         "early_stopping_patience": args.early_stopping_patience,
@@ -483,7 +513,8 @@ def main() -> int:
                     epoch=epoch,
                     step=global_step,
                     best_loss=best_loss,
-                    train_steps_without_improvement=train_steps_without_improvement,
+                    train_loss_window_images_without_improvement=train_loss_window_images_without_improvement,
+                    loss_plateau_windows_without_improvement=loss_plateau_windows_without_improvement,
                     args=args,
                 )
                 log_json_event(
@@ -497,13 +528,19 @@ def main() -> int:
                         "mask_ratio": float(args.mask_ratio),
                         "backbone": args.backbone,
                         "best_loss": best_loss,
-                        "train_steps_without_improvement": train_steps_without_improvement,
+                        "train_loss_window_images_without_improvement": train_loss_window_images_without_improvement,
+                        "loss_plateau_windows_without_improvement": loss_plateau_windows_without_improvement,
                     },
                 )
                 if args.max_steps > 0 and global_step >= args.max_steps:
                     break
 
-            progress.set_postfix(loss=step_loss, best=best_loss, wait=train_steps_without_improvement)
+            progress.set_postfix(
+                loss=step_loss,
+                best=best_loss,
+                image_window_wait=train_loss_window_images_without_improvement,
+                plateaus=loss_plateau_windows_without_improvement,
+            )
 
         epoch_loss = epoch_loss_sum / max(1, epoch_sample_count)
         if args.max_steps > 0 and global_step >= args.max_steps:
@@ -515,7 +552,8 @@ def main() -> int:
                 epoch=epoch,
                 step=global_step,
                 best_loss=best_loss,
-                train_steps_without_improvement=train_steps_without_improvement,
+                train_loss_window_images_without_improvement=train_loss_window_images_without_improvement,
+                loss_plateau_windows_without_improvement=loss_plateau_windows_without_improvement,
                 args=args,
             )
             log_json_event(
@@ -530,15 +568,16 @@ def main() -> int:
 
         save_phase0_checkpoint(
             last_checkpoint,
-                model=model,
-                optimizer=optimizer,
-                scaler=scaler,
-                epoch=epoch,
-                step=global_step,
-                best_loss=best_loss,
-                train_steps_without_improvement=train_steps_without_improvement,
-                args=args,
-            )
+            model=model,
+            optimizer=optimizer,
+            scaler=scaler,
+            epoch=epoch,
+            step=global_step,
+            best_loss=best_loss,
+            train_loss_window_images_without_improvement=train_loss_window_images_without_improvement,
+            loss_plateau_windows_without_improvement=loss_plateau_windows_without_improvement,
+            args=args,
+        )
         log_json_event(
             log_path,
             {
@@ -546,7 +585,8 @@ def main() -> int:
                 "epoch": epoch + 1,
                 "epoch_loss": epoch_loss,
                 "best_loss": best_loss,
-                "train_steps_without_improvement": train_steps_without_improvement,
+                "train_loss_window_images_without_improvement": train_loss_window_images_without_improvement,
+                "loss_plateau_windows_without_improvement": loss_plateau_windows_without_improvement,
                 "global_step": global_step,
             },
         )
@@ -559,7 +599,8 @@ def main() -> int:
         {
             "event": "phase0_finished",
             "best_loss": best_loss,
-            "train_steps_without_improvement": train_steps_without_improvement,
+            "train_loss_window_images_without_improvement": train_loss_window_images_without_improvement,
+            "loss_plateau_windows_without_improvement": loss_plateau_windows_without_improvement,
             "encoder_export": str(phase0_encoder_export),
             "best_checkpoint": str(best_checkpoint),
             "stop_reason": "early_stopping" if stop_training else "epoch_limit_or_step_cap",

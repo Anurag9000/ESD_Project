@@ -21,9 +21,9 @@ def main() -> int:
     args = parser.parse_args()
     backbone_name = getattr(args, "backbone", os.getenv("BACKBONE_NAME", DEFAULT_BACKBONE_NAME))
     if args.output_dir == default_output_dir:
-        args.output_dir = f"Results/{backbone_name}_progressive_six_classes"
+        args.output_dir = f"Results/{backbone_name}_progressive_three_classes"
     if args.log_file == default_log_file:
-        args.log_file = f"logs/{backbone_name}_progressive_six_classes.log.jsonl"
+        args.log_file = f"logs/{backbone_name}_progressive_three_classes.log.jsonl"
     return run_experiment(args)
 
 

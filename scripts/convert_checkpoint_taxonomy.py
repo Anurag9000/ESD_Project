@@ -10,19 +10,20 @@ import torch
 
 from metric_learning_pipeline import (
     TRAINING_CLASS_ORDER,
+    TRAINING_EXCLUDED_CLASSES,
     adapt_checkpoint_state_dict_to_training_taxonomy,
 )
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Convert a legacy checkpoint into the repo's current 6-class logical taxonomy."
+        description="Convert a legacy checkpoint into the repo's current 3-class logical taxonomy."
     )
     parser.add_argument("--input-checkpoint", required=True, help="Path to the source checkpoint (.pt).")
     parser.add_argument(
         "--output-checkpoint",
         default="",
-        help="Optional output path. Defaults to <input_stem>_6class.pt next to the source checkpoint.",
+        help="Optional output path. Defaults to <input_stem>_3class.pt next to the source checkpoint.",
     )
     return parser.parse_args()
 
@@ -61,7 +62,7 @@ def infer_source_phase(checkpoint: dict[str, Any]) -> dict[str, Any]:
 
 
 def default_output_path(input_path: Path) -> Path:
-    return input_path.with_name(f"{input_path.stem}_6class.pt")
+    return input_path.with_name(f"{input_path.stem}_3class.pt")
 
 
 def main() -> int:
@@ -113,7 +114,7 @@ def main() -> int:
         args_payload = dict(args_payload)
         args_payload["class_names_resolved"] = list(TRAINING_CLASS_ORDER)
         args_payload["training_class_order"] = list(TRAINING_CLASS_ORDER)
-        args_payload["training_excluded_classes"] = ["ewaste"]
+        args_payload["training_excluded_classes"] = list(TRAINING_EXCLUDED_CLASSES)
         converted["args"] = args_payload
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

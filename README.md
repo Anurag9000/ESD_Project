@@ -6,8 +6,8 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 
 ### Machine Learning Engine
 - **Backbone:** Configurable; default ConvNeXt V2 Nano FCMAE
-- **Corpus:** 304,258 verified physical images on disk; 299,818 images participate in the default logical training taxonomy after excluding `ewaste`
-- **Taxonomy:** **6 logical training classes** — clothes, glass, metal, organic, paper, plastic (`hard_plastic` + `soft_plastic`)
+- **Corpus:** 304,258 verified physical images on disk; the next-run logical training taxonomy keeps only the 3 supervised classes
+- **Taxonomy:** **3 logical training classes** — organic, metal, paper
 - **Orchestration:** 8-stage pipeline: SupCon Head → SupCon Last-20 → SupCon full tail after frozen core → CE Head → CE Last-20 → CE full tail after frozen core → Recursive val_loss → Recursive val_raw_acc, with the same frozen 40-module stem/core preserved through recursive refinement
 - **Logging:** Pure accuracy plus per-class accuracy and per-class average confidence; thresholded accuracy is not printed in live logs.
 - **Balancing:** Balanced per-batch class cycling (default in all training scripts)
@@ -25,8 +25,8 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 
 | Metric               | Specification                                                                 |
 | :------------------- | :---------------------------------------------------------------------------- |
-| **Current Taxonomy** | **6 logical training classes** (clothes, glass, metal, organic, paper, plastic) |
-| **Total Images**     | **299,818 trainable logical samples from 304,258 verified physical images**   |
+| **Current Taxonomy** | **3 logical training classes** (organic, metal, paper) |
+| **Total Images**     | **Trainable logical samples are projected from the physical dataset into the 3-class head** |
 | **Class Balancing**  | Balanced per-batch class cycling                                              |
 | **Unfreeze Step**    | 20 leaf modules per SupCon and CE progressive phase                           |
 | **Optimization**     | AdamW + warmup-cosine decay (default)                                         |
@@ -54,12 +54,12 @@ source .venv/bin/activate
 # Defaults now include:
 # - Phase 0 MIM trains the full backbone with the same balanced class sampler and 240 batch default, then SupCon/CE re-freeze the earliest 40 leaf modules
 # - validation triggered by train-step patience
-# - patience 1 across SupCon, CE head, CE stages, and recursive stages
+# - patience 3 across SupCon, CE head, CE stages, and recursive stages
 # - startup + phase-end clean test-set visualizations
 ./run_training.sh --backbone <your_backbone> --num-workers 2 --prefetch-factor 1
 
 # Optional Phase 0 MIM pretraining can be enabled before SupCon:
-# ./run_training.sh --phase0-mim --phase0-mim-epochs 20 --phase0-mim-batch-size 8 --backbone <your_backbone> --num-workers 2 --prefetch-factor 1
+# ./run_training.sh --phase0-mim --phase0-mim-epochs 20 --phase0-mim-batch-size 240 --backbone <your_backbone> --num-workers 2 --prefetch-factor 1
 ```
 
 ### Resume After Interruption (Exact Same Command)

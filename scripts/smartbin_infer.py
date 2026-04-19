@@ -31,7 +31,7 @@ IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGENET_STD  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 CLASS_NAMES = [
-    'clothes', 'glass', 'metal', 'organic', 'paper', 'plastic'
+    'organic', 'metal', 'paper'
 ]
 
 
@@ -76,7 +76,7 @@ def classify(session: ort.InferenceSession, image: Image.Image) -> tuple[str, fl
     """
     tensor = preprocess(image.convert('RGB'))
     t0 = time.perf_counter()
-    logits = session.run(['logits'], {'image': tensor})[0][0]   # shape [8]
+    logits = session.run(['logits'], {'image': tensor})[0][0]   # shape [3]
     ms = (time.perf_counter() - t0) * 1000
 
     # Softmax

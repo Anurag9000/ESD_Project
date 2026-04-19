@@ -385,7 +385,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--class-mapping",
         default="",
-        help="Optional extra JSON mapping. The repo always excludes ewaste and merges hard/soft plastic -> plastic.",
+        help="Optional extra JSON mapping. The repo always projects into the 3-class organic / metal / paper taxonomy.",
     )
     return p.parse_args()
 

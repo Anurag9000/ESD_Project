@@ -20,6 +20,8 @@ from torchvision import datasets
 from metric_learning_pipeline import (
     compute_classification_metrics,
     compute_correct_confidence_by_class,
+    TRAINING_CLASS_ORDER,
+    project_class_name_to_training_taxonomy,
     save_classification_report_csv,
     save_confusion_matrix_csv,
     save_confidence_histogram,
@@ -95,7 +97,7 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     dataset = datasets.ImageFolder(str(dataset_root))
-    class_names = [name.lower().replace(" ", "_") for name in dataset.classes]
+    class_names = list(TRAINING_CLASS_ORDER)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model, _, preprocess = open_clip.create_model_and_transforms(args.model_name, pretrained=args.pretrained)
@@ -119,10 +121,11 @@ def main() -> int:
     for path, target in dataset.samples:
         holdout_class_name = dataset.classes[target]
         normalized = holdout_class_name.strip().lower().replace(" ", "_")
-        if normalized not in class_names:
+        projected = project_class_name_to_training_taxonomy(normalized)
+        if projected is None or projected not in class_names:
             continue
-        holdout_class_remap[holdout_class_name] = normalized
-        remapped_samples.append((path, class_names.index(normalized)))
+        holdout_class_remap[holdout_class_name] = projected
+        remapped_samples.append((path, class_names.index(projected)))
 
     loader = build_loader(HoldoutDataset(remapped_samples, args.image_size), args.batch_size, args.num_workers)
 

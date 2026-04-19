@@ -2,6 +2,7 @@
 
 This file documents the live training, evaluation, and utility flags in the current repo state.
 Defaults are the values used when the flag is omitted. Boolean defaults are shown as `true` / `false`.
+The next-run logical training taxonomy is strictly 3 classes: `organic`, `metal`, `paper`.
 Live logs now print pure accuracy plus `per_class_accuracy` and `per_class_avg_confidence`; thresholded accuracy fields are no longer emitted.
 
 ## Main Trainer: `scripts/metric_learning_pipeline.py`
@@ -50,7 +51,7 @@ Live logs now print pure accuracy plus `per_class_accuracy` and `per_class_avg_c
 | `--output-dir` | `Results/metric_learning_experiment` | Main training output root. |
 | `--log-file` | `logs/metric_learning_experiment.log.jsonl` | Structured JSONL log path. |
 | `--resume-checkpoint` | `""` | Explicit checkpoint to resume from. |
-| `--class-mapping` | `""` | JSON string for training-time class merging. |
+| `--class-mapping` | `""` | JSON string for training-time class merging; the default 3-class pipeline ignores extra physical folders. |
 | `--auto-split-ratios` | `0.7,0.2,0.1` | Train / val / test split ratios. |
 | `--resume-mode` | `latest` | Resume source: `latest`, `global_best`, or `phase_best`. |
 | `--resume-phase-index` | `0` | Explicit resume phase index override. |
@@ -68,9 +69,9 @@ Live logs now print pure accuracy plus `per_class_accuracy` and `per_class_avg_c
 | `--epoch-visualization-umap-thumbnail-limit` | `0` | Maximum thumbnails rendered on the UMAP map; `0` means render all thumbnails. |
 | `--runtime-bad-sample-cleanup` | `false` | Delete unreadable samples during training and remove metadata entries. |
 | `--confidence-threshold` | `0.80` | Confidence threshold used in threshold-aware accuracy metrics. |
-| `--supcon-early-stopping-patience` | `1` | Patience for SupCon phases. |
-| `--head-early-stopping-patience` | `1` | Patience for classifier head warmup. |
-| `--stage-early-stopping-patience` | `1` | Patience for later classifier phases. |
+| `--supcon-early-stopping-patience` | `3` | Patience for SupCon phases. |
+| `--head-early-stopping-patience` | `3` | Patience for classifier head warmup. |
+| `--stage-early-stopping-patience` | `3` | Patience for later classifier phases. |
 | `--early-stopping-min-delta` | `0.0` | Minimum improvement required to reset patience. |
 | `--warmup-epochs` | `0` | Scheduler warmup measured in epochs. |
 | `--warmup-steps` | `1024` | Scheduler warmup measured in steps. |
@@ -84,8 +85,8 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 
 | Setting | Default used by wrapper | What it does |
 | --- | --- | --- |
-| `output_dir` | `Results/<backbone>_progressive_six_classes` | Output root for the progressive pretraining run when not set explicitly. |
-| `log_file` | `logs/<backbone>_progressive_six_classes.log.jsonl` | Log file for the progressive pretraining run when not set explicitly. |
+| `output_dir` | `Results/<backbone>_progressive_three_classes` | Output root for the progressive pretraining run when not set explicitly. |
+| `log_file` | `logs/<backbone>_progressive_three_classes.log.jsonl` | Log file for the progressive pretraining run when not set explicitly. |
 
 ## Phase 0 MIM Launcher: `scripts/train_phase0_mim.py`
 
@@ -113,7 +114,8 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--learning-rate` | `1.5e-4` | AdamW learning rate for Phase 0. |
 | `--weight-decay` | `0.05` | AdamW weight decay for Phase 0. |
 | `--seed` | `42` | RNG seed. |
-| `--early-stopping-patience` | `1000` | Stop Phase 0 after this many train batches without a new best reconstruction loss. |
+| `--train-loss-window` | `2000` | Number of train images that define one Phase 0 plateau window. |
+| `--early-stopping-patience` | `3` | Stop Phase 0 after this many plateau windows without a new best reconstruction loss. |
 | `--early-stopping-min-delta` | `1e-4` | Minimum train-batch loss decrease required to reset Phase 0 patience. |
 | `--resume-checkpoint` | `""` | Optional Phase 0 checkpoint to resume from. |
 
@@ -133,7 +135,7 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--batch-size` | `240` | Batch size forwarded to the trainer. |
 | `--num-workers` | `2` | DataLoader worker count forwarded to the trainer. |
 | `--prefetch-factor` | `1` | Prefetch depth per worker forwarded to the trainer. |
-| `--patience` | `1` | Early-stopping patience forwarded to the trainer. |
+| `--patience` | `3` | Early-stopping patience forwarded to the trainer. |
 | `--dataset-root` | `Dataset_Final` | Dataset root forwarded to the trainer. |
 | `--optimizer` | `adamw` | Optimizer forwarded to the trainer. |
 | `--sampling-strategy` | `balanced` | Sampling strategy forwarded to the trainer. |
@@ -258,8 +260,8 @@ These are not `argparse` flags, but they control the shell wrappers and the acti
 | Knob | Default | What it does |
 | --- | --- | --- |
 | `RUN_STAMP` | auto-generated current timestamp | Run identity used by the wrappers. Reuse the same value to resume the same run tree. |
-| `RUN_ROOT` | `Results/<backbone>_six_classes_<RUN_STAMP>` in `run_training.sh`, `Results/<backbone>_master_run` in `run_full_training_pipeline.sh` | Output root for checkpoints and artifacts. |
-| `LOG_ROOT` | `logs/<backbone>_six_classes_<RUN_STAMP>` in `run_training.sh`, `logs/<backbone>_master_run` in `run_full_training_pipeline.sh` | Log root for JSONL/CSV artifacts. |
+| `RUN_ROOT` | `Results/<backbone>_three_classes_<RUN_STAMP>` in `run_training.sh`, `Results/<backbone>_master_run` in `run_full_training_pipeline.sh` | Output root for checkpoints and artifacts. |
+| `LOG_ROOT` | `logs/<backbone>_three_classes_<RUN_STAMP>` in `run_training.sh`, `logs/<backbone>_master_run` in `run_full_training_pipeline.sh` | Log root for JSONL/CSV artifacts. |
 | `DATASET_ROOT` | `Dataset_Final` | Corpus root used by both wrappers. |
 | `INITIAL_CHECKPOINT` | defaults to `$RUN_ROOT/progressive/best.pt` in `run_full_training_pipeline.sh` | Seed checkpoint for the recursive refinement stages. |
 | `RECURSIVE_ACCEPTANCE_MIN_DELTA` | `0.0` | Minimum improvement required to accept a recursive candidate in `run_full_training_pipeline.sh`. |
@@ -274,4 +276,4 @@ These are not `argparse` flags, but they control the shell wrappers and the acti
 - `run_training.sh` auto-resumes from `step_last.pt` first, then `last.pt`.
 - `run_full_training_pipeline.sh` ignores user-supplied `--dataset-root`, `--batch-size`, `--output-dir`, `--log-file`, `--resume-checkpoint`, `--resume-mode`, `--resume-phase-index`, `--classifier-train-mode`, `--classifier-early-stopping-metric`, `--head-lr`, `--backbone-lr`, `--stage-early-stopping-patience`, and `--optimizer`.
 - `scripts/run_recursive_refinement.py` validates pass-through trainer flags against the main trainer parser and raises on unsupported options instead of silently ignoring them.
-- `run_full_training_pipeline.sh` hardcodes the recursive refinement recipe to `batch-size 240`, `patience 1`, `resume-phase-index 1`, `optimizer adamw`, `sampling-strategy balanced`, `skip-supcon`, `classifier-train-mode full_model`, and `frozen-core-backbone-modules 40` for both recursive passes. This means recursive refinement starts directly in `ce_full_model`: classifier head plus the backbone tail after the frozen 40-module stem/core train from the first step. Recursive candidate scoring evaluates only the validation split; the test split is reserved for the final test bundle.
+- `run_full_training_pipeline.sh` hardcodes the recursive refinement recipe to `batch-size 240`, `patience 3`, `resume-phase-index 1`, `optimizer adamw`, `sampling-strategy balanced`, `skip-supcon`, `classifier-train-mode full_model`, and `frozen-core-backbone-modules 40` for both recursive passes. This means recursive refinement starts directly in `ce_full_model`: classifier head plus the backbone tail after the frozen 40-module stem/core train from the first step. Recursive candidate scoring evaluates only the validation split; the test split is reserved for the final test bundle.

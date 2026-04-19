@@ -37,7 +37,7 @@ export BACKBONE_NAME WEIGHTS_MODE
 
 # ── AUTO-RESUME LOGIC ──
 # If no RUN_STAMP is set in the environment, detect the most recent one automatically
-RUN_PREFIX="${BACKBONE_NAME}_six_classes"
+RUN_PREFIX="${BACKBONE_NAME}_three_classes"
 if [[ -z "${RUN_STAMP:-}" ]]; then
   LATEST_RUN=$(ls -td Results/${RUN_PREFIX}_* 2>/dev/null | head -1 || true)
   if [[ -n "$LATEST_RUN" ]]; then

@@ -1,22 +1,16 @@
 #!/usr/bin/env python3
 """
-Pi-side TFLite evaluator for the current 6-class waste model.
+Pi-side TFLite evaluator for the current 3-class waste model.
 
 Current head order:
-    0 -> clothes
-    1 -> glass
-    2 -> metal
-    3 -> organic
-    4 -> paper
-    5 -> plastic
+    0 -> organic
+    1 -> metal
+    2 -> paper
 
-This script is for the current rawacc-refined model wiring. It evaluates only
-the 3 logits for:
-    - Metal
+This script evaluates only the 3 logits for:
     - Organic
+    - Metal
     - Paper
-
-The other 3 head logits are ignored completely during inference.
 """
 
 from __future__ import annotations
@@ -44,26 +38,23 @@ except Exception:  # pragma: no cover
 # ==============================
 # 1. CONFIGURATION
 # ==============================
-MODEL_PATH = "model/current_best_6class_quantized.tflite"
+MODEL_PATH = "model/current_best_3class_quantized.tflite"
 DATASET_DIR = "Test_Dataset_Real"
 OUTPUT_DIR = "pi_eval_outputs"
 IMG_SIZE = (224, 224)
 CONFIDENCE_THRESHOLD = 0.80
 
-# Full 6-class head order from the current model.
-MODEL_CLASSES = ["clothes", "glass", "metal", "organic", "paper", "plastic"]
+# Full 3-class head order from the current model.
+MODEL_CLASSES = ["organic", "metal", "paper"]
 
 # Only these folders are expected in your current Pi test set.
-EVAL_CLASSES = ["metal", "organic", "paper"]
+EVAL_CLASSES = ["organic", "metal", "paper"]
 
-# Current 6-class head indices:
-#   0 clothes
-#   1 glass
-#   2 metal
-#   3 organic
-#   4 paper
-#   5 plastic
-STRICT_EVAL_HEAD_INDICES = [2, 3, 4]
+# Current 3-class head indices:
+#   0 organic
+#   1 metal
+#   2 paper
+STRICT_EVAL_HEAD_INDICES = [0, 1, 2]
 
 
 def normalize_name(name: str) -> str:
@@ -170,9 +161,9 @@ def predict(interpreter: Interpreter, input_details: dict, output_details: dict,
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Evaluate current 6-class TFLite model on Metal/Organic/Paper")
-    parser.add_argument("--model", default=MODEL_PATH, help="Path to the current 6-class TFLite model")
-    parser.add_argument("--dataset", default=DATASET_DIR, help="Dataset root containing Metal/Organic/Paper folders")
+    parser = argparse.ArgumentParser(description="Evaluate current 3-class TFLite model on Organic/Metal/Paper")
+    parser.add_argument("--model", default=MODEL_PATH, help="Path to the current 3-class TFLite model")
+    parser.add_argument("--dataset", default=DATASET_DIR, help="Dataset root containing Organic/Metal/Paper folders")
     parser.add_argument("--output-dir", default=OUTPUT_DIR, help="Where to write CSVs and summary files")
     parser.add_argument("--threshold", type=float, default=CONFIDENCE_THRESHOLD, help="Low-confidence cutoff")
     args = parser.parse_args()
@@ -181,8 +172,8 @@ def main() -> int:
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Display class names for the current 6-class head.
-    print("\nCurrent 6-class head:")
+    # Display class names for the current 3-class head.
+    print("\nCurrent 3-class head:")
     for i, name in enumerate(MODEL_CLASSES):
         print(f"  {i}: {name}")
     print("\nStrict eval slice:")

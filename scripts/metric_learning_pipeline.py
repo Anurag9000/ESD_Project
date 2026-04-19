@@ -45,11 +45,11 @@ IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 DEFAULT_BACKBONE_NAME = "convnextv2_tiny"
 DEFAULT_BATCH_SIZE = 240
-TRAINING_CLASS_ORDER = ("clothes", "glass", "metal", "organic", "paper", "plastic")
-TRAINING_CLASS_MAPPING: dict[str, list[str]] = {
-    "plastic": ["hard_plastic", "soft_plastic"],
-}
-TRAINING_EXCLUDED_CLASSES = frozenset({"ewaste"})
+# The repo-wide training taxonomy is now strictly 3 classes.
+# Physical folders stay untouched; all datasets are projected into this order.
+TRAINING_CLASS_ORDER = ("organic", "metal", "paper")
+TRAINING_CLASS_MAPPING: dict[str, list[str]] = {}
+TRAINING_EXCLUDED_CLASSES = frozenset({"clothes", "ewaste", "glass", "hard_plastic", "soft_plastic", "plastic"})
 LEGACY_8_CLASS_TAXONOMY = (
     "clothes",
     "ewaste",
@@ -159,7 +159,7 @@ def enforced_training_class_mapping(custom_mapping: dict[str, list[str]] | None 
 
     Physical dataset folders stay untouched, but every training/evaluation split
     is projected into this logical taxonomy before sampling/model construction:
-    ewaste is excluded and hard/soft plastic become one plastic class.
+    the current repo keeps only the 3 supervised classes organic / metal / paper.
     """
     merged: dict[str, list[str]] = {target: list(sources) for target, sources in TRAINING_CLASS_MAPPING.items()}
     for target, sources in (custom_mapping or {}).items():
@@ -205,8 +205,8 @@ def project_samples_to_training_taxonomy(
             continue
         remapped_names.append(target_name)
 
-    present = set(remapped_names)
-    new_classes = [class_name for class_name in TRAINING_CLASS_ORDER if class_name in present]
+    # Keep a fixed head size even when a split is missing one of the classes.
+    new_classes = list(TRAINING_CLASS_ORDER)
     new_class_to_idx = {class_name: index for index, class_name in enumerate(new_classes)}
 
     new_samples: list[tuple[str, int]] = []
@@ -4256,8 +4256,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--precision", choices=("mixed", "32", "64"), default="mixed")
     parser.add_argument("--adam-beta1", type=float, default=0.9)
     parser.add_argument("--adam-beta2", type=float, default=0.999)
-    # label_smoothing=0.1 is mandatory for the imbalanced 6-class logical setup.
-    # ewaste is excluded, and hard_plastic/soft_plastic are trained as one plastic head.
+    # label_smoothing remains enabled for the imbalanced 3-class logical setup.
+    # The repo projects every physical dataset into organic / metal / paper.
     parser.add_argument("--label-smoothing", type=float, default=0.1)
     parser.add_argument("--confidence-gap-penalty-weight", type=float, default=0.0)
     parser.add_argument("--class-loss-weight", action="append", default=[])
@@ -4338,7 +4338,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help=(
             "Optional extra JSON training-time class merging. The repo always enforces "
-            "ewaste exclusion and hard_plastic+soft_plastic -> plastic before this is applied."
+            "The repo always enforces the 3-class logical taxonomy (organic, metal, paper) before this is applied."
         ),
     )
     parser.add_argument("--auto-split-ratios", default="0.7,0.2,0.1")
@@ -4388,9 +4388,9 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--confidence-threshold", type=float, default=0.80)
-    parser.add_argument("--supcon-early-stopping-patience", type=int, default=1)
-    parser.add_argument("--head-early-stopping-patience", type=int, default=1)
-    parser.add_argument("--stage-early-stopping-patience", type=int, default=1)
+    parser.add_argument("--supcon-early-stopping-patience", type=int, default=3)
+    parser.add_argument("--head-early-stopping-patience", type=int, default=3)
+    parser.add_argument("--stage-early-stopping-patience", type=int, default=3)
     parser.add_argument("--early-stopping-min-delta", type=float, default=0.0)
     parser.add_argument("--warmup-epochs", type=int, default=0)
     parser.add_argument("--warmup-steps", type=int, default=1024)

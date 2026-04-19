@@ -21,10 +21,13 @@ from tqdm import tqdm
 from metric_learning_pipeline import (
     DEFAULT_BACKBONE_NAME,
     MetricLearningEfficientNetB0,
+    TRAINING_CLASS_ORDER,
+    adapt_checkpoint_state_dict_to_training_taxonomy,
     compute_classification_metrics,
     compute_correct_confidence_by_class,
     evaluation_tensor_from_image,
     model_dtype_for_args,
+    project_samples_to_training_taxonomy,
     save_classification_report_csv,
     save_confidence_histogram,
     save_confusion_matrix_csv,
@@ -34,21 +37,12 @@ from metric_learning_pipeline import (
 )
 
 
-RAW_8_CLASS_ORDER = (
-    "clothes",
-    "ewaste",
-    "glass",
-    "hard_plastic",
-    "metal",
-    "organic",
-    "paper",
-    "soft_plastic",
-)
+TARGET_CLASS_ORDER = list(TRAINING_CLASS_ORDER)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Audit the entire Dataset_Final root using the raw 8-class taxonomy.")
-    parser.add_argument("--checkpoint", required=True, help="Path to an 8-class checkpoint.")
+    parser = argparse.ArgumentParser(description="Audit the entire Dataset_Final root using the current 3-class taxonomy.")
+    parser.add_argument("--checkpoint", required=True, help="Path to a checkpoint compatible with the 3-class taxonomy.")
     parser.add_argument("--dataset-root", default="Dataset_Final")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--batch-size", type=int, default=240)
@@ -135,11 +129,14 @@ def collate(batch):
 
 def build_raw_splits(dataset_root: Path, ratios: tuple[float, float, float], seed: int) -> tuple[list[SplitSpec], dict[str, Any]]:
     dataset = datasets.ImageFolder(str(dataset_root))
-    if list(dataset.classes) != list(RAW_8_CLASS_ORDER):
-        raise ValueError(
-            "Dataset_Final is not in the expected raw 8-class folder order. "
-            f"Found {dataset.classes}, expected {list(RAW_8_CLASS_ORDER)}."
-        )
+    projected_classes, projected_class_to_idx, projected_samples, taxonomy = project_samples_to_training_taxonomy(
+        list(dataset.classes),
+        list(dataset.samples),
+        class_mapping=None,
+    )
+    dataset.classes = projected_classes
+    dataset.class_to_idx = projected_class_to_idx
+    dataset.samples = projected_samples
 
     by_class: dict[int, dict[str, list[tuple[str, int]]]] = {index: {} for index in range(len(dataset.classes))}
     for path, target in dataset.samples:
@@ -168,7 +165,7 @@ def build_raw_splits(dataset_root: Path, ratios: tuple[float, float, float], see
 
     manifest = {
         "dataset_root": str(dataset_root),
-        "taxonomy": list(RAW_8_CLASS_ORDER),
+        "taxonomy": list(TARGET_CLASS_ORDER),
         "split_mode": "source_stratified_within_class",
         "seed": int(seed),
         "split_ratios": {"train": ratios[0], "val": ratios[1], "test": ratios[2]},
@@ -210,9 +207,18 @@ def main() -> int:
     manifest["checkpoint"] = str(checkpoint_path)
     save_json(output_dir / "dataset_manifest.json", manifest)
 
-    class_names = list(checkpoint.get("class_names") or RAW_8_CLASS_ORDER)
-    if len(class_names) != len(RAW_8_CLASS_ORDER):
-        raise ValueError(f"Checkpoint must be 8-class, found class_names={class_names}")
+    class_names = list(checkpoint.get("class_names") or TARGET_CLASS_ORDER)
+    if class_names != TARGET_CLASS_ORDER:
+        adapted_state, adaptation = adapt_checkpoint_state_dict_to_training_taxonomy(
+            checkpoint["model_state_dict"],
+            class_names,
+            TARGET_CLASS_ORDER,
+        )
+        checkpoint = dict(checkpoint)
+        checkpoint["model_state_dict"] = adapted_state
+        class_names = TARGET_CLASS_ORDER
+    else:
+        adaptation = {"applied": False, "reason": "already_aligned"}
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = MetricLearningEfficientNetB0(
@@ -356,6 +362,7 @@ def main() -> int:
             "checkpoint": str(checkpoint_path),
             "dataset_root": str(dataset_root),
             "class_names": class_names,
+            "checkpoint_taxonomy_adaptation": adaptation,
             "num_samples": overall_metrics["num_samples"],
             "accuracy": overall_metrics["accuracy"],
             "raw_accuracy": overall_metrics["raw_accuracy"],
