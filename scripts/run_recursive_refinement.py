@@ -10,6 +10,11 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from metric_learning_pipeline import build_parser as build_trainer_parser
+except ModuleNotFoundError:
+    from scripts.metric_learning_pipeline import build_parser as build_trainer_parser
+
+try:
     from finalize_refinement_acceptance import load_checkpoint, metric_value
 except ModuleNotFoundError:
     from scripts.finalize_refinement_acceptance import load_checkpoint, metric_value
@@ -84,6 +89,20 @@ def parse_args() -> argparse.Namespace:
         extra_args = extra_args[1:]
     namespace.extra_args = [*extra_args, *unknown]
     return namespace
+
+
+def validate_forwarded_trainer_args(extra_args: list[str]) -> list[str]:
+    if not extra_args:
+        return []
+    trainer_parser = build_trainer_parser()
+    _, unknown = trainer_parser.parse_known_args(extra_args)
+    if unknown:
+        raise ValueError(
+            "Unsupported recursive pass-through flags: "
+            + " ".join(unknown)
+            + ". These must be added to scripts/metric_learning_pipeline.py first."
+        )
+    return extra_args
 
 
 def state_path(base_output_dir: Path) -> Path:
@@ -218,6 +237,7 @@ def run_training(
     extra_args = list(args.extra_args)
     if extra_args and extra_args[0] == "--":
         extra_args = extra_args[1:]
+    extra_args = validate_forwarded_trainer_args(extra_args)
 
     command = [
         sys.executable,
