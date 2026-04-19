@@ -104,6 +104,10 @@ def build_loader(dataset: Dataset, batch_size: int, num_workers: int) -> DataLoa
     )
 
 
+def normalize_class_name(name: str) -> str:
+    return name.strip().lower().replace(" ", "_").replace("-", "_")
+
+
 def main() -> int:
     args = parse_args()
     checkpoint_path = Path(args.checkpoint)
@@ -122,13 +126,17 @@ def main() -> int:
     dataset = datasets.ImageFolder(str(dataset_root))
     class_names = list(checkpoint["class_names"])
     checkpoint_class_to_idx = {name: idx for idx, name in enumerate(class_names)}
+    normalized_checkpoint_class_to_name = {normalize_class_name(name): name for name in class_names}
     remapped_samples: list[tuple[str, int]] = []
     missing_classes: list[str] = []
+    holdout_class_remap: dict[str, str] = {}
     for path, target in dataset.samples:
-        class_name = dataset.classes[target]
+        holdout_class_name = dataset.classes[target]
+        class_name = normalized_checkpoint_class_to_name.get(normalize_class_name(holdout_class_name), holdout_class_name)
         if class_name not in checkpoint_class_to_idx:
-            missing_classes.append(class_name)
+            missing_classes.append(holdout_class_name)
             continue
+        holdout_class_remap[holdout_class_name] = class_name
         remapped_samples.append((path, checkpoint_class_to_idx[class_name]))
     if missing_classes and not args.class_mapping and not args.selected_class:
         raise ValueError(
@@ -158,6 +166,7 @@ def main() -> int:
         "other_label": args.other_label,
         "source_class_names": class_names,
         "holdout_classes": list(dataset.classes),
+        "holdout_class_remap": holdout_class_remap,
     }
     save_json(output_dir / "holdout_manifest.json", manifest)
 
