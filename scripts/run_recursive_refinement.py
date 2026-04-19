@@ -348,6 +348,8 @@ def evaluate_iteration(iteration_dir: Path, dataset_root: str, batch_size: int, 
             "recursive_refinement",
             "--phase-name",
             phase_name,
+            "--splits",
+            "val",
         ],
         check=True,
     )

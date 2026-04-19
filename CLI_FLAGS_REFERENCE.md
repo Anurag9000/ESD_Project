@@ -230,6 +230,7 @@ These are not `argparse` flags, but they control the shell wrappers and the acti
 | `LOG_ROOT` | `logs/convnextv2_nano_all_classes_<RUN_STAMP>` in `run_training.sh`, `logs/convnextv2_nano_master_run` in `run_full_training_pipeline.sh` | Log root for JSONL/CSV artifacts. |
 | `DATASET_ROOT` | `Dataset_Final` | Corpus root used by both wrappers. |
 | `INITIAL_CHECKPOINT` | defaults to `$RUN_ROOT/progressive/best.pt` in `run_full_training_pipeline.sh` | Seed checkpoint for the recursive refinement stages. |
+| `RECURSIVE_ACCEPTANCE_MIN_DELTA` | `0.0` | Minimum improvement required to accept a recursive candidate in `run_full_training_pipeline.sh`. |
 | `PYTORCH_CUDA_ALLOC_CONF` | `expandable_segments:True` when unset | CUDA allocator setting injected by the wrappers for safer memory behavior. |
 
 ## Wrapper Behavior That Overrides CLI Inputs
@@ -239,4 +240,4 @@ These are not `argparse` flags, but they control the shell wrappers and the acti
 - `run_training.sh` auto-resumes from `step_last.pt` first, then `last.pt`.
 - `run_full_training_pipeline.sh` ignores user-supplied `--dataset-root`, `--batch-size`, `--output-dir`, `--log-file`, `--resume-checkpoint`, `--resume-mode`, `--resume-phase-index`, `--classifier-train-mode`, `--classifier-early-stopping-metric`, `--head-lr`, `--backbone-lr`, `--stage-early-stopping-patience`, and `--optimizer`.
 - `scripts/run_recursive_refinement.py` validates pass-through trainer flags against the main trainer parser and raises on unsupported options instead of silently ignoring them.
-- `run_full_training_pipeline.sh` hardcodes the recursive refinement recipe to `batch-size 224`, `patience 1`, `resume-phase-index 1`, `optimizer adamw`, `sampling-strategy balanced`, `skip-supcon`, `classifier-train-mode progressive`, and `ce-max-unfreeze-modules 40` for both recursive passes.
+- `run_full_training_pipeline.sh` hardcodes the recursive refinement recipe to `batch-size 224`, `patience 1`, `resume-phase-index 1`, `optimizer adamw`, `sampling-strategy balanced`, `skip-supcon`, `classifier-train-mode progressive`, and `ce-max-unfreeze-modules 40` for both recursive passes. Recursive candidate scoring evaluates only the validation split; the test split is reserved for the final test bundle.

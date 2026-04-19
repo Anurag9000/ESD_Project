@@ -1522,11 +1522,13 @@ def set_trainability_for_supcon(
             param.requires_grad = True
 
     if unfrozen_backbone_modules <= 0:
+        assert_backbone_trainability_boundary(backbone_modules, 0, context="supcon")
         return []
     thawed = backbone_modules[-unfrozen_backbone_modules:]
     for _, module in thawed:
         for parameter in module.parameters(recurse=True):
             parameter.requires_grad = True
+    assert_backbone_trainability_boundary(backbone_modules, unfrozen_backbone_modules, context="supcon")
     return [name for name, _ in thawed]
 
 
@@ -1550,12 +1552,39 @@ def set_trainability_for_classifier(
             param.requires_grad = True
 
     if unfrozen_backbone_modules <= 0:
+        assert_backbone_trainability_boundary(backbone_modules, 0, context="classifier")
         return []
     thawed = backbone_modules[-unfrozen_backbone_modules:]
     for _, module in thawed:
         for parameter in module.parameters(recurse=True):
             parameter.requires_grad = True
+    assert_backbone_trainability_boundary(backbone_modules, unfrozen_backbone_modules, context="classifier")
     return [name for name, _ in thawed]
+
+
+def assert_backbone_trainability_boundary(
+    backbone_modules: list[tuple[str, nn.Module]],
+    unfrozen_backbone_modules: int,
+    *,
+    context: str,
+) -> None:
+    effective_unfrozen = min(max(0, int(unfrozen_backbone_modules)), len(backbone_modules))
+    trainable_start = len(backbone_modules) - effective_unfrozen
+    for index, (name, module) in enumerate(backbone_modules):
+        params = list(module.parameters(recurse=False))
+        if not params:
+            continue
+        is_tail_module = index >= trainable_start
+        has_trainable_param = any(parameter.requires_grad for parameter in params)
+        has_frozen_param = any(not parameter.requires_grad for parameter in params)
+        if is_tail_module and has_frozen_param:
+            raise RuntimeError(
+                f"{context} freeze-boundary violation: expected tail module {name} to be trainable."
+            )
+        if not is_tail_module and has_trainable_param:
+            raise RuntimeError(
+                f"{context} freeze-boundary violation: expected core module {name} to stay frozen."
+            )
 
 
 def freeze_frozen_batchnorms(backbone_modules: list[tuple[str, nn.Module]]) -> None:

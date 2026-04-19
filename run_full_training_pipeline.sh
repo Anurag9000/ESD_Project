@@ -13,6 +13,7 @@ RUN_ROOT="${RUN_ROOT:-Results/convnextv2_nano_master_run}"
 LOG_ROOT="${LOG_ROOT:-logs/convnextv2_nano_master_run}"
 DATASET_ROOT="${DATASET_ROOT:-Dataset_Final}"
 INITIAL_CHECKPOINT="${INITIAL_CHECKPOINT:-$RUN_ROOT/progressive/best.pt}"
+RECURSIVE_ACCEPTANCE_MIN_DELTA="${RECURSIVE_ACCEPTANCE_MIN_DELTA:-0.0}"
 
 if [[ -z "$INITIAL_CHECKPOINT" ]]; then
   echo "INITIAL_CHECKPOINT must point to the progressive best checkpoint." >&2
@@ -62,7 +63,7 @@ python scripts/run_recursive_refinement.py \
   --base-log-file "$LOSS_LOG_FILE" \
   --initial-checkpoint "$LOSS_BASE_CHECKPOINT" \
   --metric val_loss \
-  --threshold 0.0001 \
+  --threshold "$RECURSIVE_ACCEPTANCE_MIN_DELTA" \
   --initial-head-lr 1e-4 \
   --initial-backbone-lr 5e-5 \
   --dataset-root "$DATASET_ROOT" \
@@ -105,7 +106,7 @@ python scripts/run_recursive_refinement.py \
   --base-log-file "$RAWACC_LOG_FILE" \
   --initial-checkpoint "$RAWACC_BASE_CHECKPOINT" \
   --metric val_raw_acc \
-  --threshold 0.0001 \
+  --threshold "$RECURSIVE_ACCEPTANCE_MIN_DELTA" \
   --initial-head-lr "$RAWACC_HEAD_LR" \
   --initial-backbone-lr "$RAWACC_BACKBONE_LR" \
   --dataset-root "$DATASET_ROOT" \
