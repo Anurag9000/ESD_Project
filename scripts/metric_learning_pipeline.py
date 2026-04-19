@@ -43,7 +43,7 @@ except ImportError:  # pragma: no cover - surfaced explicitly when backbone crea
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
-DEFAULT_BACKBONE_NAME = "convnextv2_nano"
+DEFAULT_BACKBONE_NAME = "convnextv2_tiny"
 DEFAULT_BATCH_SIZE = 240
 TRAINING_CLASS_ORDER = ("clothes", "glass", "metal", "organic", "paper", "plastic")
 TRAINING_CLASS_MAPPING: dict[str, list[str]] = {
@@ -122,14 +122,22 @@ def ensure_timm_available() -> None:
 
 def create_backbone(backbone_name: str, weights_mode: str) -> nn.Module:
     ensure_timm_available()
-    if backbone_name not in BACKBONE_REGISTRY:
-        raise ValueError(
-            f"Unknown backbone {backbone_name!r}. Available options: {sorted(BACKBONE_REGISTRY)}"
-        )
-    spec = BACKBONE_REGISTRY[backbone_name]
     pretrained = weights_mode == "default"
-    model_name = spec.pretrained_name if pretrained else spec.scratch_name
-    return timm.create_model(model_name, pretrained=pretrained, num_classes=0)
+    spec = BACKBONE_REGISTRY.get(backbone_name)
+    if spec is not None:
+        model_name = spec.pretrained_name if pretrained else spec.scratch_name
+        try:
+            return timm.create_model(model_name, pretrained=pretrained, num_classes=0)
+        except Exception:
+            if pretrained:
+                return timm.create_model(spec.scratch_name, pretrained=False, num_classes=0)
+            raise
+    try:
+        return timm.create_model(backbone_name, pretrained=pretrained, num_classes=0)
+    except Exception:
+        if pretrained:
+            return timm.create_model(backbone_name, pretrained=False, num_classes=0)
+        raise
 
 
 def parse_json_class_mapping(spec: str | None) -> dict[str, list[str]]:
@@ -1035,7 +1043,17 @@ class MetricLearningEfficientNetB0(nn.Module):
         backbone = create_backbone(self.backbone_name, weights_mode)
         self.front_end = nn.Identity()
         self.backbone = backbone
-        self.in_features = int(getattr(backbone, "num_features"))
+        self.in_features = int(getattr(backbone, "num_features", 0) or 0)
+        if self.in_features <= 0:
+            image_size = int(getattr(args, "image_size", 224))
+            with torch.no_grad():
+                dummy = torch.zeros(1, 3, image_size, image_size)
+                features = self.backbone.forward_features(dummy) if hasattr(self.backbone, "forward_features") else self.backbone(dummy)
+                if isinstance(features, (list, tuple)):
+                    features = features[-1]
+                if features.ndim == 4:
+                    features = F.adaptive_avg_pool2d(features, 1)
+                self.in_features = int(torch.flatten(features, 1).shape[1])
         self.dropout_p = float(getattr(backbone, "drop_rate", 0.0) or 0.0)
         self.gradient_checkpointing = True
         if self.gradient_checkpointing and hasattr(self.backbone, "set_grad_checkpointing"):
@@ -4106,6 +4124,23 @@ def checkpoint_state_for_mode(resume_checkpoint: dict[str, Any], resume_mode: st
     return resume_checkpoint["model_state_dict"]
 
 
+def extract_state_dict_from_checkpoint(candidate: Any) -> dict[str, torch.Tensor]:
+    """Extract a tensor-only state_dict from a checkpoint-like object.
+
+    The Phase 0 MIM stage stores either a raw encoder state_dict or a wrapper
+    checkpoint containing `encoder_state_dict`. The main trainer only needs the
+    tensor map, so this helper normalizes both forms.
+    """
+    if isinstance(candidate, dict):
+        for key in ("encoder_state_dict", "backbone_state_dict", "model_state_dict"):
+            value = candidate.get(key)
+            if isinstance(value, dict):
+                return value
+        if candidate and all(torch.is_tensor(value) for value in candidate.values()):
+            return candidate  # raw state_dict
+    raise ValueError("Could not extract a tensor-only state_dict from the supplied checkpoint.")
+
+
 def resolve_phase_start_index(
     args: argparse.Namespace,
     phases: list[PhaseSpec],
@@ -4216,7 +4251,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--head-lr", type=float, default=1e-3)
     parser.add_argument("--backbone-lr", type=float, default=1e-5)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
-    parser.add_argument("--backbone", choices=sorted(BACKBONE_REGISTRY), default=DEFAULT_BACKBONE_NAME)
+    parser.add_argument("--backbone", default=DEFAULT_BACKBONE_NAME)
     parser.add_argument("--optimizer", choices=["sam", "adamw"], default="adamw")
     parser.add_argument("--precision", choices=("mixed", "32", "64"), default="mixed")
     parser.add_argument("--adam-beta1", type=float, default=0.9)
@@ -4260,6 +4295,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Legacy alias: disable class balancing and use shuffled source-order sampling.",
     )
     parser.add_argument("--weights", choices=("default", "none"), default="default")
+    parser.add_argument(
+        "--phase0-encoder-checkpoint",
+        default="",
+        help=(
+            "Optional Phase 0 masked-image-modeling encoder checkpoint. "
+            "When set and no resume checkpoint is active, the backbone is seeded "
+            "from this encoder state before SupCon/CE training begins."
+        ),
+    )
     parser.add_argument("--augment-repeats", type=int, default=16)
     parser.add_argument("--augment-gaussian-sigmas", type=float, default=0.5)
     # SupCon and CE both respect the same permanent frozen-core boundary by default.
@@ -4270,8 +4314,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=40,
         help=(
             "Number of earliest backbone leaf modules that stay frozen in every SupCon, CE, "
-            "and recursive phase. Default=40; for convnextv2_nano this leaves 39 of 79 "
-            "backbone leaf modules eligible for training."
+            "and recursive phase. Default=40; this always preserves the earliest backbone leaves "
+            "and only opens the semantic tail for training."
         ),
     )
     parser.add_argument("--supcon-unfreeze-backbone-modules", type=int, default=None)
@@ -4680,9 +4724,23 @@ def run_experiment(args: argparse.Namespace) -> int:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_dtype = model_dtype_for_args(args)
+    effective_weights_mode = args.weights
+    if resume_checkpoint is None and getattr(args, "phase0_encoder_checkpoint", ""):
+        # Phase 1+ must start from the exported Phase 0 encoder, not from a timm
+        # pretrained checkpoint that would then be overwritten.
+        effective_weights_mode = "none"
+        log_json_event(
+            log_path,
+            {
+                "event": "phase0_encoder_checkpoint_forced_scratch_init",
+                "phase0_encoder_checkpoint": str(args.phase0_encoder_checkpoint),
+                "backbone_name": args.backbone,
+                "weights_mode": args.weights,
+            },
+        )
     model = MetricLearningEfficientNetB0(
         num_classes=len(train_dataset.classes),
-        weights_mode=args.weights,
+        weights_mode=effective_weights_mode,
         embedding_dim=args.embedding_dim,
         projection_dim=args.projection_dim,
         args=args,
@@ -4710,6 +4768,24 @@ def run_experiment(args: argparse.Namespace) -> int:
                 },
             )
         model.load_state_dict(resume_state_dict)
+    elif getattr(args, "phase0_encoder_checkpoint", ""):
+        phase0_path = Path(str(args.phase0_encoder_checkpoint))
+        if not phase0_path.exists():
+            raise FileNotFoundError(f"Phase 0 encoder checkpoint does not exist: {phase0_path}")
+        phase0_checkpoint = load_resume_checkpoint(phase0_path)[0]
+        if phase0_checkpoint is None:
+            raise ValueError(f"Could not load Phase 0 encoder checkpoint: {phase0_path}")
+        phase0_state_dict = extract_state_dict_from_checkpoint(phase0_checkpoint)
+        model.backbone.load_state_dict(phase0_state_dict, strict=True)
+        log_json_event(
+            log_path,
+            {
+                "event": "phase0_encoder_checkpoint_loaded",
+                "phase0_encoder_checkpoint": str(phase0_path),
+                "backbone_name": args.backbone,
+                "weights_mode": args.weights,
+            },
+        )
     backbone_modules = backbone_leaf_modules(model)
     train_progress = (
         dict(resume_checkpoint.get("train_progress", {}))

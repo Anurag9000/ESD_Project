@@ -55,7 +55,7 @@ The pipeline follows the research-validated principle: **Contrastive representat
 ### Stage 3 — SupCon Full Tail After Frozen Core
 | Parameter            | Value  |
 | :------------------- | :----- |
-| **Trainable:**       | Tail after the frozen core; for default `convnextv2_nano`, top 39 leaf modules (79 total - 40 frozen core) + SupCon head |
+| **Trainable:**       | Tail after the frozen core; for default `convnextv2_tiny`, top 39 leaf modules (79 total - 40 frozen core) + SupCon head |
 | **Frozen forever:**  | First 40 leaf modules (stem, early stages: edges, textures, patterns) remain frozen in the default backbone |
 | **Loss:**            | Supervised Contrastive (SupCon) |
 | **Head LR:**         | `3e-3` |
@@ -88,7 +88,7 @@ The pipeline follows the research-validated principle: **Contrastive representat
 ### Stage 6 — CE Full Tail After Frozen Core
 | Parameter            | Value  |
 | :------------------- | :----- |
-| **Trainable:**       | Tail after the frozen core; for default `convnextv2_nano`, top 39 semantic leaf modules + CE head |
+| **Trainable:**       | Tail after the frozen core; for default `convnextv2_tiny`, top 39 semantic leaf modules + CE head |
 | **Loss:**            | Cross-Entropy |
 | **Head LR:**         | `1e-5` |
 | **Backbone LR:**     | `1e-5` |
@@ -143,7 +143,7 @@ The pipeline follows the research-validated principle: **Contrastive representat
 | Phase-end visual audit | `visualizations/<phase_label>/...` | `Results/<run>/progressive/phases/<phase_name>/` |
 | Final protected test report | `confmat_counts_test.csv`, `confmat_rate_pct_test.csv`, `classification_report_test.csv`, `test_confusion_matrix.png`, `test_reliability_diagram.png`, `test_confidence_histogram.png`, `summary.json` | `Results/<run>/final_test_evaluation/` |
 
-Resume is fully automatic: re-running `./run_training.sh --backbone convnextv2_nano --num-workers 2 --prefetch-factor 1` detects the most recent run stamp and injects `--resume-checkpoint step_last.pt` automatically.
+Resume is fully automatic: re-running `./run_training.sh --backbone convnextv2_tiny --num-workers 2 --prefetch-factor 1` detects the most recent run stamp and injects `--resume-checkpoint step_last.pt` automatically.
 
 ---
 

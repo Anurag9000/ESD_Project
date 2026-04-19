@@ -9,9 +9,24 @@ source .venv/bin/activate
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 INITIAL_CHECKPOINT="${INITIAL_CHECKPOINT:-}"
-RUN_ROOT="${RUN_ROOT:-Results/convnextv2_nano_master_run}"
-LOG_ROOT="${LOG_ROOT:-logs/convnextv2_nano_master_run}"
 DATASET_ROOT="${DATASET_ROOT:-Dataset_Final}"
+BACKBONE_NAME="${BACKBONE_NAME:-convnextv2_tiny}"
+for ((i = 1; i <= $#; i++)); do
+  arg="${!i}"
+  case "$arg" in
+    --backbone)
+      next_index=$((i + 1))
+      if [[ $next_index -le $# ]]; then
+        BACKBONE_NAME="${!next_index}"
+      fi
+      ;;
+    --backbone=*)
+      BACKBONE_NAME="${arg#*=}"
+      ;;
+  esac
+done
+RUN_ROOT="${RUN_ROOT:-Results/${BACKBONE_NAME}_master_run}"
+LOG_ROOT="${LOG_ROOT:-logs/${BACKBONE_NAME}_master_run}"
 INITIAL_CHECKPOINT="${INITIAL_CHECKPOINT:-$RUN_ROOT/progressive/best.pt}"
 RECURSIVE_ACCEPTANCE_MIN_DELTA="${RECURSIVE_ACCEPTANCE_MIN_DELTA:-0.0}"
 
@@ -40,6 +55,12 @@ for ARG in "$@"; do
       IGNORED_ARGS+=("$ARG")
       SKIP_NEXT=1
       ;;
+    --backbone|--backbone=*)
+      IGNORED_ARGS+=("${ARG%%=*}")
+      if [[ "$ARG" != *=* ]]; then
+        SKIP_NEXT=1
+      fi
+      ;;
     --dataset-root=*|--batch-size=*|--output-dir=*|--log-file=*|--resume-checkpoint=*|--resume-mode=*|--resume-phase-index=*|--classifier-train-mode=*|--classifier-early-stopping-metric=*|--head-lr=*|--backbone-lr=*|--stage-early-stopping-patience=*|--optimizer=*)
       IGNORED_ARGS+=("${ARG%%=*}")
       ;;
@@ -62,6 +83,7 @@ python scripts/run_recursive_refinement.py \
   --base-output-dir "$LOSS_OUTPUT_DIR" \
   --base-log-file "$LOSS_LOG_FILE" \
   --initial-checkpoint "$LOSS_BASE_CHECKPOINT" \
+  --backbone "$BACKBONE_NAME" \
   --metric val_loss \
   --threshold "$RECURSIVE_ACCEPTANCE_MIN_DELTA" \
   --initial-head-lr 1e-4 \
@@ -105,6 +127,7 @@ python scripts/run_recursive_refinement.py \
   --base-output-dir "$RAWACC_OUTPUT_DIR" \
   --base-log-file "$RAWACC_LOG_FILE" \
   --initial-checkpoint "$RAWACC_BASE_CHECKPOINT" \
+  --backbone "$BACKBONE_NAME" \
   --metric val_raw_acc \
   --threshold "$RECURSIVE_ACCEPTANCE_MIN_DELTA" \
   --initial-head-lr "$RAWACC_HEAD_LR" \

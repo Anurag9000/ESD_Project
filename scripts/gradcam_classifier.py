@@ -16,6 +16,7 @@ from PIL import Image
 from torchvision import datasets
 
 from metric_learning_pipeline import (
+    DEFAULT_BACKBONE_NAME,
     MetricLearningEfficientNetB0,
     TRAINING_CLASS_ORDER,
     adapt_checkpoint_state_dict_to_training_taxonomy,
@@ -68,21 +69,6 @@ def load_checkpoint(checkpoint_path: Path) -> tuple[dict[str, Any], argparse.Nam
 
 
 def select_target_module(backbone: torch.nn.Module) -> torch.nn.Module:
-    if hasattr(backbone, "stages"):
-        stages = list(getattr(backbone, "stages"))
-        if stages:
-            last_stage = stages[-1]
-            if hasattr(last_stage, "blocks") and len(getattr(last_stage, "blocks")) > 0:
-                return last_stage.blocks[-1]
-            return last_stage
-    if hasattr(backbone, "blocks"):
-        blocks = list(getattr(backbone, "blocks"))
-        if blocks:
-            return blocks[-1]
-    if hasattr(backbone, "features"):
-        features = getattr(backbone, "features")
-        if isinstance(features, torch.nn.Sequential) and len(features) > 0:
-            return features[-1]
     leaf_modules = [module for module in backbone.modules() if not list(module.children())]
     if not leaf_modules:
         raise ValueError("Could not identify a Grad-CAM target layer.")
@@ -153,7 +139,7 @@ def main() -> int:
     class_names = list(TRAINING_CLASS_ORDER)
     image_size = int(checkpoint_args.get("image_size", 224))
     weights_mode = str(checkpoint_args.get("weights", "default"))
-    backbone_name = str(checkpoint_args.get("backbone", "convnextv2_nano"))
+    backbone_name = str(checkpoint_args.get("backbone", DEFAULT_BACKBONE_NAME))
     embedding_dim = int(checkpoint_args.get("embedding_dim", 128))
     projection_dim = int(checkpoint_args.get("projection_dim", 128))
     precision = str(checkpoint_args.get("precision", "mixed"))

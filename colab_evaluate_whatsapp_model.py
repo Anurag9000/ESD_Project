@@ -157,7 +157,7 @@ def build_model(checkpoint: dict, repo_dir: Path, device):
     from metric_learning_pipeline import MetricLearningEfficientNetB0, model_dtype_for_args
 
     checkpoint_args = dict(checkpoint.get("args") or {})
-    checkpoint_args.setdefault("backbone", "convnextv2_nano")
+    checkpoint_args.setdefault("backbone", "convnextv2_tiny")
     checkpoint_args.setdefault("weights", "none")
     checkpoint_args.setdefault("embedding_dim", 128)
     checkpoint_args.setdefault("projection_dim", 128)

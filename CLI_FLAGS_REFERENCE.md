@@ -26,7 +26,7 @@ Live logs now print pure accuracy plus `per_class_accuracy` and `per_class_avg_c
 | `--head-lr` | `1e-3` | Learning rate for classifier head warmup. |
 | `--backbone-lr` | `1e-5` | Learning rate for classifier backbone phases. |
 | `--weight-decay` | `1e-4` | Optimizer weight decay. |
-| `--backbone` | `convnextv2_nano` | Backbone registry choice. Supported values are the keys in `BACKBONE_REGISTRY`. |
+| `--backbone` | `convnextv2_tiny` | Backbone selection. The trainer accepts any timm backbone name; registered aliases resolve pretrained/scratch defaults cleanly. |
 | `--optimizer` | `adamw` | Optimizer family: `adamw` or `sam`. |
 | `--precision` | `mixed` | Training precision: `mixed`, `32`, or `64`. |
 | `--adam-beta1` | `0.9` | Adam beta1. |
@@ -41,6 +41,7 @@ Live logs now print pure accuracy plus `per_class_accuracy` and `per_class_avg_c
 | `--weighted-sampling` | legacy alias | Sets `--sampling-strategy weighted`. |
 | `--no-weighted-sampling` | legacy alias | Sets `--sampling-strategy shuffle`. |
 | `--weights` | `default` | Use pretrained weights (`default`) or scratch initialization (`none`). |
+| `--phase0-encoder-checkpoint` | `""` | Optional Phase 0 masked-image-modeling encoder checkpoint to seed the backbone before SupCon/CE starts. |
 | `--augment-repeats` | `16` | Deterministic augmentation variants per source image. |
 | `--augment-gaussian-sigmas` | `0.5` | Stochastic augmentation sigma scale. |
 | `--frozen-core-backbone-modules` | `40` | Number of earliest backbone leaf modules kept frozen in every SupCon, CE, and recursive phase. Default freezes the stem/core 40 modules. |
@@ -83,8 +84,36 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 
 | Setting | Default used by wrapper | What it does |
 | --- | --- | --- |
-| `output_dir` | `Results/convnextv2_nano_progressive_six_classes` | Output root for the progressive pretraining run. |
-| `log_file` | `logs/convnextv2_nano_progressive_six_classes.log.jsonl` | Log file for the progressive pretraining run. |
+| `output_dir` | `Results/<backbone>_progressive_six_classes` | Output root for the progressive pretraining run when not set explicitly. |
+| `log_file` | `logs/<backbone>_progressive_six_classes.log.jsonl` | Log file for the progressive pretraining run when not set explicitly. |
+
+## Phase 0 MIM Launcher: `scripts/train_phase0_mim.py`
+
+| Flag | Default | What it does |
+| --- | --- | --- |
+| `--dataset-root` | `Dataset_Final` | Dataset root used to build the clean train split. |
+| `--output-dir` | `Results/phase0_mim` | Phase 0 checkpoint output root. |
+| `--log-file` | `logs/phase0_mim.log.jsonl` | Structured Phase 0 JSONL log. |
+| `--backbone` | `convnextv2_tiny` | Backbone selection used for the encoder. Any timm backbone string is accepted. |
+| `--weights` | `default` | For Phase 0, `default` means use the pure `.fcmae` backbone weights; `none` means scratch init. |
+| `--image-size` | `224` | Input resolution for masking and reconstruction. |
+| `--augment-repeats` | `16` | Passed through to the repo dataset builder for split construction. |
+| `--augment-gaussian-sigmas` | `0.5` | Passed through to the repo dataset builder for split construction. |
+| `--class-mapping` | `""` | Optional JSON merge map passed to the repo dataset builder. |
+| `--auto-split-ratios` | `0.7,0.2,0.1` | Auto-split ratios when the dataset root has no explicit train/val/test layout. |
+| `--runtime-bad-sample-cleanup` | `false` | Mirror the main trainer's runtime bad-sample cleanup behavior. |
+| `--batch-size` | `8` | Micro-batch size for Phase 0 masking reconstruction. |
+| `--num-workers` | `2` | DataLoader worker count. |
+| `--prefetch-factor` | `1` | Prefetch depth per worker. |
+| `--epochs` | `20` | Phase 0 training epochs. |
+| `--grad-accum-steps` | `8` | Gradient accumulation factor. |
+| `--mask-ratio` | `0.6` | Fraction of patches masked before reconstruction. |
+| `--patch-size` | `32` | Patch size used by the spatial mask generator. |
+| `--decoder-dim` | `512` | Hidden width of the reconstruction decoder. |
+| `--learning-rate` | `1.5e-4` | AdamW learning rate for Phase 0. |
+| `--weight-decay` | `0.05` | AdamW weight decay for Phase 0. |
+| `--seed` | `42` | RNG seed. |
+| `--resume-checkpoint` | `""` | Optional Phase 0 checkpoint to resume from. |
 
 ## Recursive Refinement: `scripts/run_recursive_refinement.py`
 
@@ -93,7 +122,7 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--base-output-dir` | required | Root output directory for recursive refinement. |
 | `--base-log-file` | required | JSONL log file for recursive refinement. |
 | `--initial-checkpoint` | required | Seed checkpoint for the first refinement pass. |
-| `--backbone` | `convnextv2_nano` | Backbone name forwarded to the recursive trainer. |
+| `--backbone` | `convnextv2_tiny` | Backbone name forwarded to the recursive trainer. Any timm backbone string is accepted. |
 | `--weights` | `default` | Pretrained-weight mode forwarded to the recursive trainer. |
 | `--metric` | required | Accept/reject metric: `val_loss` or `val_raw_acc`. |
 | `--threshold` | required | Stop threshold for recursive refinement. |
@@ -227,8 +256,8 @@ These are not `argparse` flags, but they control the shell wrappers and the acti
 | Knob | Default | What it does |
 | --- | --- | --- |
 | `RUN_STAMP` | auto-generated current timestamp | Run identity used by the wrappers. Reuse the same value to resume the same run tree. |
-| `RUN_ROOT` | `Results/convnextv2_nano_six_classes_<RUN_STAMP>` in `run_training.sh`, `Results/convnextv2_nano_master_run` in `run_full_training_pipeline.sh` | Output root for checkpoints and artifacts. |
-| `LOG_ROOT` | `logs/convnextv2_nano_six_classes_<RUN_STAMP>` in `run_training.sh`, `logs/convnextv2_nano_master_run` in `run_full_training_pipeline.sh` | Log root for JSONL/CSV artifacts. |
+| `RUN_ROOT` | `Results/<backbone>_six_classes_<RUN_STAMP>` in `run_training.sh`, `Results/<backbone>_master_run` in `run_full_training_pipeline.sh` | Output root for checkpoints and artifacts. |
+| `LOG_ROOT` | `logs/<backbone>_six_classes_<RUN_STAMP>` in `run_training.sh`, `logs/<backbone>_master_run` in `run_full_training_pipeline.sh` | Log root for JSONL/CSV artifacts. |
 | `DATASET_ROOT` | `Dataset_Final` | Corpus root used by both wrappers. |
 | `INITIAL_CHECKPOINT` | defaults to `$RUN_ROOT/progressive/best.pt` in `run_full_training_pipeline.sh` | Seed checkpoint for the recursive refinement stages. |
 | `RECURSIVE_ACCEPTANCE_MIN_DELTA` | `0.0` | Minimum improvement required to accept a recursive candidate in `run_full_training_pipeline.sh`. |
@@ -238,6 +267,7 @@ These are not `argparse` flags, but they control the shell wrappers and the acti
 
 - `run_training.sh` ignores user-supplied `--dataset-root`, `--batch-size`, `--output-dir`, and `--log-file` because those are wrapper-managed.
 - `run_training.sh` always injects `--dataset-root "$DATASET_ROOT"` and `--sampling-strategy balanced` into the progressive trainer.
+- `run_training.sh` supports optional Phase 0 MIM pretraining via `--phase0-mim` plus `--phase0-mim-*` controls; when enabled it exports `phase0_mim/phase0_encoder_final.pth` and passes it into the progressive trainer via `--phase0-encoder-checkpoint`.
 - `run_training.sh` auto-resumes from `step_last.pt` first, then `last.pt`.
 - `run_full_training_pipeline.sh` ignores user-supplied `--dataset-root`, `--batch-size`, `--output-dir`, `--log-file`, `--resume-checkpoint`, `--resume-mode`, `--resume-phase-index`, `--classifier-train-mode`, `--classifier-early-stopping-metric`, `--head-lr`, `--backbone-lr`, `--stage-early-stopping-patience`, and `--optimizer`.
 - `scripts/run_recursive_refinement.py` validates pass-through trainer flags against the main trainer parser and raises on unsupported options instead of silently ignoring them.

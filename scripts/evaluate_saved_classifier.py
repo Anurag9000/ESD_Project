@@ -11,6 +11,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from metric_learning_pipeline import (
+    DEFAULT_BACKBONE_NAME,
     MetricLearningEfficientNetB0,
     adapt_checkpoint_state_dict_to_training_taxonomy,
     build_datasets,
@@ -69,7 +70,7 @@ def make_eval_args(checkpoint_args: dict[str, Any], cli_args: argparse.Namespace
     merged.setdefault("seed", 42)
     merged.setdefault("auto_split_ratios", "0.7,0.2,0.1")
     merged.setdefault("weights", "default")
-    merged.setdefault("backbone", "convnextv2_nano")
+    merged.setdefault("backbone", DEFAULT_BACKBONE_NAME)
     merged.setdefault("embedding_dim", 128)
     merged.setdefault("projection_dim", 128)
     merged.setdefault("precision", "mixed")
@@ -145,7 +146,7 @@ def main() -> int:
         embedding_dim=int(eval_args.embedding_dim),
         projection_dim=int(eval_args.projection_dim),
         args=eval_args,
-        backbone_name=str(getattr(eval_args, "backbone", "convnextv2_nano")),
+        backbone_name=str(getattr(eval_args, "backbone", DEFAULT_BACKBONE_NAME)),
     ).to(device=device, dtype=model_dtype_for_args(eval_args))
     model_state_dict = checkpoint["model_state_dict"]
     if source_class_names != class_names:

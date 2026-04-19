@@ -14,7 +14,7 @@ Outputs per split (written to --output-dir):
 
 Usage (from repo root, venv activated):
     python scripts/eval_splits_no_aug.py \\
-        --checkpoint Results/convnextv2_nano_master_run/loss_cleanup/best.pt \\
+        --checkpoint Results/<run>/loss_cleanup/best.pt \\
         --dataset-root Dataset_Final \\
         --batch-size 240
 """
@@ -46,6 +46,7 @@ warnings.filterwarnings(
 
 try:
     from metric_learning_pipeline import (
+        DEFAULT_BACKBONE_NAME,
         MetricLearningEfficientNetB0,
         adapt_checkpoint_state_dict_to_training_taxonomy,
         evaluation_tensor_from_image,
@@ -62,6 +63,7 @@ except ModuleNotFoundError:
     import sys
     sys.path.insert(0, str(Path(__file__).parent))
     from metric_learning_pipeline import (
+        DEFAULT_BACKBONE_NAME,
         MetricLearningEfficientNetB0,
         adapt_checkpoint_state_dict_to_training_taxonomy,
         evaluation_tensor_from_image,
@@ -445,7 +447,7 @@ def main() -> int:
         embedding_dim=embedding_dim,
         projection_dim=projection_dim,
         args=model_args,
-        backbone_name=str(ckpt_args.get("backbone", "convnextv2_nano")),
+        backbone_name=str(ckpt_args.get("backbone", DEFAULT_BACKBONE_NAME)),
     ).to(device=device, dtype=model_dtype)
     model_state_dict = ckpt["model_state_dict"]
     if source_class_names != runtime_class_names:

@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from metric_learning_pipeline import build_parser as build_trainer_parser
+    from metric_learning_pipeline import DEFAULT_BACKBONE_NAME, build_parser as build_trainer_parser
 except ModuleNotFoundError:
-    from scripts.metric_learning_pipeline import build_parser as build_trainer_parser
+    from scripts.metric_learning_pipeline import DEFAULT_BACKBONE_NAME, build_parser as build_trainer_parser
 
 try:
     from finalize_refinement_acceptance import load_checkpoint, metric_value
@@ -65,7 +65,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base-output-dir", required=True)
     parser.add_argument("--base-log-file", required=True)
     parser.add_argument("--initial-checkpoint", required=True)
-    parser.add_argument("--backbone", default="convnextv2_nano")
+    parser.add_argument("--backbone", default=DEFAULT_BACKBONE_NAME)
     parser.add_argument("--weights", default="default")
     parser.add_argument("--metric", choices=("val_loss", "val_raw_acc"), required=True)
     parser.add_argument("--threshold", type=float, required=True)

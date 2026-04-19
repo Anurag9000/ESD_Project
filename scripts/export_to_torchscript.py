@@ -4,6 +4,7 @@ exports the `best.pt` checkpoint to a fully standalone TorchScript model (`best_
 This model does not require the original source code or class definitions to be imported.
 """
 
+import os
 import torch
 import argparse
 import sys
@@ -12,6 +13,7 @@ from pathlib import Path
 # Add project root to path so we can import the pipeline
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from scripts.metric_learning_pipeline import (
+    DEFAULT_BACKBONE_NAME,
     MetricLearningEfficientNetB0,
     TRAINING_CLASS_ORDER,
     adapt_checkpoint_state_dict_to_training_taxonomy,
@@ -34,7 +36,7 @@ class InferenceESDModel(torch.nn.Module):
         return self.model.classify(emb)
 
 def main():
-    ckpt_path = Path("Results/convnextv2_nano_master_run/loss_cleanup/best.pt")
+    ckpt_path = Path(os.getenv("CHECKPOINT_PATH", "Results/metric_learning_experiment/loss_cleanup/best.pt"))
     if not ckpt_path.exists():
         print(f"Error: Could not find {ckpt_path}", file=sys.stderr)
         return 1
@@ -52,7 +54,7 @@ def main():
     
     model_args = argparse.Namespace(
         precision=ckpt_args.get("precision", "mixed"),
-        backbone=ckpt_args.get("backbone", "convnextv2_nano"),
+        backbone=ckpt_args.get("backbone", DEFAULT_BACKBONE_NAME),
     )
     
     print("Instantiating original custom architecture...")
@@ -62,7 +64,7 @@ def main():
         embedding_dim=embedding_dim,
         projection_dim=projection_dim,
         args=model_args,
-        backbone_name=str(ckpt_args.get("backbone", "convnextv2_nano")),
+        backbone_name=str(ckpt_args.get("backbone", DEFAULT_BACKBONE_NAME)),
     )
     
     # Load weights
