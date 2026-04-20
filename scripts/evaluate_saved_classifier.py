@@ -68,7 +68,7 @@ def make_eval_args(checkpoint_args: dict[str, Any], cli_args: argparse.Namespace
     merged.setdefault("augment_gaussian_sigmas", 2.0)
     merged.setdefault("image_size", 224)
     merged.setdefault("seed", 42)
-    merged.setdefault("auto_split_ratios", "0.7,0.2,0.1")
+    merged.setdefault("auto_split_ratios", "0.9,0.05,0.05")
     merged.setdefault("weights", "default")
     merged.setdefault("backbone", DEFAULT_BACKBONE_NAME)
     merged.setdefault("embedding_dim", 128)

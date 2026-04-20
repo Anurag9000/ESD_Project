@@ -4503,7 +4503,7 @@ def build_parser() -> argparse.ArgumentParser:
             "The repo always enforces the 3-class logical taxonomy (organic, metal, paper) before this is applied."
         ),
     )
-    parser.add_argument("--auto-split-ratios", default="0.7,0.2,0.1")
+    parser.add_argument("--auto-split-ratios", default="0.9,0.05,0.05")
     parser.add_argument("--resume-mode", choices=("latest", "global_best", "phase_best"), default="latest")
     parser.add_argument("--resume-phase-index", type=int, default=0)
     parser.add_argument("--resume-phase-name", default="")

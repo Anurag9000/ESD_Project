@@ -49,7 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--auto-split-ratios", default="0.7,0.2,0.1")
+    parser.add_argument("--auto-split-ratios", default="0.9,0.05,0.05")
     parser.add_argument("--max-batches", type=int, default=0, help="Optional cap per split for debugging.")
     return parser.parse_args()
 
