@@ -121,6 +121,8 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--weight-decay` | `0.05` | AdamW weight decay for Phase 0. |
 | `--seed` | `42` | RNG seed. |
 | `--train-loss-window` | `5000` | Number of effective optimizer batches in one Phase 0 plateau window. With defaults, this is `5000 x 256` train images processed. |
+| `--reconstruction-preview-interval` | `1` | Save a Phase 0 reconstruction preview every N completed epochs. `0` disables preview exports. |
+| `--reconstruction-preview-count` | `6` | Number of images shown in each Phase 0 reconstruction preview grid. |
 | `--early-stopping-patience` | `3` | Stop Phase 0 after this many full effective-batch windows without a new best effective-batch reconstruction loss. |
 | `--early-stopping-min-delta` | `1e-4` | Minimum effective-batch loss decrease required to reset Phase 0 patience. |
 | `--resume-checkpoint` | `""` | Optional Phase 0 checkpoint to resume from. |
@@ -280,6 +282,7 @@ These are not `argparse` flags, but they control the shell wrappers and the acti
 - `run_training.sh` supports optional Phase 0 MIM pretraining via `--phase0-mim` plus `--phase0-mim-*` controls; when enabled it exports `phase0_mim/phase0_encoder_final.pth` and passes it into the progressive trainer via `--phase0-encoder-checkpoint`.
 - `--phase0-mim-train-loss-window` controls the Phase 0 early-stopping window in effective optimizer batches. The default is `5000`.
 - Phase 0 uses the same balanced class sampler as SupCon and CE. It defaults to `batch-size 128` with `grad-accum-steps 2`, giving the same effective batch size of 256 without changing the rest of the pipeline defaults.
+- Phase 0 reconstruction previews are written to `Results/<run>/phase0_mim/reconstruction_previews/` by default. The standalone renderer `scripts/visualize_phase0_reconstruction.py` can regenerate a preview from any saved `best.pt` or `last.pt`.
 - Re-running the exact same `run_training.sh` command is the resume path. The wrapper skips completed Phase 0/progressive stages and resumes the incomplete stage from that stage's own `step_last.pt` first, then `last.pt`.
 - `run_full_training_pipeline.sh` ignores user-supplied `--dataset-root`, `--batch-size`, `--output-dir`, `--log-file`, `--resume-checkpoint`, `--resume-mode`, `--resume-phase-index`, `--classifier-train-mode`, `--classifier-early-stopping-metric`, `--head-lr`, `--backbone-lr`, `--stage-early-stopping-patience`, and `--optimizer`.
 - `scripts/run_recursive_refinement.py` validates pass-through trainer flags against the main trainer parser and raises on unsupported options instead of silently ignoring them.
