@@ -233,6 +233,18 @@ def project_samples_to_training_taxonomy(
     return new_classes, new_class_to_idx, new_samples, metadata
 
 
+def load_projected_training_samples(
+    root: Path,
+    class_mapping: dict[str, list[str]] | None = None,
+) -> tuple[list[str], dict[str, int], list[tuple[str, int]], dict[str, Any]]:
+    base_dataset = datasets.ImageFolder(root)
+    return project_samples_to_training_taxonomy(
+        list(base_dataset.classes),
+        list(base_dataset.samples),
+        class_mapping,
+    )
+
+
 def clone_state_dict(state_dict: dict[str, Any]) -> dict[str, Any]:
     cloned: dict[str, Any] = {}
     for key, value in state_dict.items():
@@ -1206,6 +1218,8 @@ def build_datasets(
     DeterministicSupConDataset,
 ]:
     class_mapping = parse_json_class_mapping(getattr(args, "class_mapping", ""))
+    extra_train_root_value = getattr(args, "aux_train_dataset_root", "")
+    extra_train_root = Path(extra_train_root_value) if extra_train_root_value else None
     
     root = Path(args.dataset_root)
     if has_explicit_split_layout(root):
@@ -1259,6 +1273,15 @@ def build_datasets(
     else:
         # Pass mapping through to auto-split logic too
         train_dataset, val_dataset, test_dataset = build_auto_split_datasets(root, args, class_mapping=class_mapping)
+
+    if extra_train_root is not None and extra_train_root.exists():
+        _, _, extra_samples, extra_metadata = load_projected_training_samples(extra_train_root, class_mapping)
+        train_dataset.samples.extend(extra_samples)
+        train_dataset.targets = [target for _, target in train_dataset.samples]
+        if hasattr(train_dataset, "taxonomy_metadata") and isinstance(train_dataset.taxonomy_metadata, dict):
+            train_dataset.taxonomy_metadata["extra_train_root"] = str(extra_train_root)
+            train_dataset.taxonomy_metadata["extra_train_source_samples"] = int(extra_metadata.get("logical_sample_count", len(extra_samples)))
+            train_dataset.taxonomy_metadata["logical_sample_count"] = int(len(train_dataset.samples))
     return (
         train_dataset,
         val_dataset,
@@ -1438,6 +1461,20 @@ def build_auto_split_datasets(
         dataset_root=root,
         enable_runtime_bad_sample_cleanup=args.runtime_bad_sample_cleanup,
     )
+    extra_train_root_value = getattr(args, "aux_train_dataset_root", "")
+    extra_train_root = Path(extra_train_root_value) if extra_train_root_value else None
+    if extra_train_root is not None and extra_train_root.exists():
+        _, _, extra_samples, extra_metadata = load_projected_training_samples(extra_train_root, class_mapping)
+        train_dataset.samples.extend(extra_samples)
+        train_dataset.targets = [target for _, target in train_dataset.samples]
+        train_dataset.taxonomy_metadata["extra_train_root"] = str(extra_train_root)
+        train_dataset.taxonomy_metadata["extra_train_source_samples"] = int(extra_metadata.get("logical_sample_count", len(extra_samples)))
+        train_dataset.taxonomy_metadata["logical_sample_count"] = int(len(train_dataset.samples))
+        if manifest_output_dir is not None:
+            manifest["extra_train_root"] = str(extra_train_root)
+            manifest["extra_train_source_samples"] = int(extra_metadata.get("logical_sample_count", len(extra_samples)))
+            manifest["train_samples"] = len(train_dataset.samples)
+            save_json(manifest_output_dir / "auto_split_manifest.json", manifest)
     return train_dataset, val_dataset, test_dataset
 
 
@@ -4018,6 +4055,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--dataset-root", default="Dataset_Final")
+    parser.add_argument(
+        "--aux-train-dataset-root",
+        default="REDACTED_DATA_ROOT",
+        help=(
+            "Optional extra physical dataset root to append to the training split only. "
+            "It is projected through the same logical taxonomy and excluded from validation/test."
+        ),
+    )
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--num-workers", type=int, default=2)

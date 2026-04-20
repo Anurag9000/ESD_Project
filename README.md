@@ -6,7 +6,7 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 
 ### Machine Learning Engine
 - **Backbone:** Configurable; default ConvNeXt V2 Nano FCMAE
-- **Corpus:** 304,258 verified physical images on disk; the next-run logical training taxonomy keeps only the 3 supervised classes
+- **Corpus:** 304,258 verified physical images on disk, plus the default train-only `REDACTED_DATA_ROOT` append root for extra organic / metal / paper samples; the next-run logical training taxonomy keeps only the 3 supervised classes
 - **Taxonomy:** **3 logical training classes** — organic, metal, paper
 - **Orchestration:** 8-stage pipeline: SupCon Head → SupCon Last-20 → SupCon full tail after frozen core → CE Head → CE Last-20 → CE full tail after frozen core → Recursive val_loss → Recursive val_raw_acc, with the same frozen 40-module stem/core preserved through recursive refinement
 - **Logging:** Pure accuracy plus per-class accuracy and per-class average confidence; thresholded accuracy is not printed in live logs.
@@ -54,7 +54,7 @@ source .venv/bin/activate
 # Launches the full staged lifecycle automatically.
 # Defaults now include:
 # - Phase 0 MIM trains the full backbone with the same balanced class sampler and an effective 256 batch size via 128-image physical batches plus 2-step accumulation, then SupCon/CE re-freeze the earliest 40 leaf modules
-# - Dataset_Final train/val/test are rendered through the same fixed Pi-camera magenta tint by default; no stochastic augmentations remain
+# - Dataset_Final train/val/test and the default train-only REDACTED_DATA_ROOT append root are rendered through the same fixed Pi-camera magenta tint by default; no stochastic augmentations remain
 # - validation triggered by train-step patience
 # - patience 3 across SupCon, CE head, CE stages, and recursive stages
 # - automatic same-command resume from the incomplete phase's own step_last.pt or last.pt

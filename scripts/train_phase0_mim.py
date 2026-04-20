@@ -94,6 +94,33 @@ class SpatialMaskGenerator:
         return pixel_mask, mask_2d
 
 
+def compute_patch_normalized_mse_loss(
+    predictions: torch.Tensor,
+    targets: torch.Tensor,
+    pixel_mask: torch.Tensor,
+    patch_size: int,
+) -> torch.Tensor:
+    if predictions.shape != targets.shape:
+        raise ValueError(f"Prediction/target shape mismatch: {tuple(predictions.shape)} vs {tuple(targets.shape)}")
+    if predictions.ndim != 4:
+        raise ValueError(f"Expected 4D image tensors, got shape {tuple(predictions.shape)}")
+    if predictions.shape[2] % patch_size != 0 or predictions.shape[3] % patch_size != 0:
+        raise ValueError("Image size must be divisible by patch_size for patch-normalized loss.")
+
+    preds = predictions.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size)
+    targs = targets.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size)
+    mask = pixel_mask.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size)
+
+    patch_mean = targs.mean(dim=(4, 5), keepdim=True)
+    patch_var = targs.var(dim=(4, 5), unbiased=False, keepdim=True)
+    targs = (targs - patch_mean) / torch.sqrt(patch_var + 1e-6)
+
+    loss = (preds - targs).pow(2)
+    masked_loss = (loss * mask).sum()
+    normalizer = mask.sum() * predictions.shape[1] + 1e-8
+    return masked_loss / normalizer
+
+
 class RepoSafeConvNeXtMIM(nn.Module):
     def __init__(
         self,
@@ -131,6 +158,14 @@ class RepoSafeConvNeXtMIM(nn.Module):
         self.feat_res = feat_res
         self.decoder_proj = nn.Conv2d(enc_channels, decoder_dim, kernel_size=1)
         self.decoder_block = nn.Sequential(
+            nn.Conv2d(decoder_dim, decoder_dim, kernel_size=7, padding=3, groups=decoder_dim),
+            nn.GroupNorm(1, decoder_dim),
+            nn.GELU(),
+            nn.Conv2d(decoder_dim, decoder_dim * 4, kernel_size=1),
+            nn.GELU(),
+            nn.Conv2d(decoder_dim * 4, decoder_dim, kernel_size=1),
+            nn.GroupNorm(1, decoder_dim),
+            nn.GELU(),
             nn.Conv2d(decoder_dim, decoder_dim, kernel_size=7, padding=3, groups=decoder_dim),
             nn.GroupNorm(1, decoder_dim),
             nn.GELU(),
@@ -369,6 +404,14 @@ def log_phase0_state(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Phase 0 masked image modeling pretraining for ConvNeXt backbones.")
     parser.add_argument("--dataset-root", default="Dataset_Final")
+    parser.add_argument(
+        "--aux-train-dataset-root",
+        default="REDACTED_DATA_ROOT",
+        help=(
+            "Optional extra physical dataset root to append to the Phase 0 training split only. "
+            "It is projected through the same logical taxonomy and excluded from validation/test."
+        ),
+    )
     parser.add_argument("--output-dir", default="Results/phase0_mim")
     parser.add_argument("--log-file", default="logs/phase0_mim.log.jsonl")
     parser.add_argument(
@@ -716,7 +759,12 @@ def main() -> int:
 
             with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
                 reconstructed = model(images, pixel_mask)
-                loss = ((reconstructed - images) ** 2 * pixel_mask).sum() / (pixel_mask.sum() * images.shape[1] + 1e-8)
+                loss = compute_patch_normalized_mse_loss(
+                    reconstructed,
+                    images,
+                    pixel_mask,
+                    patch_size=args.patch_size,
+                )
                 loss = loss / args.grad_accum_steps
 
             step_loss = float(loss.detach().item()) * args.grad_accum_steps
