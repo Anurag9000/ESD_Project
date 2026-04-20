@@ -8,11 +8,13 @@ import math
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 import torch.nn as nn
 import timm
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from torch.utils.data import DataLoader, Dataset
+from torchvision.utils import make_grid
 from tqdm import tqdm
 
 PHASE0_EARLY_STOPPING_MODE = "effective_batch_window_best_v3"
@@ -211,6 +213,8 @@ def save_phase0_checkpoint(
     optimizer: torch.optim.Optimizer,
     scaler: torch.cuda.amp.GradScaler,
     epoch: int,
+    epoch_batch_index: int,
+    epoch_complete: bool,
     step: int,
     best_loss: float,
     train_loss_window_best_loss: float,
@@ -225,6 +229,8 @@ def save_phase0_checkpoint(
         "optimizer_state_dict": optimizer.state_dict(),
         "scaler_state_dict": scaler.state_dict(),
         "epoch": int(epoch),
+        "epoch_batch_index": int(epoch_batch_index),
+        "epoch_complete": bool(epoch_complete),
         "step": int(step),
         "best_loss": float(best_loss),
         "best_train_effective_batch_loss": float(best_loss),
@@ -236,6 +242,68 @@ def save_phase0_checkpoint(
         "args": vars(args),
     }
     torch.save(payload, path)
+
+
+def _denormalize_phase0_images(images: torch.Tensor) -> torch.Tensor:
+    mean = torch.tensor([0.485, 0.456, 0.406], device=images.device, dtype=images.dtype).view(1, 3, 1, 1)
+    std = torch.tensor([0.229, 0.224, 0.225], device=images.device, dtype=images.dtype).view(1, 3, 1, 1)
+    return torch.clamp(images * std + mean, 0.0, 1.0)
+
+
+def _tensor_batch_to_grid_image(images: torch.Tensor, nrow: int) -> Image.Image:
+    grid = make_grid(images, nrow=max(1, nrow), padding=2, pad_value=0.06)
+    grid_np = grid.detach().cpu().clamp(0.0, 1.0).permute(1, 2, 0).numpy()
+    return Image.fromarray((grid_np * 255.0).round().astype(np.uint8))
+
+
+def save_phase0_reconstruction_preview(
+    output_path: Path,
+    *,
+    originals: torch.Tensor,
+    pixel_mask: torch.Tensor,
+    reconstructed: torch.Tensor,
+    epoch: int,
+    global_step: int,
+    sample_count: int,
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    sample_count = max(1, min(int(sample_count), int(originals.shape[0])))
+    originals_vis = _denormalize_phase0_images(originals[:sample_count].detach())
+    masked_vis = _denormalize_phase0_images((originals[:sample_count] * (1.0 - pixel_mask[:sample_count])).detach())
+    reconstructed_vis = _denormalize_phase0_images(reconstructed[:sample_count].detach())
+
+    grid_original = _tensor_batch_to_grid_image(originals_vis, nrow=sample_count)
+    grid_masked = _tensor_batch_to_grid_image(masked_vis, nrow=sample_count)
+    grid_reconstructed = _tensor_batch_to_grid_image(reconstructed_vis, nrow=sample_count)
+
+    label_height = 28
+    gap = 18
+    margin = 16
+    canvas_width = max(grid_original.width, grid_masked.width, grid_reconstructed.width) + margin * 2
+    canvas_height = margin * 2 + label_height * 3 + grid_original.height + grid_masked.height + grid_reconstructed.height + gap * 2
+    canvas = Image.new("RGB", (canvas_width, canvas_height), (20, 20, 20))
+    draw = ImageDraw.Draw(canvas)
+    try:
+        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
+        body_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
+    except OSError:
+        title_font = ImageFont.load_default()
+        body_font = ImageFont.load_default()
+
+    draw.text((margin, margin), f"Phase 0 MIM Reconstruction Preview | epoch {epoch} | step {global_step}", fill=(245, 245, 245), font=title_font)
+    sections = [
+        ("Originals", grid_original),
+        ("Masked inputs", grid_masked),
+        ("Reconstructions", grid_reconstructed),
+    ]
+    y = margin + label_height
+    for label, image in sections:
+        draw.text((margin, y), label, fill=(220, 220, 220), font=body_font)
+        y += 18
+        canvas.paste(image, (margin, y))
+        y += image.height + gap
+
+    canvas.save(output_path)
 
 
 def log_phase0_state(
@@ -348,6 +416,18 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--reconstruction-preview-interval",
+        type=int,
+        default=1,
+        help="Save a reconstruction preview every N completed Phase 0 epochs. Set to 0 to disable previews.",
+    )
+    parser.add_argument(
+        "--reconstruction-preview-count",
+        type=int,
+        default=6,
+        help="Number of images to include in each Phase 0 reconstruction preview grid.",
+    )
+    parser.add_argument(
         "--early-stopping-patience",
         type=int,
         default=3,
@@ -377,6 +457,10 @@ def main() -> int:
         raise ValueError("--max-steps must be >= 0")
     if args.train_loss_window < 1:
         raise ValueError("--train-loss-window must be >= 1")
+    if args.reconstruction_preview_interval < 0:
+        raise ValueError("--reconstruction-preview-interval must be >= 0")
+    if args.reconstruction_preview_count < 1:
+        raise ValueError("--reconstruction-preview-count must be >= 1")
     if args.early_stopping_patience < 1:
         raise ValueError("--early-stopping-patience must be >= 1")
     if args.early_stopping_min_delta < 0:
@@ -479,11 +563,21 @@ def main() -> int:
     train_loss_window_best_loss = math.inf
     train_loss_window_batch_count = 0
     loss_plateau_windows_without_improvement = 0
+    resume_epoch = 0
+    resume_batch_index = 0
+    resume_epoch_complete = True
     if resume_checkpoint is not None:
         model.load_state_dict(resume_checkpoint["model_state_dict"])
         optimizer.load_state_dict(resume_checkpoint["optimizer_state_dict"])
         scaler.load_state_dict(resume_checkpoint["scaler_state_dict"])
-        start_epoch = int(resume_checkpoint.get("epoch", -1)) + 1
+        resume_epoch = int(resume_checkpoint.get("epoch", -1))
+        resume_batch_index = int(resume_checkpoint.get("epoch_batch_index", 0))
+        resume_epoch_complete = bool(resume_checkpoint.get("epoch_complete", False))
+        if resume_epoch_complete or resume_batch_index <= 0:
+            start_epoch = resume_epoch + 1
+            resume_batch_index = 0
+        else:
+            start_epoch = resume_epoch
         global_step = int(resume_checkpoint.get("step", 0))
         resumed_mode = str(resume_checkpoint.get("phase0_early_stopping_mode", ""))
         if resumed_mode == PHASE0_EARLY_STOPPING_MODE:
@@ -522,6 +616,9 @@ def main() -> int:
                 "event": "phase0_run_resumed",
                 "resume_checkpoint": str(resume_path),
                 "start_epoch": start_epoch,
+                "resume_epoch": resume_epoch,
+                "resume_batch_index": resume_batch_index,
+                "resume_epoch_complete": resume_epoch_complete,
                 "global_step": global_step,
                 "best_loss": best_loss,
                 "train_loss_window_batch_count": train_loss_window_batch_count,
@@ -534,14 +631,33 @@ def main() -> int:
     last_checkpoint = output_dir / "last.pt"
     best_checkpoint = output_dir / "best.pt"
     phase0_encoder_export = output_dir / "phase0_encoder_final.pth"
+    reconstruction_preview_dir = output_dir / "reconstruction_previews"
     stop_training = False
+    have_resume_epoch_batch_offset = start_epoch == resume_epoch and resume_batch_index > 0
 
     epoch_iterator = range(start_epoch, args.epochs) if args.epochs > 0 else itertools.count(start_epoch)
     for epoch in epoch_iterator:
+        epoch_batch_offset = resume_batch_index if have_resume_epoch_batch_offset and epoch == resume_epoch else 0
+        if epoch_batch_offset > 0:
+            phase0_sampler.set_start_index(epoch_batch_offset * args.batch_size)
+            log_json_event(
+                log_path,
+                {
+                    "event": "phase0_epoch_resume_offset_applied",
+                    "epoch": epoch + 1,
+                    "global_step": global_step,
+                    "resume_batch_index": epoch_batch_offset,
+                    "resume_sampler_start_index": epoch_batch_offset * args.batch_size,
+                },
+            )
+        else:
+            phase0_sampler.set_start_index(0)
+
         epoch_loss_sum = 0.0
         epoch_sample_count = 0
         effective_batch_loss_sum = 0.0
         effective_batch_microbatch_count = 0
+        last_completed_epoch_batch_index = epoch_batch_offset
         optimizer.zero_grad(set_to_none=True)
         progress_total = len(loader)
         progress_desc = f"Phase0 epoch {epoch + 1}" if args.epochs <= 0 else f"Phase0 epoch {epoch + 1}/{args.epochs}"
@@ -558,6 +674,10 @@ def main() -> int:
             args=args,
         )
         progress = tqdm(loader, total=progress_total, desc=progress_desc)
+        last_preview_images: torch.Tensor | None = None
+        last_preview_pixel_mask: torch.Tensor | None = None
+        last_preview_reconstructed: torch.Tensor | None = None
+        last_preview_batch_index = 0
 
         for step_index, batch in enumerate(progress, start=1):
             if len(batch) == 3:
@@ -577,10 +697,16 @@ def main() -> int:
             step_loss = float(loss.detach().item()) * args.grad_accum_steps
             scaler.scale(loss).backward()
             batch_size = int(images.shape[0])
+            epoch_batch_index = epoch_batch_offset + step_index
+            last_completed_epoch_batch_index = epoch_batch_index
             epoch_loss_sum += step_loss * batch_size
             epoch_sample_count += batch_size
             effective_batch_loss_sum += step_loss
             effective_batch_microbatch_count += 1
+            last_preview_images = images.detach()
+            last_preview_pixel_mask = pixel_mask.detach()
+            last_preview_reconstructed = reconstructed.detach()
+            last_preview_batch_index = epoch_batch_index
 
             current_lr = float(optimizer.param_groups[0]["lr"]) if optimizer.param_groups else float(args.learning_rate)
             log_phase0_state(
@@ -643,6 +769,8 @@ def main() -> int:
                             optimizer=optimizer,
                             scaler=scaler,
                             epoch=epoch,
+                            epoch_batch_index=epoch_batch_index,
+                            epoch_complete=False,
                             step=global_step,
                             best_loss=best_loss,
                             train_loss_window_best_loss=train_loss_window_best_loss,
@@ -684,6 +812,8 @@ def main() -> int:
                             optimizer=optimizer,
                             scaler=scaler,
                             epoch=epoch,
+                            epoch_batch_index=epoch_batch_index,
+                            epoch_complete=False,
                             step=global_step,
                             best_loss=best_loss,
                             train_loss_window_best_loss=train_loss_window_best_loss,
@@ -715,6 +845,8 @@ def main() -> int:
                     optimizer=optimizer,
                     scaler=scaler,
                     epoch=epoch,
+                    epoch_batch_index=epoch_batch_index,
+                    epoch_complete=False,
                     step=global_step,
                     best_loss=best_loss,
                     train_loss_window_best_loss=train_loss_window_best_loss,
@@ -742,6 +874,7 @@ def main() -> int:
                         "microbatches_in_effective_batch": completed_microbatches,
                         "epoch_loss_sum": epoch_loss_sum,
                         "epoch_sample_count": epoch_sample_count,
+                        "epoch_batch_index": epoch_batch_index,
                     },
                 )
                 if args.max_steps > 0 and global_step >= args.max_steps:
@@ -763,6 +896,8 @@ def main() -> int:
                 optimizer=optimizer,
                 scaler=scaler,
                 epoch=epoch,
+                epoch_batch_index=last_completed_epoch_batch_index,
+                epoch_complete=False,
                 step=global_step,
                 best_loss=best_loss,
                 train_loss_window_best_loss=train_loss_window_best_loss,
@@ -786,6 +921,8 @@ def main() -> int:
             optimizer=optimizer,
             scaler=scaler,
             epoch=epoch,
+            epoch_batch_index=epoch_batch_offset + len(loader),
+            epoch_complete=True,
             step=global_step,
             best_loss=best_loss,
             train_loss_window_best_loss=train_loss_window_best_loss,
@@ -807,8 +944,36 @@ def main() -> int:
                 "epoch_sample_count": epoch_sample_count,
                 "effective_batches_completed": train_loss_window_batch_count,
                 "effective_batch_size": int(args.batch_size * args.grad_accum_steps),
+                "epoch_batch_index": epoch_batch_offset + len(loader),
             },
         )
+        if (
+            args.reconstruction_preview_interval > 0
+            and (epoch + 1) % args.reconstruction_preview_interval == 0
+            and last_preview_images is not None
+            and last_preview_pixel_mask is not None
+            and last_preview_reconstructed is not None
+        ):
+            preview_path = reconstruction_preview_dir / f"epoch_{epoch + 1:04d}_step_{last_preview_batch_index:06d}.png"
+            save_phase0_reconstruction_preview(
+                preview_path,
+                originals=last_preview_images,
+                pixel_mask=last_preview_pixel_mask,
+                reconstructed=last_preview_reconstructed,
+                epoch=epoch + 1,
+                global_step=global_step,
+                sample_count=args.reconstruction_preview_count,
+            )
+            log_json_event(
+                log_path,
+                {
+                    "event": "phase0_reconstruction_preview_saved",
+                    "epoch": epoch + 1,
+                    "global_step": global_step,
+                    "preview_path": str(preview_path),
+                    "preview_count": int(args.reconstruction_preview_count),
+                },
+            )
         if stop_training:
             break
 

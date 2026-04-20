@@ -12,6 +12,7 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 - **Logging:** Pure accuracy plus per-class accuracy and per-class average confidence; thresholded accuracy is not printed in live logs.
 - **Balancing:** Balanced per-batch class cycling (default in all training scripts)
 - **Visual Audit:** Startup + end-of-epoch clean test-set visualizations, plus optional Grad-CAM and calibration plots
+- **Phase 0 Reconstruction Audit:** Saved MIM checkpoints can be rendered into original / masked / reconstruction previews with `scripts/visualize_phase0_reconstruction.py`
 
 ### SmartBin Android Fleet Dashboard
 - **Framework:** Native Kotlin, Jetpack Compose, Material 3
@@ -74,6 +75,18 @@ source .venv/bin/activate
 - After the recursive `val_loss` and `val_raw_acc` stages complete, the pipeline runs one protected final test evaluation on the accepted checkpoint.
 - The final test bundle now includes `confmat_counts_test.csv`, `confmat_rate_pct_test.csv`, `classification_report_test.csv`, `test_confusion_matrix.png`, `test_reliability_diagram.png`, `test_confidence_histogram.png`, `metrics.json`, and `summary.json`.
 - The reported metric bundle includes loss, raw accuracy, top-1/top-3/top-5 accuracy, macro/weighted precision, recall, F1, balanced accuracy, macro/weighted ROC AUC OVR, macro/weighted PR AUC OVR, Cohen's kappa, MCC, ECE, MCE, Brier score, and NLL.
+
+### Inspect Phase 0 Reconstructions
+```bash
+cd /home/anurag-basistha/Projects/ESD
+source .venv/bin/activate
+
+python scripts/visualize_phase0_reconstruction.py \
+  --checkpoint Results/<run>/phase0_mim/best.pt \
+  --dataset-root Dataset_Final \
+  --split train
+```
+This writes a preview PNG next to the checkpoint by default. Use `--split val` or `--split test` if you want to inspect the saved model on a different split.
 
 ### Android Dashboard
 ```bash
