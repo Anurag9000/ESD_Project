@@ -94,12 +94,12 @@ class BackboneSpec:
 
 BACKBONE_REGISTRY: dict[str, BackboneSpec] = {
     "convnextv2_nano": BackboneSpec(
-        pretrained_name="convnextv2_nano.fcmae_ft_in1k",
+        pretrained_name="convnextv2_nano.fcmae",
         scratch_name="convnextv2_nano",
         description="ConvNeXt V2 Nano FCMAE",
     ),
     "convnextv2_tiny": BackboneSpec(
-        pretrained_name="convnextv2_tiny.fcmae_ft_in1k",
+        pretrained_name="convnextv2_tiny.fcmae",
         scratch_name="convnextv2_tiny",
         description="ConvNeXt V2 Tiny FCMAE",
     ),
