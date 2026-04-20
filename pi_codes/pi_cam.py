@@ -1,7 +1,7 @@
 import os
 import numpy as np
 from flask import Flask, request, render_template_string
-from PIL import Image
+from PIL import Image, ImageOps
 from ai_edge_litert.interpreter import Interpreter
 
 # ==============================
@@ -40,7 +40,10 @@ def predict_waste(image_path):
     print("\n[infer] entered predict_waste()", flush=True)
 
     img = Image.open(image_path).convert('RGB')
-    img = img.resize(IMG_SIZE)
+    img = ImageOps.contain(img, IMG_SIZE, method=Image.BILINEAR)
+    canvas = Image.new("RGB", IMG_SIZE, (0, 0, 0))
+    canvas.paste(img, ((IMG_SIZE[0] - img.width) // 2, (IMG_SIZE[1] - img.height) // 2))
+    img = canvas
 
     img_array = np.array(img, dtype=np.float32)
     img_array = np.expand_dims(img_array, axis=0)

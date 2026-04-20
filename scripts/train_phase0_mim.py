@@ -399,7 +399,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--camera-color-cast-strength",
         type=float,
         default=CAMERA_COLOR_CAST_STRENGTH,
-        help="Strength of the fixed Phase 0 magenta/pink cast.",
+        help="Strength of the fixed Phase 0 magenta/pink cast. Default is 0.50.",
     )
     parser.add_argument(
         "--camera-color-cast-eval",

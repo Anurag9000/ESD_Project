@@ -64,7 +64,7 @@ SPLIT_OFFSETS = {"train": 0, "val": 10_000_000, "test": 20_000_000}
 SHADOW_PROBABILITY = 0.0
 GLARE_PROBABILITY = 0.0
 CAMERA_COLOR_CAST_PROBABILITY = 1.0
-CAMERA_COLOR_CAST_STRENGTH = 0.24
+CAMERA_COLOR_CAST_STRENGTH = 0.50
 CAMERA_COLOR_CAST_EVAL = True
 MOTION_BLUR_PROBABILITY = 0.0
 DEFOCUS_BLUR_PROBABILITY = 0.0
@@ -774,7 +774,7 @@ def augmented_tensor_from_image(
     camera_color_cast_strength: float = CAMERA_COLOR_CAST_STRENGTH,
 ) -> torch.Tensor:
     _ = rng, gaussian_sigmas, camera_color_cast_probability
-    image = TF.resize(image, [image_size, image_size], interpolation=InterpolationMode.BILINEAR)
+    image = TF.resize(image, image_size, interpolation=InterpolationMode.BILINEAR)
     image = TF.center_crop(image, [image_size, image_size])
     tensor = TF.to_tensor(image).clamp(0.0, 1.0)
     tensor = apply_camera_color_cast(
@@ -795,7 +795,7 @@ def evaluation_tensor_from_image(
     camera_color_cast_eval: bool = False,
     camera_color_cast_strength: float = CAMERA_COLOR_CAST_STRENGTH,
 ) -> torch.Tensor:
-    image = TF.resize(image, [image_size, image_size], interpolation=InterpolationMode.BILINEAR)
+    image = TF.resize(image, image_size, interpolation=InterpolationMode.BILINEAR)
     image = TF.center_crop(image, [image_size, image_size])
     tensor = TF.to_tensor(image).clamp(0.0, 1.0)
     _ = rng, camera_color_cast_eval
@@ -4128,7 +4128,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--camera-color-cast-strength",
         type=float,
         default=CAMERA_COLOR_CAST_STRENGTH,
-        help="Strength of the fixed magenta/pink camera color-cast applied to every image.",
+        help="Strength of the fixed magenta/pink camera color-cast applied to every image. Default is 0.50.",
     )
     parser.add_argument(
         "--camera-color-cast-eval",

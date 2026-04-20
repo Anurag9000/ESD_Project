@@ -23,7 +23,7 @@ from collections import Counter
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 from sklearn.metrics import classification_report, confusion_matrix
 
 try:
@@ -87,7 +87,11 @@ def infer_input_layout(input_shape: list[int] | tuple[int, ...]) -> str:
 
 
 def preprocess_image(image_path: str, input_details: dict) -> np.ndarray:
-    img = Image.open(image_path).convert("RGB").resize(IMG_SIZE)
+    img = Image.open(image_path).convert("RGB")
+    img = ImageOps.contain(img, IMG_SIZE, method=Image.BILINEAR)
+    canvas = Image.new("RGB", IMG_SIZE, (0, 0, 0))
+    canvas.paste(img, ((IMG_SIZE[0] - img.width) // 2, (IMG_SIZE[1] - img.height) // 2))
+    img = canvas
     arr = np.asarray(img, dtype=np.float32) / 255.0
 
     # Match the training/eval normalization used by the repo.
