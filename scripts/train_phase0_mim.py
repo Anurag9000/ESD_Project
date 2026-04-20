@@ -166,7 +166,7 @@ def resolve_phase0_backbone_model_name(backbone_name: str, weights_mode: str) ->
     spec = BACKBONE_REGISTRY.get(backbone_name)
     if weights_mode == "default":
         pure_candidate = f"{backbone_name}.fcmae"
-        if pure_candidate in timm.list_models():
+        if pure_candidate in timm.list_models(f"{backbone_name}*", pretrained=True):
             return pure_candidate, True, "pure_fcmae"
         if spec is not None:
             return spec.pretrained_name, True, "registry_pretrained_fallback"
