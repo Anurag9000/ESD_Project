@@ -64,8 +64,8 @@ def make_eval_args(checkpoint_args: dict[str, Any], cli_args: argparse.Namespace
     if cli_args.confidence_threshold is not None:
         merged["confidence_threshold"] = float(cli_args.confidence_threshold)
     merged.setdefault("prefetch_factor", None)
-    merged.setdefault("augment_repeats", 16)
-    merged.setdefault("augment_gaussian_sigmas", 2.0)
+    merged.setdefault("augment_repeats", 1)
+    merged.setdefault("augment_gaussian_sigmas", 1.0)
     merged.setdefault("image_size", 224)
     merged.setdefault("seed", 42)
     merged.setdefault("auto_split_ratios", "0.9,0.05,0.05")

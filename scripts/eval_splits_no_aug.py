@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 eval_splits_no_aug.py — Evaluate the model on train / val / test splits
-with NO augmentation (centre-crop + normalize only).
+with the fixed repo-wide pink tint only.
 
 Uses the EXACT same deterministic split assignment as the training pipeline:
     seed=42, per-class source-stratified 90/5/5 shuffle via random.Random.
@@ -115,7 +115,7 @@ def _collate(batch):
 def build_splits(
     dataset_root: Path,
     seed: int = 42,
-    ratios: tuple[float, float, float] = (0.7, 0.2, 0.1),
+    ratios: tuple[float, float, float] = (0.9, 0.05, 0.05),
     class_mapping: dict[str, list[str]] | None = None,
 ) -> tuple[
     list[tuple[str, int]],
