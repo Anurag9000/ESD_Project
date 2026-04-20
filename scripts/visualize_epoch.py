@@ -84,7 +84,7 @@ def generate_umap_thumbnail_map(
     thumbnail_limit: int = 0,
     thumb_size: int = 48,
 ) -> None:
-    print("  [UMAP] Extracting embeddings, predictions, and thumbnails …")
+    print("  [UMAP] extracting embeddings, predictions, and thumbnails ...")
     model.eval()
     model_dtype = next(model.parameters()).dtype
     all_emb, all_pred, all_thumb = [], [], []
@@ -118,7 +118,7 @@ def generate_umap_thumbnail_map(
     if pca_dim < emb_np.shape[1]:
         emb_np = PCA(n_components=pca_dim, random_state=42).fit_transform(emb_np)
 
-    print(f"  [UMAP] Running on {len(emb_np)} samples …")
+    print(f"  [UMAP] running on {len(emb_np)} samples ...")
     coords = umap.UMAP(
         n_components=2,
         random_state=42,
@@ -237,7 +237,7 @@ def generate_umap_thumbnail_map(
 
     output_path = output_dir / "umap_thumbnail_map.png"
     canvas.save(output_path)
-    print(f"  [UMAP] Saved → {output_path}")
+    print(f"  [UMAP] saved to {output_path}")
 
     np.savez_compressed(
         output_dir / "umap_embeddings_test_set.npz",
@@ -253,8 +253,8 @@ def generate_umap_thumbnail_map(
         writer.writerow(["sample_index", "umap_x", "umap_y", "predicted_class_index", "predicted_class_name"])
         for index, (coord, pred_index) in enumerate(zip(coords, pred_np)):
             writer.writerow([index, f"{coord[0]:.8f}", f"{coord[1]:.8f}", int(pred_index), class_names[int(pred_index)]])
-    print(f"  [UMAP] Saved → {output_dir / 'umap_embeddings_test_set.npz'}")
-    print(f"  [UMAP] Saved → {output_dir / 'umap_embeddings_test_set.csv'}")
+    print(f"  [UMAP] saved to {output_dir / 'umap_embeddings_test_set.npz'}")
+    print(f"  [UMAP] saved to {output_dir / 'umap_embeddings_test_set.csv'}")
 
 # Main entry-point
 # ─────────────────────────────────────────────────────────────────────────────
@@ -276,7 +276,7 @@ def run(
 
     epoch_label = f"Epoch {epoch}" if str(epoch).isdigit() else str(epoch)
 
-    print(f"\n[VIZ] Starting epoch visualizations → {output_dir}")
+    print(f"\n[VIZ] starting epoch visualizations: {output_dir}")
     ckpt = torch.load(checkpoint_path, map_location="cpu")
     ckpt_args = argparse.Namespace(**ckpt["args"])
     ckpt_args.dataset_root = str(dataset_root)
@@ -321,7 +321,7 @@ def run(
         thumb_size=umap_thumb_size,
     )
 
-    print(f"[VIZ] All visualizations saved to {output_dir}\n")
+    print(f"[VIZ] all visualizations saved to {output_dir}\n")
 
 
 def main() -> None:

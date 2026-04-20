@@ -31,7 +31,7 @@ HTML_PAGE = """
     <title>Pi Capture</title>
 </head>
 <body style="background:black;color:white;text-align:center;font-family:sans-serif;">
-    <h2>📸 Pi Camera</h2>
+    <h2>Pi Camera</h2>
 
     <form method="post">
         <input type="text" name="item_name" placeholder="Enter name" required

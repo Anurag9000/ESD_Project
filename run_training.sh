@@ -43,10 +43,10 @@ if [[ -z "${RUN_STAMP:-}" ]]; then
   if [[ -n "$LATEST_RUN" ]]; then
     # Extract the timestamp part
     RUN_STAMP=$(basename "$LATEST_RUN" | sed "s/^${RUN_PREFIX}_//")
-    echo "🔄 Found previous run: $RUN_STAMP. Enforcing automatic resume."
+    echo "[wrapper] found previous run: $RUN_STAMP. Enforcing automatic resume."
   else
     RUN_STAMP="$(date +%Y%m%d_%H%M%S)"
-    echo "🚀 Starting new run: $RUN_STAMP"
+    echo "[wrapper] starting new run: $RUN_STAMP"
   fi
 fi
 
@@ -128,8 +128,8 @@ for ARG in "$@"; do
 done
 
 if [[ ${#IGNORED_ARGS[@]} -gt 0 ]]; then
-  echo "⚠️ Ignoring wrapper-managed CLI options: ${IGNORED_ARGS[*]}" >&2
-  echo "   Use RUN_ROOT, LOG_ROOT, or DATASET_ROOT to control the wrapper-managed paths." >&2
+  echo "[wrapper] ignoring wrapper-managed CLI options: ${IGNORED_ARGS[*]}" >&2
+  echo "          Use RUN_ROOT, LOG_ROOT, or DATASET_ROOT to control the wrapper-managed paths." >&2
 fi
 
 mkdir -p "$RUN_ROOT" "$LOG_ROOT"
@@ -142,10 +142,10 @@ if [[ "$ENABLE_PHASE0_MIM" -eq 1 ]]; then
   PHASE0_ARGS=()
   PHASE0_ENCODER_CHECKPOINT="$PHASE0_OUTPUT_DIR/phase0_encoder_final.pth"
   if [[ -f "$PHASE0_ENCODER_CHECKPOINT" ]]; then
-    echo "✅ Phase 0 MIM already complete; using $PHASE0_ENCODER_CHECKPOINT"
+    echo "[wrapper] phase 0 MIM already complete; using $PHASE0_ENCODER_CHECKPOINT"
     touch "$PHASE0_COMPLETE_MARKER"
   else
-    echo "🧠 Running/resuming Phase 0 MIM pretraining before SupCon/CE..."
+    echo "[wrapper] running/resuming Phase 0 MIM pretraining before SupCon/CE..."
     python scripts/train_phase0_mim.py \
       --dataset-root "$DATASET_ROOT" \
       --output-dir "$PHASE0_OUTPUT_DIR" \
@@ -168,7 +168,7 @@ if [[ "$ENABLE_PHASE0_MIM" -eq 1 ]]; then
     touch "$PHASE0_COMPLETE_MARKER"
   fi
   if [[ ! -f "$PHASE0_ENCODER_CHECKPOINT" ]]; then
-    echo "Phase 0 did not produce $PHASE0_ENCODER_CHECKPOINT" >&2
+    echo "[wrapper] phase 0 did not produce $PHASE0_ENCODER_CHECKPOINT" >&2
     exit 1
   fi
   PHASE0_ARGS=(--phase0-encoder-checkpoint "$PHASE0_ENCODER_CHECKPOINT")
@@ -177,12 +177,12 @@ fi
 AUTO_RESUME_ARGS=()
 PROGRESSIVE_COMPLETE_MARKER="$PROGRESSIVE_OUTPUT_DIR/.progressive_complete"
 if [[ -f "$PROGRESSIVE_COMPLETE_MARKER" && -f "$PROGRESSIVE_OUTPUT_DIR/best.pt" ]]; then
-  echo "✅ Progressive SupCon/CE already complete; using $PROGRESSIVE_OUTPUT_DIR/best.pt"
+  echo "[wrapper] progressive SupCon/CE already complete; using $PROGRESSIVE_OUTPUT_DIR/best.pt"
 elif [[ -f "$PROGRESSIVE_OUTPUT_DIR/step_last.pt" ]]; then
-  echo "🔄 Auto-resuming from EXACT LAST STEP: $PROGRESSIVE_OUTPUT_DIR/step_last.pt"
+  echo "[wrapper] auto-resuming from exact last step: $PROGRESSIVE_OUTPUT_DIR/step_last.pt"
   AUTO_RESUME_ARGS=(--resume-checkpoint "$PROGRESSIVE_OUTPUT_DIR/step_last.pt")
 elif [[ -f "$PROGRESSIVE_OUTPUT_DIR/last.pt" ]]; then
-  echo "🔄 Auto-resuming from LAST COMPLETED EPOCH: $PROGRESSIVE_OUTPUT_DIR/last.pt"
+  echo "[wrapper] auto-resuming from last completed epoch: $PROGRESSIVE_OUTPUT_DIR/last.pt"
   AUTO_RESUME_ARGS=(--resume-checkpoint "$PROGRESSIVE_OUTPUT_DIR/last.pt")
 fi
 
@@ -202,7 +202,7 @@ fi
 
 PROGRESSIVE_BEST_CHECKPOINT="$PROGRESSIVE_OUTPUT_DIR/best.pt"
 if [[ ! -f "$PROGRESSIVE_BEST_CHECKPOINT" ]]; then
-  echo "Progressive run did not produce $PROGRESSIVE_BEST_CHECKPOINT" >&2
+  echo "[wrapper] progressive run did not produce $PROGRESSIVE_BEST_CHECKPOINT" >&2
   exit 1
 fi
 

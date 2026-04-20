@@ -18,26 +18,26 @@ app = Flask(__name__)
 # ==============================
 # 2. LOAD MODEL
 # ==============================
-print("🚀 Loading TFLite Model...")
+print("[infer] loading TFLite model...")
 interpreter = Interpreter(model_path=MODEL_PATH)
 interpreter.allocate_tensors()
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
-print("✅ Model Ready!")
+print("[infer] model ready")
 
 # ==============================
 # 3. CAPTURE IMAGE FROM CAMERA
 # ==============================
 def capture_image():
-    print("📷 Capturing image...", flush=True)
+    print("[infer] capturing image...", flush=True)
     os.system(f"rpicam-jpeg -o {IMAGE_PATH} --width 96 --height 96 --immediate")
-    print("✅ Image captured!", flush=True)
+    print("[infer] image captured", flush=True)
 
 # ==============================
 # 4. PREDICTION FUNCTION
 # ==============================
 def predict_waste(image_path):
-    print("\n🔥 ENTERED predict_waste()", flush=True)
+    print("\n[infer] entered predict_waste()", flush=True)
 
     img = Image.open(image_path).convert('RGB')
     img = img.resize(IMG_SIZE)
@@ -84,11 +84,11 @@ HTML_PAGE = """
 </head>
 <body style="text-align:center; font-family:sans-serif;">
 
-<h1>♻️ Smart Waste Sorter</h1>
+<h1>Smart Waste Sorter</h1>
 
 <form method="post">
     <button type="submit" style="padding:20px; font-size:20px;">
-        📷 Capture & Analyze
+        Capture & Analyze
     </button>
 </form>
 
@@ -112,9 +112,9 @@ def index():
     original_guess = None
 
     if request.method == 'POST':
-        print("🔥 Button pressed from phone", flush=True)
+        print("[infer] button pressed from phone", flush=True)
 
-        capture_image()  # 📷 take photo
+        capture_image()  # take photo
 
         prediction, confidence, original_guess = predict_waste(IMAGE_PATH)
 

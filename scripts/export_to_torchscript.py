@@ -41,7 +41,7 @@ def main():
         print(f"Error: Could not find {ckpt_path}", file=sys.stderr)
         return 1
         
-    print(f"Loading {ckpt_path} ...")
+    print(f"[export] loading {ckpt_path} ...")
     ckpt = torch.load(ckpt_path, map_location="cpu")
     source_class_names = ckpt["class_names"]
     class_names = list(TRAINING_CLASS_ORDER)
@@ -57,7 +57,7 @@ def main():
         backbone=ckpt_args.get("backbone", DEFAULT_BACKBONE_NAME),
     )
     
-    print("Instantiating original custom architecture...")
+    print("[export] instantiating original custom architecture...")
     model = MetricLearningEfficientNetB0(
         num_classes=num_classes,
         weights_mode="none", 
@@ -76,15 +76,15 @@ def main():
             class_names,
             class_mapping=ckpt_args.get("training_class_mapping"),
         )
-        print("Checkpoint adaptation:", adaptation_report)
+        print("[export] checkpoint adaptation:", adaptation_report)
     model.load_state_dict(model_state_dict)
     model.eval()
     
-    print("Wrapping model for inference-only trace...")
+    print("[export] wrapping model for inference-only trace...")
     wrapper = InferenceESDModel(model)
     wrapper.eval()
     
-    print("Tracing to TorchScript...")
+    print("[export] tracing to TorchScript...")
     # TorchScript tracing requires an example input tensor
     example_input = torch.randn(1, 3, image_size, image_size)
     traced_model = torch.jit.trace(wrapper, example_input)
@@ -92,9 +92,9 @@ def main():
     out_path = ckpt_path.parent / "best_scripted.pt"
     traced_model.save(str(out_path))
     
-    print("\n✅ SUCCESS!")
-    print(f"Saved standalone TorchScript model to: {out_path}")
-    print("This file can be loaded directly using `torch.jit.load()` without needing any class definitions.")
+    print("\n[export] success")
+    print(f"[export] saved standalone TorchScript model to: {out_path}")
+    print("[export] this file can be loaded directly using `torch.jit.load()` without needing any class definitions.")
     return 0
 
 if __name__ == "__main__":
