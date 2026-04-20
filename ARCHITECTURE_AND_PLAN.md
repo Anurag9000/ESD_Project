@@ -116,15 +116,15 @@ The pipeline follows the research-validated principle: **Contrastive representat
 
 | Top-level Module | Type                  | Params     | SupCon Stage | Notes |
 | :--------------- | :-------------------- | :--------- | :----------- | :---- |
-| `features[0]`    | Conv2dNormActivation  | 928        | ❄️ FROZEN    | Stem — raw pixels → edges |
-| `features[1]`    | Sequential (MBConv)   | 1,448      | ❄️ FROZEN    | Basic textures |
-| `features[2]`    | Sequential (MBConv)   | 16,714     | ❄️ FROZEN    | Texture gradients |
-| `features[3]`    | Sequential (MBConv)   | 46,640     | ❄️ FROZEN    | Patterns |
-| `features[4]`    | Sequential (MBConv)   | 242,930    | ❄️ FROZEN    | Object parts |
-| `features[5]`    | Sequential (MBConv)   | 543,148    | ❄️ FROZEN    | Mid-level semantics |
-| `features[6]`    | Sequential (MBConv×4) | 2,026,348  | 🔥 UNFROZEN  | High-level semantics (richest) |
-| `features[7]`    | Sequential (MBConv)   | 717,232    | 🔥 UNFROZEN  | Abstract waste features |
-| `features[8]`    | Conv2dNormActivation  | 412,160    | 🔥 UNFROZEN  | Final projection conv |
+| `features[0]`    | Conv2dNormActivation  | 928        | FROZEN      | Stem - raw pixels -> edges |
+| `features[1]`    | Sequential (MBConv)   | 1,448      | FROZEN      | Basic textures |
+| `features[2]`    | Sequential (MBConv)   | 16,714     | FROZEN      | Texture gradients |
+| `features[3]`    | Sequential (MBConv)   | 46,640     | FROZEN      | Patterns |
+| `features[4]`    | Sequential (MBConv)   | 242,930    | FROZEN      | Object parts |
+| `features[5]`    | Sequential (MBConv)   | 543,148    | FROZEN      | Mid-level semantics |
+| `features[6]`    | Sequential (MBConv×4) | 2,026,348  | UNFROZEN    | High-level semantics (richest) |
+| `features[7]`    | Sequential (MBConv)   | 717,232    | UNFROZEN    | Abstract waste features |
+| `features[8]`    | Conv2dNormActivation  | 412,160    | UNFROZEN    | Final projection conv |
 
 > The 90-module freeze boundary was selected by diagnostic analysis of the full 130-leaf-module tree. It permanently protects universally-useful visual primitives (edges, textures, patterns) that would degrade if touched by task-specific gradients.
 

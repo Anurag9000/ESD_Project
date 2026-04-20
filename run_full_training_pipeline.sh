@@ -71,8 +71,8 @@ for ARG in "$@"; do
 done
 
 if [[ ${#IGNORED_ARGS[@]} -gt 0 ]]; then
-  echo "⚠️ Ignoring wrapper-managed CLI options: ${IGNORED_ARGS[*]}" >&2
-  echo "   Use RUN_ROOT, LOG_ROOT, DATASET_ROOT, or INITIAL_CHECKPOINT to control wrapper-managed paths." >&2
+  echo "[wrapper] ignoring wrapper-managed CLI options: ${IGNORED_ARGS[*]}" >&2
+  echo "          Use RUN_ROOT, LOG_ROOT, DATASET_ROOT, or INITIAL_CHECKPOINT to control wrapper-managed paths." >&2
 fi
 
 LOSS_OUTPUT_DIR="$RUN_ROOT/loss_cleanup"
@@ -155,12 +155,12 @@ fi
 FINAL_TEST_OUTPUT_DIR="$RUN_ROOT/final_test_evaluation"
 FINAL_TEST_COMPLETE_MARKER="$FINAL_TEST_OUTPUT_DIR/.final_test_complete"
 echo "" >& 2
-echo "=== Pipeline complete. Running final test-set evaluation ==="  >& 2
-echo "    Checkpoint : $FINAL_CHECKPOINT"  >& 2
-echo "    Output dir : $FINAL_TEST_OUTPUT_DIR"  >& 2
+echo "[wrapper] pipeline complete. Running final test-set evaluation."  >& 2
+echo "          checkpoint: $FINAL_CHECKPOINT"  >& 2
+echo "          output dir: $FINAL_TEST_OUTPUT_DIR"  >& 2
 
 if [[ -f "$FINAL_TEST_COMPLETE_MARKER" ]]; then
-  echo "=== Final test evaluation already complete; skipping ===" >& 2
+  echo "[wrapper] final test evaluation already complete; skipping." >& 2
 else
   python scripts/evaluate_saved_classifier.py \
     --checkpoint "$FINAL_CHECKPOINT" \
@@ -173,4 +173,4 @@ else
   touch "$FINAL_TEST_COMPLETE_MARKER"
 fi
 
-echo "=== Final test evaluation written to $FINAL_TEST_OUTPUT_DIR ===" >& 2
+echo "[wrapper] final test evaluation written to $FINAL_TEST_OUTPUT_DIR" >& 2

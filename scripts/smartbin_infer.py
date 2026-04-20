@@ -98,44 +98,44 @@ def main():
                    help='Camera index for live webcam inference (e.g. 0)')
     args = p.parse_args()
 
-    print(f'Loading model: {args.model}')
+    print(f'[infer] loading model: {args.model}')
     session = load_session(args.model)
-    print('Model loaded ✅\n')
+    print('[infer] model loaded\n')
 
     # ── Single image ─────────────────────────────────────────────────────────
     if args.image:
         img = Image.open(args.image)
         label, conf, ms = classify(session, img)
-        print(f'  File  : {args.image}')
-        print(f'  Class : {label}')
-        print(f'  Conf  : {conf:.1f}%')
-        print(f'  Time  : {ms:.0f} ms')
+        print(f'  file : {args.image}')
+        print(f'  class: {label}')
+        print(f'  conf : {conf:.1f}%')
+        print(f'  time : {ms:.0f} ms')
 
     # ── Folder of images ─────────────────────────────────────────────────────
     elif args.folder:
         exts = {'.jpg', '.jpeg', '.png', '.webp', '.bmp'}
         paths = [p for p in Path(args.folder).iterdir()
                  if p.suffix.lower() in exts]
-        print(f'Found {len(paths)} images in {args.folder}\n')
+        print(f'[infer] found {len(paths)} images in {args.folder}\n')
         times = []
         for path in sorted(paths):
             img = Image.open(path)
             label, conf, ms = classify(session, img)
             times.append(ms)
-            print(f'  {path.name:<40} → {label:<12} ({conf:.1f}%)  [{ms:.0f}ms]')
+            print(f'  {path.name:<40} -> {label:<12} ({conf:.1f}%)  [{ms:.0f}ms]')
         if times:
-            print(f'\nAvg inference: {np.mean(times):.0f} ms | '
-                  f'Min: {np.min(times):.0f} ms | Max: {np.max(times):.0f} ms')
+            print(f'\n[infer] avg inference: {np.mean(times):.0f} ms | '
+                  f'min: {np.min(times):.0f} ms | max: {np.max(times):.0f} ms')
 
     # ── Live camera ──────────────────────────────────────────────────────────
     elif args.camera is not None:
         try:
             import cv2
         except ImportError:
-            print('ERROR: Install opencv  →  pip install opencv-python-headless')
+            print('ERROR: install opencv -> pip install opencv-python-headless')
             return
         cap = cv2.VideoCapture(args.camera)
-        print(f'Streaming camera {args.camera}. Press Ctrl+C to stop.\n')
+        print(f'[infer] streaming camera {args.camera}. Press Ctrl+C to stop.\n')
         try:
             while True:
                 ret, frame = cap.read()
@@ -145,7 +145,7 @@ def main():
                 label, conf, ms = classify(session, img)
                 print(f'\r  {label:<12} ({conf:.1f}%)  [{ms:.0f}ms]   ', end='', flush=True)
         except KeyboardInterrupt:
-            print('\nStopped.')
+            print('\n[infer] stopped.')
         finally:
             cap.release()
 

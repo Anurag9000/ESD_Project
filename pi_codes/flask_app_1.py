@@ -22,18 +22,18 @@ app = Flask(__name__)
 # ==============================
 # 2. LOAD TFLITE MODEL
 # ==============================
-print("🚀 Loading TFLite Model...")
+print("[infer] loading TFLite model...")
 interpreter = Interpreter(model_path=MODEL_PATH)
 interpreter.allocate_tensors()
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
-print("✅ Model Ready!")
+print("[infer] model ready")
 
 # ==============================
 # 3. PREDICTION FUNCTION
 # ==============================
 def predict_waste(image_path):
-    print("\n🔥 ENTERED predict_waste()", flush=True)
+    print("\n[infer] entered predict_waste()", flush=True)
 
     # Open and Resize
     img = Image.open(image_path).convert('RGB')
@@ -96,17 +96,17 @@ HTML_PAGE = """
 </head>
 <body>
     <div class="container">
-        <h1>♻️ Smart Waste Sorter</h1>
+        <h1>Smart Waste Sorter</h1>
         <form action="/" method="post" enctype="multipart/form-data">
             <input type="file" name="file" accept="image/*" capture="camera">
             <br>
-            <button type="submit" class="btn">📸 Analyze Waste</button>
+            <button type="submit" class="btn">Analyze Waste</button>
         </form>
 
         {% if result %}
             {% if result == 'OTHER' %}
                 <div class="result-box warning">
-                    <div class="main-label">⚠️ OTHER</div>
+                    <div class="main-label">OTHER</div>
                     <p class="details">
                         The model thought this was <b>{{ original }}</b>,<br>
                         but confidence was only <b>{{ confidence }}%</b>.
@@ -115,7 +115,7 @@ HTML_PAGE = """
                 </div>
             {% else %}
                 <div class="result-box success">
-                    <div class="main-label">✅ {{ result }}</div>
+                    <div class="main-label">{{ result }}</div>
                     <p class="details">Confidence: <b>{{ confidence }}%</b></p>
                 </div>
             {% endif %}
@@ -130,7 +130,7 @@ HTML_PAGE = """
 # ==============================
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    print("🔥 INDEX FUNCTION CALLED", flush=True)
+    print("[infer] index function called", flush=True)
 
     prediction = None
     confidence = None

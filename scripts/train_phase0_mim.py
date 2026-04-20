@@ -238,6 +238,66 @@ def save_phase0_checkpoint(
     torch.save(payload, path)
 
 
+def log_phase0_state(
+    log_path: Path,
+    *,
+    event: str,
+    epoch: int,
+    global_step: int,
+    microbatch_index: int | None = None,
+    microbatches_in_effective_batch: int | None = None,
+    samples_seen: int | None = None,
+    epoch_loss_sum: float | None = None,
+    epoch_sample_count: int | None = None,
+    effective_batch_loss: float | None = None,
+    microbatch_loss: float | None = None,
+    train_loss_window_best_loss: float | None = None,
+    best_loss: float | None = None,
+    loss_plateau_windows_without_improvement: int | None = None,
+    optimizer_lr: float | None = None,
+    args: argparse.Namespace | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "event": event,
+        "epoch": int(epoch),
+        "global_step": int(global_step),
+    }
+    if microbatch_index is not None:
+        payload["microbatch_index"] = int(microbatch_index)
+    if microbatches_in_effective_batch is not None:
+        payload["microbatches_in_effective_batch"] = int(microbatches_in_effective_batch)
+    if samples_seen is not None:
+        payload["samples_seen"] = int(samples_seen)
+    if epoch_loss_sum is not None:
+        payload["epoch_loss_sum"] = float(epoch_loss_sum)
+    if epoch_sample_count is not None:
+        payload["epoch_sample_count"] = int(epoch_sample_count)
+    if effective_batch_loss is not None:
+        payload["effective_batch_loss"] = float(effective_batch_loss)
+    if microbatch_loss is not None:
+        payload["microbatch_loss"] = float(microbatch_loss)
+    if train_loss_window_best_loss is not None:
+        payload["train_loss_window_best_loss"] = float(train_loss_window_best_loss)
+    if best_loss is not None:
+        payload["best_loss"] = float(best_loss)
+    if loss_plateau_windows_without_improvement is not None:
+        payload["loss_plateau_windows_without_improvement"] = int(loss_plateau_windows_without_improvement)
+    if optimizer_lr is not None:
+        payload["optimizer_lr"] = float(optimizer_lr)
+    if args is not None:
+        payload["backbone"] = str(args.backbone)
+        payload["weights"] = str(args.weights)
+        payload["batch_size"] = int(args.batch_size)
+        payload["grad_accum_steps"] = int(args.grad_accum_steps)
+        payload["effective_batch_size"] = int(args.batch_size * args.grad_accum_steps)
+        payload["mask_ratio"] = float(args.mask_ratio)
+        payload["patch_size"] = int(args.patch_size)
+        payload["train_loss_window"] = int(args.train_loss_window)
+        payload["early_stopping_patience"] = int(args.early_stopping_patience)
+        payload["early_stopping_min_delta"] = float(args.early_stopping_min_delta)
+    log_json_event(log_path, payload)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Phase 0 masked image modeling pretraining for ConvNeXt backbones.")
     parser.add_argument("--dataset-root", default="Dataset_Final")
@@ -394,6 +454,13 @@ def main() -> int:
             "effective_batch_size": int(args.batch_size * args.grad_accum_steps),
             "train_loss_window_effective_batches": int(args.train_loss_window),
             "early_stopping_patience": int(args.early_stopping_patience),
+            "mask_ratio": float(args.mask_ratio),
+            "patch_size": int(args.patch_size),
+            "image_size": int(args.image_size),
+            "decoder_dim": int(args.decoder_dim),
+            "camera_color_cast_probability": float(args.camera_color_cast_probability),
+            "camera_color_cast_strength": float(args.camera_color_cast_strength),
+            "camera_color_cast_eval": bool(args.camera_color_cast_eval),
         },
     )
     model.train()
@@ -478,6 +545,18 @@ def main() -> int:
         optimizer.zero_grad(set_to_none=True)
         progress_total = len(loader)
         progress_desc = f"Phase0 epoch {epoch + 1}" if args.epochs <= 0 else f"Phase0 epoch {epoch + 1}/{args.epochs}"
+        current_lr = float(optimizer.param_groups[0]["lr"]) if optimizer.param_groups else float(args.learning_rate)
+        log_phase0_state(
+            log_path,
+            event="phase0_epoch_started",
+            epoch=epoch + 1,
+            global_step=global_step,
+            best_loss=best_loss,
+            train_loss_window_best_loss=train_loss_window_best_loss,
+            loss_plateau_windows_without_improvement=loss_plateau_windows_without_improvement,
+            optimizer_lr=current_lr,
+            args=args,
+        )
         progress = tqdm(loader, total=progress_total, desc=progress_desc)
 
         for step_index, batch in enumerate(progress, start=1):
@@ -503,6 +582,25 @@ def main() -> int:
             effective_batch_loss_sum += step_loss
             effective_batch_microbatch_count += 1
 
+            current_lr = float(optimizer.param_groups[0]["lr"]) if optimizer.param_groups else float(args.learning_rate)
+            log_phase0_state(
+                log_path,
+                event="phase0_microbatch_processed",
+                epoch=epoch + 1,
+                global_step=global_step,
+                microbatch_index=step_index,
+                microbatches_in_effective_batch=effective_batch_microbatch_count,
+                samples_seen=epoch_sample_count,
+                epoch_loss_sum=epoch_loss_sum,
+                epoch_sample_count=epoch_sample_count,
+                microbatch_loss=step_loss,
+                train_loss_window_best_loss=train_loss_window_best_loss,
+                best_loss=best_loss,
+                loss_plateau_windows_without_improvement=loss_plateau_windows_without_improvement,
+                optimizer_lr=current_lr,
+                args=args,
+            )
+
             if step_index % args.grad_accum_steps == 0 or step_index == len(loader):
                 scaler.step(optimizer)
                 scaler.update()
@@ -514,6 +612,24 @@ def main() -> int:
                 effective_batch_microbatch_count = 0
                 train_loss_window_best_loss = min(train_loss_window_best_loss, effective_batch_loss)
                 train_loss_window_batch_count += 1
+                current_lr = float(optimizer.param_groups[0]["lr"]) if optimizer.param_groups else float(args.learning_rate)
+
+                log_phase0_state(
+                    log_path,
+                    event="phase0_optimizer_step",
+                    epoch=epoch + 1,
+                    global_step=global_step,
+                    microbatches_in_effective_batch=completed_microbatches,
+                    samples_seen=epoch_sample_count,
+                    epoch_loss_sum=epoch_loss_sum,
+                    epoch_sample_count=epoch_sample_count,
+                    effective_batch_loss=effective_batch_loss,
+                    train_loss_window_best_loss=train_loss_window_best_loss,
+                    best_loss=best_loss,
+                    loss_plateau_windows_without_improvement=loss_plateau_windows_without_improvement,
+                    optimizer_lr=current_lr,
+                    args=args,
+                )
 
                 if train_loss_window_batch_count >= args.train_loss_window:
                     window_best_loss = train_loss_window_best_loss
@@ -550,6 +666,11 @@ def main() -> int:
                             "loss_plateau_windows_without_improvement": loss_plateau_windows_without_improvement,
                             "early_stopping_patience": args.early_stopping_patience,
                             "early_stopping_min_delta": args.early_stopping_min_delta,
+                            "batch_size": int(args.batch_size),
+                            "grad_accum_steps": int(args.grad_accum_steps),
+                            "effective_batch_size": int(args.batch_size * args.grad_accum_steps),
+                            "mask_ratio": float(args.mask_ratio),
+                            "patch_size": int(args.patch_size),
                         },
                     )
 
@@ -617,6 +738,10 @@ def main() -> int:
                         "train_loss_window_batch_count": train_loss_window_batch_count,
                         "train_loss_window_best_loss": train_loss_window_best_loss,
                         "loss_plateau_windows_without_improvement": loss_plateau_windows_without_improvement,
+                        "optimizer_lr": current_lr,
+                        "microbatches_in_effective_batch": completed_microbatches,
+                        "epoch_loss_sum": epoch_loss_sum,
+                        "epoch_sample_count": epoch_sample_count,
                     },
                 )
                 if args.max_steps > 0 and global_step >= args.max_steps:
@@ -679,6 +804,9 @@ def main() -> int:
                 "train_loss_window_best_loss": train_loss_window_best_loss,
                 "loss_plateau_windows_without_improvement": loss_plateau_windows_without_improvement,
                 "global_step": global_step,
+                "epoch_sample_count": epoch_sample_count,
+                "effective_batches_completed": train_loss_window_batch_count,
+                "effective_batch_size": int(args.batch_size * args.grad_accum_steps),
             },
         )
         if stop_training:
@@ -703,7 +831,7 @@ def main() -> int:
             "stop_reason": "early_stopping" if stop_training else "epoch_limit_or_step_cap",
         },
     )
-    print(f"Phase 0 complete. Encoder exported to {phase0_encoder_export}")
+    print(f"[phase0] complete. Encoder exported to {phase0_encoder_export}")
     return 0
 
 
