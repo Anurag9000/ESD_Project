@@ -261,7 +261,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Mirror the main trainer's runtime bad-sample cleanup flag for dataset construction.",
     )
-    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--prefetch-factor", type=int, default=1)
     parser.add_argument(
@@ -270,7 +270,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Phase 0 epoch cap. Use 0 to run until early stopping or max-steps termination.",
     )
-    parser.add_argument("--grad-accum-steps", type=int, default=40)
+    parser.add_argument("--grad-accum-steps", type=int, default=2)
     parser.add_argument("--mask-ratio", type=float, default=0.6)
     parser.add_argument("--patch-size", type=int, default=32)
     parser.add_argument("--decoder-dim", type=int, default=512)
@@ -283,8 +283,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=5000,
         help=(
-            "Phase 0 plateau window in optimizer-step batches. With batch-size 8 and "
-            "grad-accum-steps 40, one window is 5000 effective batches of 320 images."
+            "Phase 0 plateau window in optimizer-step batches. With batch-size 128 and "
+            "grad-accum-steps 2, one window is 5000 effective batches of 256 images."
         ),
     )
     parser.add_argument(

@@ -109,18 +109,18 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--class-mapping` | `""` | Optional JSON merge map passed to the repo dataset builder. |
 | `--auto-split-ratios` | `0.7,0.2,0.1` | Auto-split ratios when the dataset root has no explicit train/val/test layout. |
 | `--runtime-bad-sample-cleanup` | `false` | Mirror the main trainer's runtime bad-sample cleanup behavior. |
-| `--batch-size` | `8` | Micro-batch size for Phase 0 masking reconstruction. Uses the same class-balanced sampler as the supervised stages. Combined with `--grad-accum-steps 40` this gives an effective batch size of 320. |
+| `--batch-size` | `128` | Physical batch size for Phase 0 masking reconstruction. Uses the same class-balanced sampler as the supervised stages. Combined with `--grad-accum-steps 2` this gives an effective batch size of 256. |
 | `--num-workers` | `2` | DataLoader worker count. |
 | `--prefetch-factor` | `1` | Prefetch depth per worker. |
 | `--epochs` | `0` | Phase 0 epoch cap. `0` means run until early stopping or max-steps termination. |
-| `--grad-accum-steps` | `40` | Gradient accumulation factor for Phase 0. The default effective batch size is 320. |
+| `--grad-accum-steps` | `2` | Gradient accumulation factor for Phase 0. The default effective batch size is 256. |
 | `--mask-ratio` | `0.6` | Fraction of patches masked before reconstruction. |
 | `--patch-size` | `32` | Patch size used by the spatial mask generator. |
 | `--decoder-dim` | `512` | Hidden width of the reconstruction decoder. |
 | `--learning-rate` | `1.5e-4` | AdamW learning rate for Phase 0. |
 | `--weight-decay` | `0.05` | AdamW weight decay for Phase 0. |
 | `--seed` | `42` | RNG seed. |
-| `--train-loss-window` | `5000` | Number of effective optimizer batches in one Phase 0 plateau window. With defaults, this is `5000 x 320` train images processed. |
+| `--train-loss-window` | `5000` | Number of effective optimizer batches in one Phase 0 plateau window. With defaults, this is `5000 x 256` train images processed. |
 | `--early-stopping-patience` | `3` | Stop Phase 0 after this many full effective-batch windows without a new best effective-batch reconstruction loss. |
 | `--early-stopping-min-delta` | `1e-4` | Minimum effective-batch loss decrease required to reset Phase 0 patience. |
 | `--resume-checkpoint` | `""` | Optional Phase 0 checkpoint to resume from. |
@@ -279,7 +279,7 @@ These are not `argparse` flags, but they control the shell wrappers and the acti
 - `run_training.sh` always injects `--dataset-root "$DATASET_ROOT"` and `--sampling-strategy balanced` into the progressive trainer.
 - `run_training.sh` supports optional Phase 0 MIM pretraining via `--phase0-mim` plus `--phase0-mim-*` controls; when enabled it exports `phase0_mim/phase0_encoder_final.pth` and passes it into the progressive trainer via `--phase0-encoder-checkpoint`.
 - `--phase0-mim-train-loss-window` controls the Phase 0 early-stopping window in effective optimizer batches. The default is `5000`.
-- Phase 0 uses the same balanced class sampler as SupCon and CE. It defaults to `batch-size 8` with `grad-accum-steps 40`, giving the same effective batch size of 320 without exceeding 6GB VRAM.
+- Phase 0 uses the same balanced class sampler as SupCon and CE. It defaults to `batch-size 128` with `grad-accum-steps 2`, giving the same effective batch size of 256 without changing the rest of the pipeline defaults.
 - Re-running the exact same `run_training.sh` command is the resume path. The wrapper skips completed Phase 0/progressive stages and resumes the incomplete stage from that stage's own `step_last.pt` first, then `last.pt`.
 - `run_full_training_pipeline.sh` ignores user-supplied `--dataset-root`, `--batch-size`, `--output-dir`, `--log-file`, `--resume-checkpoint`, `--resume-mode`, `--resume-phase-index`, `--classifier-train-mode`, `--classifier-early-stopping-metric`, `--head-lr`, `--backbone-lr`, `--stage-early-stopping-patience`, and `--optimizer`.
 - `scripts/run_recursive_refinement.py` validates pass-through trainer flags against the main trainer parser and raises on unsupported options instead of silently ignoring them.

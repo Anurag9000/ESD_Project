@@ -52,7 +52,7 @@ source .venv/bin/activate
 
 # Launches the full staged lifecycle automatically.
 # Defaults now include:
-# - Phase 0 MIM trains the full backbone with the same balanced class sampler and an effective 320 batch size via 8-image micro-batches plus 40-step accumulation, then SupCon/CE re-freeze the earliest 40 leaf modules
+# - Phase 0 MIM trains the full backbone with the same balanced class sampler and an effective 256 batch size via 128-image physical batches plus 2-step accumulation, then SupCon/CE re-freeze the earliest 40 leaf modules
 # - Dataset_Final train/val/test are rendered in the Pi-camera magenta color domain by default; train uses stochastic cast, val/test use deterministic cast
 # - validation triggered by train-step patience
 # - patience 3 across SupCon, CE head, CE stages, and recursive stages
