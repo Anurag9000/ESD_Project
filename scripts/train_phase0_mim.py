@@ -255,7 +255,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--camera-color-cast-strength", type=float, default=CAMERA_COLOR_CAST_STRENGTH)
     parser.add_argument("--camera-color-cast-eval", action=argparse.BooleanOptionalAction, default=CAMERA_COLOR_CAST_EVAL)
     parser.add_argument("--class-mapping", type=str, default="")
-    parser.add_argument("--auto-split-ratios", default="0.7,0.2,0.1")
+    parser.add_argument("--auto-split-ratios", default="0.9,0.05,0.05")
     parser.add_argument(
         "--runtime-bad-sample-cleanup",
         action="store_true",

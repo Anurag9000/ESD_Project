@@ -4,7 +4,7 @@ eval_splits_no_aug.py — Evaluate the model on train / val / test splits
 with NO augmentation (centre-crop + normalize only).
 
 Uses the EXACT same deterministic split assignment as the training pipeline:
-    seed=42, per-class source-stratified 70/20/10 shuffle via random.Random.
+    seed=42, per-class source-stratified 90/5/5 shuffle via random.Random.
 
 Outputs per split (written to --output-dir):
     confmat_counts_{split}.csv          raw confusion matrix

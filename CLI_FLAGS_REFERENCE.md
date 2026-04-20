@@ -55,7 +55,7 @@ Live logs now print pure accuracy plus `per_class_accuracy` and `per_class_avg_c
 | `--log-file` | `logs/metric_learning_experiment.log.jsonl` | Structured JSONL log path. |
 | `--resume-checkpoint` | `""` | Explicit checkpoint to resume from. |
 | `--class-mapping` | `""` | JSON string for training-time class merging; the default 3-class pipeline ignores extra physical folders. |
-| `--auto-split-ratios` | `0.7,0.2,0.1` | Train / val / test split ratios. |
+| `--auto-split-ratios` | `0.9,0.05,0.05` | Train / val / test split ratios. |
 | `--resume-mode` | `latest` | Resume source: `latest`, `global_best`, or `phase_best`. |
 | `--resume-phase-index` | `0` | Explicit resume phase index override. |
 | `--resume-phase-name` | `""` | Explicit resume phase name override. |
@@ -107,7 +107,7 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--camera-color-cast-strength` | `0.24` | Maximum Phase 0 train-time magenta/pink cast strength. |
 | `--camera-color-cast-eval` / `--no-camera-color-cast-eval` | `true` | Passed through to the repo dataset builder so Dataset_Final val/test are rendered in the Pi-camera color domain. |
 | `--class-mapping` | `""` | Optional JSON merge map passed to the repo dataset builder. |
-| `--auto-split-ratios` | `0.7,0.2,0.1` | Auto-split ratios when the dataset root has no explicit train/val/test layout. |
+| `--auto-split-ratios` | `0.9,0.05,0.05` | Auto-split ratios when the dataset root has no explicit train/val/test layout. |
 | `--runtime-bad-sample-cleanup` | `false` | Mirror the main trainer's runtime bad-sample cleanup behavior. |
 | `--batch-size` | `128` | Physical batch size for Phase 0 masking reconstruction. Uses the same class-balanced sampler as the supervised stages. Combined with `--grad-accum-steps 2` this gives an effective batch size of 256. |
 | `--num-workers` | `2` | DataLoader worker count. |
