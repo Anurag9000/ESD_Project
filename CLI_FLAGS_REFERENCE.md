@@ -45,8 +45,9 @@ Live logs now print pure accuracy plus `per_class_accuracy` and `per_class_avg_c
 | `--phase0-encoder-checkpoint` | `""` | Optional Phase 0 masked-image-modeling encoder checkpoint to seed the backbone before SupCon/CE starts. |
 | `--augment-repeats` | `16` | Deterministic augmentation variants per source image. |
 | `--augment-gaussian-sigmas` | `0.5` | Stochastic augmentation sigma scale. |
-| `--camera-color-cast-probability` | `0.65` | Probability of applying Pi-camera style magenta/pink white-balance cast to train augmentations. Validation/test stay clean. |
+| `--camera-color-cast-probability` | `0.85` | Probability of applying Pi-camera style magenta/pink white-balance cast to train augmentations. |
 | `--camera-color-cast-strength` | `0.24` | Maximum strength of the magenta/pink cast augmentation. |
+| `--camera-color-cast-eval` / `--no-camera-color-cast-eval` | `true` | Render Dataset_Final val/test through a deterministic Pi-camera magenta cast for deployment-domain model selection. External holdout images are not modified. |
 | `--frozen-core-backbone-modules` | `40` | Number of earliest backbone leaf modules kept frozen in every SupCon, CE, and recursive phase. Default freezes the stem/core 40 modules. |
 | `--supcon-unfreeze-backbone-modules` | `None` | Optional extra cap on how many tail modules SupCon may unfreeze. When unset, SupCon may train only the tail left after the frozen 40-module core. |
 | `--ce-max-unfreeze-modules` | `None` | Optional extra cap on how many tail modules CE may unfreeze, including the `full_model` path. When unset, CE may train only the tail left after the frozen 40-module core. |
@@ -102,8 +103,9 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--image-size` | `224` | Input resolution for masking and reconstruction. |
 | `--augment-repeats` | `16` | Passed through to the repo dataset builder for split construction. |
 | `--augment-gaussian-sigmas` | `0.5` | Passed through to the repo dataset builder for split construction. |
-| `--camera-color-cast-probability` | `0.65` | Passed through to the repo dataset builder so Phase 0 MIM sees the same Pi-camera color-cast augmentation on train images. |
+| `--camera-color-cast-probability` | `0.85` | Passed through to the repo dataset builder so Phase 0 MIM sees the same Pi-camera color-cast augmentation on train images. |
 | `--camera-color-cast-strength` | `0.24` | Maximum Phase 0 train-time magenta/pink cast strength. |
+| `--camera-color-cast-eval` / `--no-camera-color-cast-eval` | `true` | Passed through to the repo dataset builder so Dataset_Final val/test are rendered in the Pi-camera color domain. |
 | `--class-mapping` | `""` | Optional JSON merge map passed to the repo dataset builder. |
 | `--auto-split-ratios` | `0.7,0.2,0.1` | Auto-split ratios when the dataset root has no explicit train/val/test layout. |
 | `--runtime-bad-sample-cleanup` | `false` | Mirror the main trainer's runtime bad-sample cleanup behavior. |
