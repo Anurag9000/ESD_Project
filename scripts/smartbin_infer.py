@@ -23,7 +23,7 @@ from pathlib import Path
 
 import numpy as np
 import onnxruntime as ort
-from PIL import Image
+from PIL import Image, ImageOps
 
 # ── Constants (must match training) ──────────────────────────────────────────
 IMAGE_SIZE  = 224
@@ -37,18 +37,12 @@ CLASS_NAMES = [
 
 def preprocess(image: Image.Image) -> np.ndarray:
     """Centre-crop + normalize exactly as the training eval pipeline does."""
-    # Resize shortest edge to IMAGE_SIZE
-    w, h = image.size
-    if w < h:
-        new_w, new_h = IMAGE_SIZE, int(h * IMAGE_SIZE / w)
-    else:
-        new_w, new_h = int(w * IMAGE_SIZE / h), IMAGE_SIZE
-    image = image.resize((new_w, new_h), Image.BILINEAR)
-
-    # Centre crop
-    left  = (new_w - IMAGE_SIZE) // 2
-    top   = (new_h - IMAGE_SIZE) // 2
-    image = image.crop((left, top, left + IMAGE_SIZE, top + IMAGE_SIZE))
+    image = ImageOps.contain(image, (IMAGE_SIZE, IMAGE_SIZE), method=Image.BILINEAR)
+    canvas = Image.new("RGB", (IMAGE_SIZE, IMAGE_SIZE), (0, 0, 0))
+    offset_x = (IMAGE_SIZE - image.width) // 2
+    offset_y = (IMAGE_SIZE - image.height) // 2
+    canvas.paste(image, (offset_x, offset_y))
+    image = canvas
 
     # To float32 numpy, HWC → CHW, normalize
     arr = np.array(image, dtype=np.float32) / 255.0   # [H, W, 3]

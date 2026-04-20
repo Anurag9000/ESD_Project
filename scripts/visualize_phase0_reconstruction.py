@@ -49,6 +49,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prefetch-factor", type=int, default=1)
     parser.add_argument("--sample-count", type=int, default=6)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--class-mapping", type=str, default="")
+    parser.add_argument("--auto-split-ratios", default="0.9,0.05,0.05")
+    parser.add_argument("--runtime-bad-sample-cleanup", action="store_true")
+    parser.add_argument("--augment-repeats", type=int, default=1)
+    parser.add_argument("--augment-gaussian-sigmas", type=float, default=1.0)
+    parser.add_argument("--camera-color-cast-probability", type=float, default=1.0)
+    parser.add_argument("--camera-color-cast-strength", type=float, default=0.50)
+    parser.add_argument("--camera-color-cast-eval", action=argparse.BooleanOptionalAction, default=True)
     return parser
 
 
