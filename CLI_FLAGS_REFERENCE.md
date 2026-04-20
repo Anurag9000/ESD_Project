@@ -54,7 +54,7 @@ Live logs now print pure accuracy plus `per_class_accuracy` and `per_class_avg_c
 | `--output-dir` | `Results/metric_learning_experiment` | Main training output root. |
 | `--log-file` | `logs/metric_learning_experiment.log.jsonl` | Structured JSONL log path. |
 | `--resume-checkpoint` | `""` | Explicit checkpoint to resume from. |
-| `--class-mapping` | `""` | JSON string for training-time class merging; the default 3-class pipeline ignores extra physical folders. |
+| `--class-mapping` | `""` | JSON string for training-time class merging; the default 3-class pipeline ignores extra physical folders except the default train-only real-world append root. |
 | `--auto-split-ratios` | `0.9,0.05,0.05` | Train / val / test split ratios. |
 | `--resume-mode` | `latest` | Resume source: `latest`, `global_best`, or `phase_best`. |
 | `--resume-phase-index` | `0` | Explicit resume phase index override. |
@@ -96,6 +96,7 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | Flag | Default | What it does |
 | --- | --- | --- |
 | `--dataset-root` | `Dataset_Final` | Dataset root used to build the clean train split. |
+| `--aux-train-dataset-root` | `REDACTED_DATA_ROOT` | Optional extra physical dataset root appended to the Phase 0 training split only. |
 | `--output-dir` | `Results/phase0_mim` | Phase 0 checkpoint output root. |
 | `--log-file` | `logs/phase0_mim.log.jsonl` | Structured Phase 0 JSONL log. |
 | `--backbone` | `convnextv2_nano` | Backbone selection used for the encoder. Any timm backbone string is accepted. |
@@ -282,6 +283,7 @@ These are not `argparse` flags, but they control the shell wrappers and the acti
 - `run_training.sh` supports optional Phase 0 MIM pretraining via `--phase0-mim` plus `--phase0-mim-*` controls; when enabled it exports `phase0_mim/phase0_encoder_final.pth` and passes it into the progressive trainer via `--phase0-encoder-checkpoint`.
 - `--phase0-mim-train-loss-window` controls the Phase 0 early-stopping window in effective optimizer batches. The default is `5000`.
 - Phase 0 uses the same balanced class sampler as SupCon and CE. It defaults to `batch-size 128` with `grad-accum-steps 2`, giving the same effective batch size of 256 without changing the rest of the pipeline defaults.
+- The default train split appends `REDACTED_DATA_ROOT` as extra training-only data and still excludes plastic from the logical 3-class taxonomy.
 - Phase 0 reconstruction previews are written to `Results/<run>/phase0_mim/reconstruction_previews/` by default. The standalone renderer `scripts/visualize_phase0_reconstruction.py` can regenerate a preview from any saved `best.pt` or `last.pt`.
 - Re-running the exact same `run_training.sh` command is the resume path. The wrapper skips completed Phase 0/progressive stages and resumes the incomplete stage from that stage's own `step_last.pt` first, then `last.pt`.
 - `run_full_training_pipeline.sh` ignores user-supplied `--dataset-root`, `--batch-size`, `--output-dir`, `--log-file`, `--resume-checkpoint`, `--resume-mode`, `--resume-phase-index`, `--classifier-train-mode`, `--classifier-early-stopping-metric`, `--head-lr`, `--backbone-lr`, `--stage-early-stopping-patience`, and `--optimizer`.
