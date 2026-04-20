@@ -63,8 +63,9 @@ LEGACY_8_CLASS_TAXONOMY = (
 SPLIT_OFFSETS = {"train": 0, "val": 10_000_000, "test": 20_000_000}
 SHADOW_PROBABILITY = 0.20
 GLARE_PROBABILITY = 0.25
-CAMERA_COLOR_CAST_PROBABILITY = 0.65
+CAMERA_COLOR_CAST_PROBABILITY = 0.85
 CAMERA_COLOR_CAST_STRENGTH = 0.24
+CAMERA_COLOR_CAST_EVAL = True
 MOTION_BLUR_PROBABILITY = 0.18
 DEFOCUS_BLUR_PROBABILITY = 0.18
 RESOLUTION_DEGRADE_PROBABILITY = 0.20
@@ -363,6 +364,7 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
         gaussian_sigmas: float,
         camera_color_cast_probability: float = CAMERA_COLOR_CAST_PROBABILITY,
         camera_color_cast_strength: float = CAMERA_COLOR_CAST_STRENGTH,
+        camera_color_cast_eval: bool = CAMERA_COLOR_CAST_EVAL,
         apply_augmentation: bool = True,
         *,
         base_dataset: datasets.ImageFolder | None = None,
@@ -383,6 +385,7 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
         self.gaussian_sigmas = gaussian_sigmas
         self.camera_color_cast_probability = float(camera_color_cast_probability)
         self.camera_color_cast_strength = float(camera_color_cast_strength)
+        self.camera_color_cast_eval = bool(camera_color_cast_eval)
         self.apply_augmentation = apply_augmentation
         # Only the training split is allowed to use stochastic augmentations.
         # Validation and test stay strictly clean.
@@ -553,7 +556,15 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
                         camera_color_cast_strength=self.camera_color_cast_strength,
                     )
                 else:
-                    tensor = evaluation_tensor_from_image(image, self.image_size)
+                    seed = self._seed_for_variant(source_index, variant_index, view_offset) + attempt
+                    rng = random.Random(seed)
+                    tensor = evaluation_tensor_from_image(
+                        image,
+                        self.image_size,
+                        rng=rng,
+                        camera_color_cast_eval=self.camera_color_cast_eval,
+                        camera_color_cast_strength=self.camera_color_cast_strength,
+                    )
                 return tensor, target
                 
             except Exception as e:
@@ -1115,10 +1126,25 @@ def augmented_tensor_from_image(
     return TF.normalize(tensor, IMAGENET_MEAN, IMAGENET_STD)
 
 
-def evaluation_tensor_from_image(image: Image.Image, image_size: int) -> torch.Tensor:
+def evaluation_tensor_from_image(
+    image: Image.Image,
+    image_size: int,
+    *,
+    rng: random.Random | None = None,
+    camera_color_cast_eval: bool = False,
+    camera_color_cast_strength: float = CAMERA_COLOR_CAST_STRENGTH,
+) -> torch.Tensor:
     image = TF.resize(image, image_size, interpolation=InterpolationMode.BILINEAR)
     image = TF.center_crop(image, [image_size, image_size])
     tensor = TF.to_tensor(image).clamp(0.0, 1.0)
+    if camera_color_cast_eval:
+        tensor = apply_camera_color_cast(
+            tensor,
+            rng or random.Random(0),
+            gaussian_sigmas=0.5,
+            probability=1.0,
+            strength=camera_color_cast_strength,
+        ).clamp(0.0, 1.0)
     return TF.normalize(tensor, IMAGENET_MEAN, IMAGENET_STD)
 
 
@@ -1531,6 +1557,7 @@ def build_datasets(
             args.augment_gaussian_sigmas,
             args.camera_color_cast_probability,
             args.camera_color_cast_strength,
+            args.camera_color_cast_eval,
             apply_augmentation=True,
             class_mapping=class_mapping,
             dataset_root=root,
@@ -1545,6 +1572,7 @@ def build_datasets(
             args.augment_gaussian_sigmas,
             args.camera_color_cast_probability,
             args.camera_color_cast_strength,
+            args.camera_color_cast_eval,
             apply_augmentation=False,
             class_mapping=class_mapping,
             dataset_root=root,
@@ -1559,7 +1587,8 @@ def build_datasets(
             args.augment_gaussian_sigmas,
             args.camera_color_cast_probability,
             args.camera_color_cast_strength,
-            apply_augmentation=False,  # test is always clean — no augmentation
+            args.camera_color_cast_eval,
+            apply_augmentation=False,  # no stochastic/geometric aug; deterministic camera cast may apply
             class_mapping=class_mapping,
             dataset_root=root,
             enable_runtime_bad_sample_cleanup=args.runtime_bad_sample_cleanup,
@@ -1709,6 +1738,7 @@ def build_auto_split_datasets(
         args.augment_gaussian_sigmas,
         args.camera_color_cast_probability,
         args.camera_color_cast_strength,
+        args.camera_color_cast_eval,
         apply_augmentation=True,
         base_dataset=base_dataset,
         samples=train_samples,
@@ -1724,6 +1754,7 @@ def build_auto_split_datasets(
         args.augment_gaussian_sigmas,
         args.camera_color_cast_probability,
         args.camera_color_cast_strength,
+        args.camera_color_cast_eval,
         apply_augmentation=False,
         base_dataset=base_dataset,
         samples=val_samples,
@@ -1739,7 +1770,8 @@ def build_auto_split_datasets(
         args.augment_gaussian_sigmas,
         args.camera_color_cast_probability,
         args.camera_color_cast_strength,
-        apply_augmentation=False,  # test is always clean — no augmentation
+        args.camera_color_cast_eval,
+        apply_augmentation=False,  # no stochastic/geometric aug; deterministic camera cast may apply
         base_dataset=base_dataset,
         samples=test_samples,
         dataset_root=root,
@@ -4427,6 +4459,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=CAMERA_COLOR_CAST_STRENGTH,
         help="Maximum strength of the train-time magenta/pink camera color-cast augmentation.",
     )
+    parser.add_argument(
+        "--camera-color-cast-eval",
+        action=argparse.BooleanOptionalAction,
+        default=CAMERA_COLOR_CAST_EVAL,
+        help=(
+            "Render validation/test Dataset_Final samples through a deterministic Pi-camera "
+            "magenta/pink cast. External holdout images are not modified by this flag."
+        ),
+    )
     # SupCon and CE both respect the same permanent frozen-core boundary by default.
     # Only the semantic tail after this frozen core is eligible for unfreezing.
     parser.add_argument(
@@ -6414,6 +6455,7 @@ def run_experiment(args: argparse.Namespace) -> int:
         "augment_gaussian_sigmas": args.augment_gaussian_sigmas,
         "camera_color_cast_probability": args.camera_color_cast_probability,
         "camera_color_cast_strength": args.camera_color_cast_strength,
+        "camera_color_cast_eval": args.camera_color_cast_eval,
         "sampling_strategy": args.sampling_strategy,
         "train_class_counts": class_counts(train_dataset),
         "val_class_counts": class_counts(val_dataset),
@@ -6450,6 +6492,7 @@ def run_experiment(args: argparse.Namespace) -> int:
             "glare_probability": GLARE_PROBABILITY,
             "camera_color_cast_probability": args.camera_color_cast_probability,
             "camera_color_cast_strength": args.camera_color_cast_strength,
+            "camera_color_cast_eval": args.camera_color_cast_eval,
         },
         "early_stopping": {
             "supcon_patience": args.supcon_early_stopping_patience,

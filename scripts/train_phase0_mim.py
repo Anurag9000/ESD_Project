@@ -23,6 +23,7 @@ try:
         BACKBONE_REGISTRY,
         CAMERA_COLOR_CAST_PROBABILITY,
         CAMERA_COLOR_CAST_STRENGTH,
+        CAMERA_COLOR_CAST_EVAL,
         build_datasets,
         make_balanced_sampler,
         evaluation_tensor_from_image,
@@ -38,6 +39,7 @@ except ModuleNotFoundError:
         BACKBONE_REGISTRY,
         CAMERA_COLOR_CAST_PROBABILITY,
         CAMERA_COLOR_CAST_STRENGTH,
+        CAMERA_COLOR_CAST_EVAL,
         build_datasets,
         make_balanced_sampler,
         evaluation_tensor_from_image,
@@ -251,6 +253,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--augment-gaussian-sigmas", type=float, default=0.5)
     parser.add_argument("--camera-color-cast-probability", type=float, default=CAMERA_COLOR_CAST_PROBABILITY)
     parser.add_argument("--camera-color-cast-strength", type=float, default=CAMERA_COLOR_CAST_STRENGTH)
+    parser.add_argument("--camera-color-cast-eval", action=argparse.BooleanOptionalAction, default=CAMERA_COLOR_CAST_EVAL)
     parser.add_argument("--class-mapping", type=str, default="")
     parser.add_argument("--auto-split-ratios", default="0.7,0.2,0.1")
     parser.add_argument(
