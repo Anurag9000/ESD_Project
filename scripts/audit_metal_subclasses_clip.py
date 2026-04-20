@@ -81,7 +81,7 @@ def build_metal_split_membership(dataset_root: Path, seed: int) -> dict[str, lis
 
     rng = random.Random(seed)
     split_membership = {"train": [], "val": [], "test": []}
-    ratios = (0.7, 0.2, 0.1)
+    ratios = (0.9, 0.05, 0.05)
     for _, src_paths in sorted(by_source.items()):
         shuffled = list(src_paths)
         rng.shuffle(shuffled)

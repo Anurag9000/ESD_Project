@@ -377,11 +377,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--weights", choices=("default", "none"), default="default")
     parser.add_argument("--image-size", type=int, default=224)
-    parser.add_argument("--augment-repeats", type=int, default=16)
-    parser.add_argument("--augment-gaussian-sigmas", type=float, default=0.5)
-    parser.add_argument("--camera-color-cast-probability", type=float, default=CAMERA_COLOR_CAST_PROBABILITY)
-    parser.add_argument("--camera-color-cast-strength", type=float, default=CAMERA_COLOR_CAST_STRENGTH)
-    parser.add_argument("--camera-color-cast-eval", action=argparse.BooleanOptionalAction, default=CAMERA_COLOR_CAST_EVAL)
+    parser.add_argument(
+        "--augment-repeats",
+        type=int,
+        default=1,
+        help="Legacy compatibility knob retained for parser stability. Phase 0 uses deterministic fixed-tint preprocessing.",
+    )
+    parser.add_argument(
+        "--augment-gaussian-sigmas",
+        type=float,
+        default=1.0,
+        help="Legacy compatibility knob retained for parser stability. Phase 0 uses deterministic fixed-tint preprocessing.",
+    )
+    parser.add_argument(
+        "--camera-color-cast-probability",
+        type=float,
+        default=CAMERA_COLOR_CAST_PROBABILITY,
+        help="Fixed Raspberry Pi style magenta/pink cast applied to every Phase 0 image.",
+    )
+    parser.add_argument(
+        "--camera-color-cast-strength",
+        type=float,
+        default=CAMERA_COLOR_CAST_STRENGTH,
+        help="Strength of the fixed Phase 0 magenta/pink cast.",
+    )
+    parser.add_argument(
+        "--camera-color-cast-eval",
+        action=argparse.BooleanOptionalAction,
+        default=CAMERA_COLOR_CAST_EVAL,
+        help="Apply the same fixed magenta/pink cast to Phase 0 train, val, and test images.",
+    )
     parser.add_argument("--class-mapping", type=str, default="")
     parser.add_argument("--auto-split-ratios", default="0.9,0.05,0.05")
     parser.add_argument(

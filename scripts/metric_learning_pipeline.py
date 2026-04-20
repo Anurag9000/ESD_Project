@@ -61,16 +61,16 @@ LEGACY_8_CLASS_TAXONOMY = (
     "soft_plastic",
 )
 SPLIT_OFFSETS = {"train": 0, "val": 10_000_000, "test": 20_000_000}
-SHADOW_PROBABILITY = 0.20
-GLARE_PROBABILITY = 0.25
-CAMERA_COLOR_CAST_PROBABILITY = 0.85
+SHADOW_PROBABILITY = 0.0
+GLARE_PROBABILITY = 0.0
+CAMERA_COLOR_CAST_PROBABILITY = 1.0
 CAMERA_COLOR_CAST_STRENGTH = 0.24
 CAMERA_COLOR_CAST_EVAL = True
-MOTION_BLUR_PROBABILITY = 0.18
-DEFOCUS_BLUR_PROBABILITY = 0.18
-RESOLUTION_DEGRADE_PROBABILITY = 0.20
-TRUNCATION_PROBABILITY = 0.20
-SMUDGE_PROBABILITY = 0.18
+MOTION_BLUR_PROBABILITY = 0.0
+DEFOCUS_BLUR_PROBABILITY = 0.0
+RESOLUTION_DEGRADE_PROBABILITY = 0.0
+TRUNCATION_PROBABILITY = 0.0
+SMUDGE_PROBABILITY = 0.0
 PALETTE_TRANSPARENCY_WARNING = "Palette images with Transparency expressed in bytes should be converted to RGBA images"
 RUNTIME_BAD_SAMPLE_CLEANUP_LOG = "runtime_bad_sample_cleanup.jsonl"
 RUNTIME_BAD_SAMPLE_CLEANUP_LOCK = ".runtime_bad_sample_cleanup.lock"
@@ -379,7 +379,7 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
             base_dataset = datasets.ImageFolder(root)
         self.base_dataset = base_dataset
         self.image_size = image_size
-        self.augment_repeats = augment_repeats
+        self.augment_repeats = max(1, int(augment_repeats))
         self.split_name = split_name
         self.seed = seed
         self.gaussian_sigmas = gaussian_sigmas
@@ -387,9 +387,9 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
         self.camera_color_cast_strength = float(camera_color_cast_strength)
         self.camera_color_cast_eval = bool(camera_color_cast_eval)
         self.apply_augmentation = apply_augmentation
-        # Only the training split is allowed to use stochastic augmentations.
-        # Validation and test stay strictly clean.
-        self.stochastic_augmentation = apply_augmentation and split_name == "train"
+        # The repo-wide policy is now a single deterministic pink tint for every split.
+        # Keep the compatibility flag for parser stability, but never enable stochastic augmentation again.
+        self.stochastic_augmentation = False
         self.dataset_root = dataset_root
         self.enable_runtime_bad_sample_cleanup = enable_runtime_bad_sample_cleanup
         self.disabled_paths: set[str] = set()
@@ -539,32 +539,14 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
                     image = raw_image.convert("RGB")
                 else:
                     image = raw_image.convert("RGB")
-                
-                if self.apply_augmentation:
-                    seed = (
-                        self._runtime_augmentation_seed(source_index, variant_index, view_offset, attempt)
-                        if self.stochastic_augmentation
-                        else self._seed_for_variant(source_index, variant_index, view_offset) + attempt
-                    )
-                    rng = random.Random(seed)
-                    tensor = augmented_tensor_from_image(
-                        image,
-                        self.image_size,
-                        rng,
-                        self.gaussian_sigmas,
-                        camera_color_cast_probability=self.camera_color_cast_probability,
-                        camera_color_cast_strength=self.camera_color_cast_strength,
-                    )
-                else:
-                    seed = self._seed_for_variant(source_index, variant_index, view_offset) + attempt
-                    rng = random.Random(seed)
-                    tensor = evaluation_tensor_from_image(
-                        image,
-                        self.image_size,
-                        rng=rng,
-                        camera_color_cast_eval=self.camera_color_cast_eval,
-                        camera_color_cast_strength=self.camera_color_cast_strength,
-                    )
+
+                tensor = evaluation_tensor_from_image(
+                    image,
+                    self.image_size,
+                    rng=None,
+                    camera_color_cast_eval=True,
+                    camera_color_cast_strength=self.camera_color_cast_strength,
+                )
                 return tensor, target
                 
             except Exception as e:
@@ -613,7 +595,8 @@ class DeterministicSupConDataset(Dataset[tuple[torch.Tensor, torch.Tensor, int]]
 
 
 def sample_gaussian_clipped(rng: random.Random, mean: float, std: float, low: float, high: float) -> float:
-    return min(max(rng.gauss(mean, max(std, 1e-6)), low), high)
+    del rng, std
+    return min(max(mean, low), high)
 
 
 def sample_safe_range(
@@ -626,10 +609,10 @@ def sample_safe_range(
     *,
     mean: float | None = None,
 ) -> float:
+    del rng, hard_low, hard_high, gaussian_sigmas
     if mean is None:
         mean = (safe_low + safe_high) / 2.0
-    std = (safe_high - safe_low) / max(1e-6, 2.0 * gaussian_sigmas)
-    return sample_gaussian_clipped(rng, mean, std, hard_low, hard_high)
+    return min(max(mean, safe_low), safe_high)
 
 
 def sample_symmetric(
@@ -640,7 +623,8 @@ def sample_symmetric(
     *,
     mean: float = 0.0,
 ) -> float:
-    return sample_safe_range(rng, -safe_abs, safe_abs, -hard_abs, hard_abs, gaussian_sigmas, mean=mean)
+    del rng, safe_abs, hard_abs, gaussian_sigmas
+    return mean
 
 
 def sample_log_safe_ratio(
@@ -651,138 +635,33 @@ def sample_log_safe_ratio(
     hard_high: float,
     gaussian_sigmas: float,
 ) -> float:
-    safe_low_log = math.log(safe_low)
-    safe_high_log = math.log(safe_high)
-    hard_low_log = math.log(hard_low)
-    hard_high_log = math.log(hard_high)
-    value_log = sample_safe_range(
-        rng,
-        safe_low_log,
-        safe_high_log,
-        hard_low_log,
-        hard_high_log,
-        gaussian_sigmas,
-        mean=0.0,
-    )
-    return math.exp(value_log)
+    del rng, hard_low, hard_high, gaussian_sigmas
+    return math.sqrt(max(safe_low * safe_high, 1e-12))
 
 
 def random_resized_crop(image: Image.Image, image_size: int, rng: random.Random, gaussian_sigmas: float) -> Image.Image:
-    width, height = image.size
-    area = width * height
-
-    for _ in range(10):
-        target_area = area * sample_safe_range(rng, 0.70, 1.0, 0.55, 1.0, gaussian_sigmas, mean=0.85)
-        aspect_ratio = sample_log_safe_ratio(rng, 0.8, 1.25, 0.7, 1.35, gaussian_sigmas)
-        crop_width = int(round(math.sqrt(target_area * aspect_ratio)))
-        crop_height = int(round(math.sqrt(target_area / aspect_ratio)))
-        if 0 < crop_width <= width and 0 < crop_height <= height:
-            top = rng.randint(0, height - crop_height)
-            left = rng.randint(0, width - crop_width)
-            return TF.resized_crop(
-                image,
-                top=top,
-                left=left,
-                height=crop_height,
-                width=crop_width,
-                size=[image_size, image_size],
-                interpolation=InterpolationMode.BILINEAR,
-            )
-
-    side = min(width, height)
-    top = (height - side) // 2
-    left = (width - side) // 2
-    return TF.resized_crop(
-        image,
-        top=top,
-        left=left,
-        height=side,
-        width=side,
-        size=[image_size, image_size],
-        interpolation=InterpolationMode.BILINEAR,
-    )
+    del image_size, rng, gaussian_sigmas
+    return image
 
 
 def random_perspective(image: Image.Image, rng: random.Random, gaussian_sigmas: float) -> Image.Image:
-    distortion = sample_safe_range(rng, 0.05, 0.15, 0.0, 0.2, gaussian_sigmas, mean=0.10)
-    if distortion < 1e-4:
-        return image
-
-    width, height = image.size
-    dx = distortion * width
-    dy = distortion * height
-
-    def point(x: float, y: float) -> list[int]:
-        px = int(round(min(max(x, 0.0), width - 1.0)))
-        py = int(round(min(max(y, 0.0), height - 1.0)))
-        return [px, py]
-
-    startpoints = [[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]]
-    endpoints = [
-        point(sample_gaussian_clipped(rng, dx / 2.0, dx / max(1e-6, 2.0 * gaussian_sigmas), 0.0, dx), sample_gaussian_clipped(rng, dy / 2.0, dy / max(1e-6, 2.0 * gaussian_sigmas), 0.0, dy)),
-        point(sample_gaussian_clipped(rng, width - 1 - dx / 2.0, dx / max(1e-6, 2.0 * gaussian_sigmas), width - 1 - dx, width - 1), sample_gaussian_clipped(rng, dy / 2.0, dy / max(1e-6, 2.0 * gaussian_sigmas), 0.0, dy)),
-        point(sample_gaussian_clipped(rng, width - 1 - dx / 2.0, dx / max(1e-6, 2.0 * gaussian_sigmas), width - 1 - dx, width - 1), sample_gaussian_clipped(rng, height - 1 - dy / 2.0, dy / max(1e-6, 2.0 * gaussian_sigmas), height - 1 - dy, height - 1)),
-        point(sample_gaussian_clipped(rng, dx / 2.0, dx / max(1e-6, 2.0 * gaussian_sigmas), 0.0, dx), sample_gaussian_clipped(rng, height - 1 - dy / 2.0, dy / max(1e-6, 2.0 * gaussian_sigmas), height - 1 - dy, height - 1)),
-    ]
-    return TF.perspective(
-        image,
-        startpoints=startpoints,
-        endpoints=endpoints,
-        interpolation=InterpolationMode.BILINEAR,
-        fill=0,
-    )
+    del rng, gaussian_sigmas
+    return image
 
 
 def apply_resolution_degradation(image: Image.Image, rng: random.Random, gaussian_sigmas: float) -> Image.Image:
-    if rng.random() >= RESOLUTION_DEGRADE_PROBABILITY:
-        return image
-    width, height = image.size
-    scale = sample_safe_range(rng, 0.45, 0.80, 0.25, 1.0, gaussian_sigmas, mean=0.60)
-    down_w = max(8, int(round(width * scale)))
-    down_h = max(8, int(round(height * scale)))
-    down_mode = InterpolationMode.BILINEAR if rng.random() < 0.5 else InterpolationMode.BICUBIC
-    up_mode = InterpolationMode.BILINEAR if rng.random() < 0.7 else InterpolationMode.BICUBIC
-    image = TF.resize(image, [down_h, down_w], interpolation=down_mode)
-    return TF.resize(image, [height, width], interpolation=up_mode)
+    del rng, gaussian_sigmas
+    return image
 
 
 def apply_border_truncation(image: Image.Image, rng: random.Random, gaussian_sigmas: float) -> Image.Image:
-    if rng.random() >= TRUNCATION_PROBABILITY:
-        return image
-    width, height = image.size
-    keep_fraction = sample_safe_range(rng, 0.85, 1.0, 0.70, 1.0, gaussian_sigmas, mean=0.93)
-    keep_ratio = sample_log_safe_ratio(rng, 0.85, 1.15, 0.70, 1.30, gaussian_sigmas)
-    crop_w = min(width, max(2, int(round(width * keep_fraction * math.sqrt(keep_ratio)))))
-    crop_h = min(height, max(2, int(round(height * keep_fraction / math.sqrt(keep_ratio)))))
-    max_left = max(0, width - crop_w)
-    max_top = max(0, height - crop_h)
-
-    anchor = rng.choice(("left", "right", "top", "bottom", "top_left", "top_right", "bottom_left", "bottom_right"))
-    if anchor in {"left", "top_left", "bottom_left"}:
-        left = 0
-    elif anchor in {"right", "top_right", "bottom_right"}:
-        left = max_left
-    else:
-        left = rng.randint(0, max_left)
-
-    if anchor in {"top", "top_left", "top_right"}:
-        top = 0
-    elif anchor in {"bottom", "bottom_left", "bottom_right"}:
-        top = max_top
-    else:
-        top = rng.randint(0, max_top)
-
-    image = TF.crop(image, top=top, left=left, height=crop_h, width=crop_w)
-    return TF.resize(image, [height, width], interpolation=InterpolationMode.BILINEAR)
+    del rng, gaussian_sigmas
+    return image
 
 
 def jpeg_compress(image: Image.Image, rng: random.Random, gaussian_sigmas: float) -> Image.Image:
-    quality = int(round(sample_safe_range(rng, 50.0, 100.0, 35.0, 100.0, gaussian_sigmas, mean=75.0)))
-    buffer = io.BytesIO()
-    image.save(buffer, format="JPEG", quality=quality, optimize=False)
-    buffer.seek(0)
-    compressed = Image.open(buffer)
-    return compressed.convert("RGB")
+    del rng, gaussian_sigmas
+    return image
 
 
 def motion_blur_kernel(kernel_size: int, angle_degrees: float) -> torch.Tensor:
@@ -797,17 +676,8 @@ def motion_blur_kernel(kernel_size: int, angle_degrees: float) -> torch.Tensor:
 
 
 def apply_motion_blur(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: float) -> torch.Tensor:
-    if rng.random() >= MOTION_BLUR_PROBABILITY:
-        return tensor
-    length = sample_safe_range(rng, 3.0, 9.0, 1.0, 15.0, gaussian_sigmas, mean=5.5)
-    kernel_size = max(3, int(round(length)))
-    if kernel_size % 2 == 0:
-        kernel_size += 1
-    angle = rng.uniform(0.0, 180.0)
-    kernel = motion_blur_kernel(kernel_size, angle).to(dtype=tensor.dtype, device=tensor.device)
-    kernel = kernel.view(1, 1, kernel_size, kernel_size).repeat(3, 1, 1, 1)
-    blurred = F.conv2d(tensor.unsqueeze(0), kernel, padding=kernel_size // 2, groups=3)
-    return blurred.squeeze(0)
+    del rng, gaussian_sigmas
+    return tensor
 
 
 def defocus_blur_kernel(radius: float) -> torch.Tensor:
@@ -826,164 +696,47 @@ def defocus_blur_kernel(radius: float) -> torch.Tensor:
 
 
 def apply_defocus_blur(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: float) -> torch.Tensor:
-    if rng.random() >= DEFOCUS_BLUR_PROBABILITY:
-        return tensor
-    radius = sample_safe_range(rng, 0.8, 1.8, 0.0, 3.0, gaussian_sigmas, mean=1.2)
-    if radius < 0.25:
-        return tensor
-    kernel = defocus_blur_kernel(radius).to(dtype=tensor.dtype, device=tensor.device)
-    kernel_size = kernel.shape[0]
-    kernel = kernel.view(1, 1, kernel_size, kernel_size).repeat(3, 1, 1, 1)
-    blurred = F.conv2d(tensor.unsqueeze(0), kernel, padding=kernel_size // 2, groups=3)
-    return blurred.squeeze(0)
+    del rng, gaussian_sigmas
+    return tensor
 
 
 def apply_gaussian_noise(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: float) -> torch.Tensor:
-    noise_std = sample_safe_range(rng, 0.0, 0.02, 0.0, 0.06, gaussian_sigmas, mean=0.01)
-    if noise_std < 1e-5:
-        return tensor
-    generator = torch.Generator()
-    generator.manual_seed(rng.randrange(0, 2**31 - 1))
-    noise = torch.randn(tensor.shape, generator=generator, dtype=tensor.dtype)
-    return tensor + (noise * noise_std)
+    del rng, gaussian_sigmas
+    return tensor
 
 
 def apply_channel_shift(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: float) -> torch.Tensor:
-    shifts = torch.tensor(
-        [
-            sample_symmetric(rng, 0.02, 0.05, gaussian_sigmas),
-            sample_symmetric(rng, 0.02, 0.05, gaussian_sigmas),
-            sample_symmetric(rng, 0.02, 0.05, gaussian_sigmas),
-        ],
-        dtype=tensor.dtype,
-    ).view(3, 1, 1)
-    return tensor + shifts
+    del rng, gaussian_sigmas
+    return tensor
 
 
 def apply_grayscale_mix(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: float) -> torch.Tensor:
-    mix = sample_safe_range(rng, 0.0, 0.08, 0.0, 0.15, gaussian_sigmas, mean=0.04)
-    gray = tensor.mean(dim=0, keepdim=True).repeat(3, 1, 1)
-    return tensor.mul(1.0 - mix).add(gray.mul(mix))
+    del rng, gaussian_sigmas
+    return tensor
 
 
 def apply_illumination_gradient(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: float) -> torch.Tensor:
-    _, height, width = tensor.shape
-    horizontal = rng.random() < 0.5
-    start = sample_safe_range(rng, 0.8, 1.05, 0.7, 1.1, gaussian_sigmas, mean=0.95)
-    end = sample_safe_range(rng, 0.8, 1.05, 0.7, 1.1, gaussian_sigmas, mean=0.95)
-    if horizontal:
-        ramp = torch.linspace(start, end, steps=width, dtype=tensor.dtype).view(1, 1, width)
-        mask = ramp.expand(1, height, width)
-    else:
-        ramp = torch.linspace(start, end, steps=height, dtype=tensor.dtype).view(1, height, 1)
-        mask = ramp.expand(1, height, width)
-    return tensor * mask
+    del rng, gaussian_sigmas
+    return tensor
 
 
 def apply_smudge_overlay(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: float) -> torch.Tensor:
-    if rng.random() >= SMUDGE_PROBABILITY:
-        return tensor
-    _, height, width = tensor.shape
-    ys = torch.linspace(-1.0, 1.0, steps=height, dtype=tensor.dtype, device=tensor.device)
-    xs = torch.linspace(-1.0, 1.0, steps=width, dtype=tensor.dtype, device=tensor.device)
-    yy, xx = torch.meshgrid(ys, xs, indexing="ij")
-    overlay = torch.zeros((height, width), dtype=tensor.dtype, device=tensor.device)
-    blob_count = rng.randint(1, 3)
-    for _ in range(blob_count):
-        cx = sample_safe_range(rng, -0.45, 0.45, -0.85, 0.85, gaussian_sigmas, mean=0.0)
-        cy = sample_safe_range(rng, -0.45, 0.45, -0.85, 0.85, gaussian_sigmas, mean=0.0)
-        sigma_x = sample_safe_range(rng, 0.10, 0.22, 0.04, 0.35, gaussian_sigmas, mean=0.15)
-        sigma_y = sample_safe_range(rng, 0.07, 0.18, 0.03, 0.30, gaussian_sigmas, mean=0.12)
-        opacity = sample_safe_range(rng, 0.05, 0.14, 0.0, 0.25, gaussian_sigmas, mean=0.09)
-        blob = torch.exp(-(((xx - cx) ** 2) / (2 * sigma_x * sigma_x) + ((yy - cy) ** 2) / (2 * sigma_y * sigma_y)))
-        overlay = torch.maximum(overlay, blob * opacity)
-    stain_color = torch.tensor(
-        [
-            sample_safe_range(rng, 0.32, 0.55, 0.20, 0.65, gaussian_sigmas, mean=0.43),
-            sample_safe_range(rng, 0.28, 0.46, 0.18, 0.56, gaussian_sigmas, mean=0.36),
-            sample_safe_range(rng, 0.18, 0.34, 0.10, 0.44, gaussian_sigmas, mean=0.24),
-        ],
-        dtype=tensor.dtype,
-        device=tensor.device,
-    ).view(3, 1, 1)
-    overlay = overlay.unsqueeze(0)
-    return tensor * (1.0 - overlay) + stain_color * overlay
+    del rng, gaussian_sigmas
+    return tensor
 
 
 def apply_shadow_overlay(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: float, shadow_prob: float) -> torch.Tensor:
-    if rng.random() >= shadow_prob:
-        return tensor
-    _, height, width = tensor.shape
-    horizontal = rng.random() < 0.5
-    darkness = sample_safe_range(rng, 0.82, 0.95, 0.7, 1.0, gaussian_sigmas, mean=0.90)
-    midpoint = sample_safe_range(rng, 0.35, 0.65, 0.15, 0.85, gaussian_sigmas, mean=0.5)
-    softness = sample_safe_range(rng, 0.08, 0.18, 0.03, 0.30, gaussian_sigmas, mean=0.12)
-    if horizontal:
-        coords = torch.linspace(0.0, 1.0, steps=width, dtype=tensor.dtype).view(1, 1, width)
-    else:
-        coords = torch.linspace(0.0, 1.0, steps=height, dtype=tensor.dtype).view(1, height, 1)
-    transition = torch.sigmoid((coords - midpoint) / max(softness, 1e-4))
-    shadow_mask = darkness + (1.0 - darkness) * transition
-    shadow_mask = shadow_mask.expand(1, height, width)
-    return tensor * shadow_mask
+    del rng, gaussian_sigmas, shadow_prob
+    return tensor
 
 
 def apply_specular_glare(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: float, glare_prob: float) -> torch.Tensor:
-    if rng.random() >= glare_prob:
-        return tensor
-    _, height, width = tensor.shape
-    ys = torch.linspace(-1.0, 1.0, steps=height, dtype=tensor.dtype)
-    xs = torch.linspace(-1.0, 1.0, steps=width, dtype=tensor.dtype)
-    yy, xx = torch.meshgrid(ys, xs, indexing="ij")
-    glare = torch.zeros((height, width), dtype=tensor.dtype)
-    blob_count = rng.randint(1, 3)
-    for _ in range(blob_count):
-        cx = sample_safe_range(rng, -0.4, 0.4, -0.8, 0.8, gaussian_sigmas, mean=0.0)
-        cy = sample_safe_range(rng, -0.4, 0.4, -0.8, 0.8, gaussian_sigmas, mean=0.0)
-        sigma_x = sample_safe_range(rng, 0.08, 0.18, 0.03, 0.30, gaussian_sigmas, mean=0.12)
-        sigma_y = sample_safe_range(rng, 0.05, 0.14, 0.02, 0.22, gaussian_sigmas, mean=0.09)
-        intensity = sample_safe_range(rng, 0.10, 0.22, 0.0, 0.35, gaussian_sigmas, mean=0.16)
-        blob = torch.exp(-(((xx - cx) ** 2) / (2 * sigma_x * sigma_x) + ((yy - cy) ** 2) / (2 * sigma_y * sigma_y)))
-        glare = torch.maximum(glare, blob * intensity)
-    color_scale = torch.tensor(
-        [
-            sample_safe_range(rng, 0.95, 1.05, 0.9, 1.1, gaussian_sigmas, mean=1.0),
-            sample_safe_range(rng, 0.97, 1.08, 0.9, 1.12, gaussian_sigmas, mean=1.02),
-            sample_safe_range(rng, 1.00, 1.12, 0.92, 1.18, gaussian_sigmas, mean=1.06),
-        ],
-        dtype=tensor.dtype,
-    ).view(3, 1, 1)
-    glare = glare.unsqueeze(0)
-    return tensor + (1.0 - tensor) * glare * color_scale
+    del rng, gaussian_sigmas, glare_prob
+    return tensor
 
 
 def apply_cutout(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: float) -> torch.Tensor:
-    _, height, width = tensor.shape
-    cutout_count = rng.randint(1, 3)
-    total_fraction = sample_safe_range(rng, 0.08, 0.15, 0.02, 0.25, gaussian_sigmas, mean=0.11)
-    remaining_area = total_fraction * height * width
-    for _ in range(cutout_count):
-        if remaining_area <= 1.0:
-            break
-        share = remaining_area if cutout_count == 1 else remaining_area * rng.uniform(0.25, 0.75)
-        aspect = sample_log_safe_ratio(rng, 0.8, 1.25, 0.7, 1.35, gaussian_sigmas)
-        cutout_h = max(1, int(round(math.sqrt(share / max(aspect, 1e-6)))))
-        cutout_w = max(1, int(round(cutout_h * aspect)))
-        cutout_h = min(cutout_h, height)
-        cutout_w = min(cutout_w, width)
-        top = rng.randint(0, max(0, height - cutout_h))
-        left = rng.randint(0, max(0, width - cutout_w))
-        fill = torch.tensor(
-            [
-                sample_gaussian_clipped(rng, 0.5, 0.25, 0.0, 1.0),
-                sample_gaussian_clipped(rng, 0.5, 0.25, 0.0, 1.0),
-                sample_gaussian_clipped(rng, 0.5, 0.25, 0.0, 1.0),
-            ],
-            dtype=tensor.dtype,
-        ).view(3, 1, 1)
-        tensor[:, top : top + cutout_h, left : left + cutout_w] = fill
-        remaining_area -= cutout_h * cutout_w
-        cutout_count -= 1
+    del rng, gaussian_sigmas
     return tensor
 
 
@@ -994,61 +747,19 @@ def apply_camera_color_cast(
     probability: float,
     strength: float,
 ) -> torch.Tensor:
-    """Simulate the Raspberry Pi camera's magenta/pink white-balance cast."""
-    probability = max(0.0, min(1.0, float(probability)))
+    """Apply the repo-wide fixed Raspberry Pi pink tint."""
+    _ = rng, gaussian_sigmas, probability
     strength = max(0.0, float(strength))
-    if strength <= 0.0 or rng.random() >= probability:
+    if strength <= 0.0:
         return tensor
 
-    cast_strength = sample_safe_range(
-        rng,
-        0.35 * strength,
-        strength,
-        0.0,
-        1.6 * strength,
-        gaussian_sigmas,
-        mean=0.7 * strength,
-    )
-    red_gain = sample_safe_range(
-        rng,
-        1.0 + 0.35 * cast_strength,
-        1.0 + 1.05 * cast_strength,
-        0.95,
-        1.0 + 1.6 * cast_strength,
-        gaussian_sigmas,
-        mean=1.0 + 0.7 * cast_strength,
-    )
-    green_gain = sample_safe_range(
-        rng,
-        1.0 - 0.65 * cast_strength,
-        1.0 - 0.18 * cast_strength,
-        0.62,
-        1.05,
-        gaussian_sigmas,
-        mean=1.0 - 0.35 * cast_strength,
-    )
-    blue_gain = sample_safe_range(
-        rng,
-        1.0 + 0.25 * cast_strength,
-        1.0 + 0.95 * cast_strength,
-        0.95,
-        1.0 + 1.45 * cast_strength,
-        gaussian_sigmas,
-        mean=1.0 + 0.62 * cast_strength,
-    )
+    red_gain = 1.0 + 0.70 * strength
+    green_gain = 1.0 - 0.35 * strength
+    blue_gain = 1.0 + 0.62 * strength
     gains = torch.tensor([red_gain, green_gain, blue_gain], dtype=tensor.dtype, device=tensor.device).view(3, 1, 1)
     tensor = tensor * gains
 
-    # A weak global magenta light wash makes white backgrounds turn pink, matching the Pi setup.
-    wash_opacity = sample_safe_range(
-        rng,
-        0.06 * cast_strength,
-        0.28 * cast_strength,
-        0.0,
-        0.42 * cast_strength,
-        gaussian_sigmas,
-        mean=0.16 * cast_strength,
-    )
+    wash_opacity = 0.16 * strength
     wash_color = torch.tensor([1.0, 0.72, 0.98], dtype=tensor.dtype, device=tensor.device).view(3, 1, 1)
     return tensor * (1.0 - wash_opacity) + wash_color * wash_opacity
 
@@ -1062,67 +773,17 @@ def augmented_tensor_from_image(
     camera_color_cast_probability: float = CAMERA_COLOR_CAST_PROBABILITY,
     camera_color_cast_strength: float = CAMERA_COLOR_CAST_STRENGTH,
 ) -> torch.Tensor:
-    image = random_resized_crop(image, image_size, rng, gaussian_sigmas)
-    image = apply_border_truncation(image, rng, gaussian_sigmas)
-
-    if rng.random() < 0.5:
-        image = TF.hflip(image)
-    if rng.random() < 0.05:
-        image = TF.vflip(image)
-
-    translate = (
-        int(round(sample_symmetric(rng, 0.10, 0.15, gaussian_sigmas) * image_size)),
-        int(round(sample_symmetric(rng, 0.10, 0.15, gaussian_sigmas) * image_size)),
-    )
-    image = TF.affine(
-        image,
-        angle=sample_symmetric(rng, 15.0, 25.0, gaussian_sigmas),
-        translate=translate,
-        scale=sample_safe_range(rng, 0.85, 1.15, 0.75, 1.25, gaussian_sigmas, mean=1.0),
-        shear=[
-            sample_symmetric(rng, 8.0, 12.0, gaussian_sigmas),
-            sample_symmetric(rng, 8.0, 12.0, gaussian_sigmas),
-        ],
-        interpolation=InterpolationMode.BILINEAR,
-        fill=0,
-    )
-    image = random_perspective(image, rng, gaussian_sigmas)
-    image = TF.adjust_brightness(image, sample_safe_range(rng, 0.8, 1.2, 0.65, 1.35, gaussian_sigmas, mean=1.0))
-    image = TF.adjust_contrast(image, sample_safe_range(rng, 0.8, 1.25, 0.7, 1.4, gaussian_sigmas, mean=1.0))
-    image = TF.adjust_saturation(image, sample_safe_range(rng, 0.8, 1.25, 0.7, 1.35, gaussian_sigmas, mean=1.0))
-    image = TF.adjust_hue(image, sample_symmetric(rng, 0.04, 0.08, gaussian_sigmas))
-    image = TF.adjust_gamma(image, sample_safe_range(rng, 0.85, 1.2, 0.75, 1.3, gaussian_sigmas, mean=1.0), gain=1.0)
-    image = TF.adjust_sharpness(image, sample_safe_range(rng, 0.7, 1.4, 0.5, 1.8, gaussian_sigmas, mean=1.0))
-    image = jpeg_compress(image, rng, gaussian_sigmas)
-    image = apply_resolution_degradation(image, rng, gaussian_sigmas)
-
-    tensor = TF.to_tensor(image)
+    _ = rng, gaussian_sigmas, camera_color_cast_probability
+    image = TF.resize(image, [image_size, image_size], interpolation=InterpolationMode.BILINEAR)
+    image = TF.center_crop(image, [image_size, image_size])
+    tensor = TF.to_tensor(image).clamp(0.0, 1.0)
     tensor = apply_camera_color_cast(
         tensor,
-        rng,
-        gaussian_sigmas,
-        probability=camera_color_cast_probability,
+        random.Random(0),
+        gaussian_sigmas=0.0,
+        probability=1.0,
         strength=camera_color_cast_strength,
     )
-    blur_sigma = sample_safe_range(rng, 0.0, 1.0, 0.0, 1.8, gaussian_sigmas, mean=0.5)
-    if blur_sigma > 0.05:
-        kernel_size = 5 if blur_sigma < 1.0 else 7
-        tensor = TF.gaussian_blur(
-            tensor,
-            kernel_size=[kernel_size, kernel_size],
-            sigma=[blur_sigma, blur_sigma],
-        )
-    tensor = apply_motion_blur(tensor, rng, gaussian_sigmas)
-    tensor = apply_defocus_blur(tensor, rng, gaussian_sigmas)
-    tensor = apply_gaussian_noise(tensor, rng, gaussian_sigmas)
-    tensor = apply_channel_shift(tensor, rng, gaussian_sigmas)
-    tensor = apply_grayscale_mix(tensor, rng, gaussian_sigmas)
-    tensor = apply_illumination_gradient(tensor, rng, gaussian_sigmas)
-    tensor = apply_shadow_overlay(tensor, rng, gaussian_sigmas, shadow_prob=SHADOW_PROBABILITY)
-    tensor = apply_specular_glare(tensor, rng, gaussian_sigmas, glare_prob=GLARE_PROBABILITY)
-    tensor = apply_smudge_overlay(tensor, rng, gaussian_sigmas)
-    tensor = apply_cutout(tensor, rng, gaussian_sigmas)
-    tensor = tensor.clamp(0.0, 1.0)
     return TF.normalize(tensor, IMAGENET_MEAN, IMAGENET_STD)
 
 
@@ -1134,17 +795,17 @@ def evaluation_tensor_from_image(
     camera_color_cast_eval: bool = False,
     camera_color_cast_strength: float = CAMERA_COLOR_CAST_STRENGTH,
 ) -> torch.Tensor:
-    image = TF.resize(image, image_size, interpolation=InterpolationMode.BILINEAR)
+    image = TF.resize(image, [image_size, image_size], interpolation=InterpolationMode.BILINEAR)
     image = TF.center_crop(image, [image_size, image_size])
     tensor = TF.to_tensor(image).clamp(0.0, 1.0)
-    if camera_color_cast_eval:
-        tensor = apply_camera_color_cast(
-            tensor,
-            rng or random.Random(0),
-            gaussian_sigmas=0.5,
-            probability=1.0,
-            strength=camera_color_cast_strength,
-        ).clamp(0.0, 1.0)
+    _ = rng, camera_color_cast_eval
+    tensor = apply_camera_color_cast(
+        tensor,
+        random.Random(0),
+        gaussian_sigmas=0.0,
+        probability=1.0,
+        strength=camera_color_cast_strength,
+    ).clamp(0.0, 1.0)
     return TF.normalize(tensor, IMAGENET_MEAN, IMAGENET_STD)
 
 
@@ -1558,7 +1219,7 @@ def build_datasets(
             args.camera_color_cast_probability,
             args.camera_color_cast_strength,
             args.camera_color_cast_eval,
-            apply_augmentation=True,
+            apply_augmentation=False,
             class_mapping=class_mapping,
             dataset_root=root,
             enable_runtime_bad_sample_cleanup=args.runtime_bad_sample_cleanup,
@@ -1739,7 +1400,7 @@ def build_auto_split_datasets(
         args.camera_color_cast_probability,
         args.camera_color_cast_strength,
         args.camera_color_cast_eval,
-        apply_augmentation=True,
+        apply_augmentation=False,
         base_dataset=base_dataset,
         samples=train_samples,
         dataset_root=root,
@@ -4442,30 +4103,40 @@ def build_parser() -> argparse.ArgumentParser:
             "from this encoder state before SupCon/CE training begins."
         ),
     )
-    parser.add_argument("--augment-repeats", type=int, default=16)
-    parser.add_argument("--augment-gaussian-sigmas", type=float, default=0.5)
+    parser.add_argument(
+        "--augment-repeats",
+        type=int,
+        default=1,
+        help="Legacy compatibility knob retained for parser stability. Fixed-tint preprocessing remains deterministic.",
+    )
+    parser.add_argument(
+        "--augment-gaussian-sigmas",
+        type=float,
+        default=1.0,
+        help="Legacy compatibility knob retained for parser stability. Fixed-tint preprocessing remains deterministic.",
+    )
     parser.add_argument(
         "--camera-color-cast-probability",
         type=float,
         default=CAMERA_COLOR_CAST_PROBABILITY,
         help=(
-            "Probability of applying Raspberry Pi style magenta/pink white-balance cast "
-            "to train augmentations. Validation and test remain clean."
+            "Fixed Raspberry Pi style magenta/pink white-balance cast applied to every image. "
+            "No stochastic augmentations remain."
         ),
     )
     parser.add_argument(
         "--camera-color-cast-strength",
         type=float,
         default=CAMERA_COLOR_CAST_STRENGTH,
-        help="Maximum strength of the train-time magenta/pink camera color-cast augmentation.",
+        help="Strength of the fixed magenta/pink camera color-cast applied to every image.",
     )
     parser.add_argument(
         "--camera-color-cast-eval",
         action=argparse.BooleanOptionalAction,
         default=CAMERA_COLOR_CAST_EVAL,
         help=(
-            "Render validation/test Dataset_Final samples through a deterministic Pi-camera "
-            "magenta/pink cast. External holdout images are not modified by this flag."
+            "Render validation/test Dataset_Final samples through the same fixed Pi-camera "
+            "magenta/pink cast used for training. External holdout images use the same fixed cast."
         ),
     )
     # SupCon and CE both respect the same permanent frozen-core boundary by default.
@@ -6487,10 +6158,10 @@ def run_experiment(args: argparse.Namespace) -> int:
             "warmup_steps": args.warmup_steps,
         },
         "image_augmentation": {
-            "gaussian_sigmas": args.augment_gaussian_sigmas,
-            "shadow_probability": SHADOW_PROBABILITY,
-            "glare_probability": GLARE_PROBABILITY,
-            "camera_color_cast_probability": args.camera_color_cast_probability,
+            "policy": "deterministic_fixed_tint_only",
+            "stochastic_augmentations_enabled": False,
+            "spatial_augmentations_enabled": False,
+            "photometric_augmentations_enabled": False,
             "camera_color_cast_strength": args.camera_color_cast_strength,
             "camera_color_cast_eval": args.camera_color_cast_eval,
         },

@@ -3,7 +3,8 @@
 visualize_epoch.py
 
 Per-epoch visualization engine for the ESD waste classification pipeline.
-Generates canonical artefacts from the COMPLETE test set (no augmentations):
+Generates canonical artefacts from the COMPLETE test set using the fixed repo-wide
+pink-tint transform only:
 
   1. umap_thumbnail_map.png    — UMAP layout of test embeddings with thumbnails
 
