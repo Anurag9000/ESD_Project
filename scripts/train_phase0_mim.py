@@ -21,6 +21,8 @@ try:
     from metric_learning_pipeline import (
         DEFAULT_BACKBONE_NAME,
         BACKBONE_REGISTRY,
+        CAMERA_COLOR_CAST_PROBABILITY,
+        CAMERA_COLOR_CAST_STRENGTH,
         build_datasets,
         make_balanced_sampler,
         evaluation_tensor_from_image,
@@ -34,6 +36,8 @@ except ModuleNotFoundError:
     from metric_learning_pipeline import (
         DEFAULT_BACKBONE_NAME,
         BACKBONE_REGISTRY,
+        CAMERA_COLOR_CAST_PROBABILITY,
+        CAMERA_COLOR_CAST_STRENGTH,
         build_datasets,
         make_balanced_sampler,
         evaluation_tensor_from_image,
@@ -245,6 +249,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--augment-repeats", type=int, default=16)
     parser.add_argument("--augment-gaussian-sigmas", type=float, default=0.5)
+    parser.add_argument("--camera-color-cast-probability", type=float, default=CAMERA_COLOR_CAST_PROBABILITY)
+    parser.add_argument("--camera-color-cast-strength", type=float, default=CAMERA_COLOR_CAST_STRENGTH)
     parser.add_argument("--class-mapping", type=str, default="")
     parser.add_argument("--auto-split-ratios", default="0.7,0.2,0.1")
     parser.add_argument(
@@ -312,6 +318,10 @@ def main() -> int:
         raise ValueError("--early-stopping-patience must be >= 1")
     if args.early_stopping_min_delta < 0:
         raise ValueError("--early-stopping-min-delta must be >= 0")
+    if not (0.0 <= args.camera_color_cast_probability <= 1.0):
+        raise ValueError("--camera-color-cast-probability must be between 0 and 1")
+    if args.camera_color_cast_strength < 0:
+        raise ValueError("--camera-color-cast-strength must be >= 0")
     if not (0.0 < args.mask_ratio < 1.0):
         raise ValueError("--mask-ratio must be between 0 and 1")
     if args.patch_size < 1:

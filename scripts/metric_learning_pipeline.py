@@ -63,6 +63,8 @@ LEGACY_8_CLASS_TAXONOMY = (
 SPLIT_OFFSETS = {"train": 0, "val": 10_000_000, "test": 20_000_000}
 SHADOW_PROBABILITY = 0.20
 GLARE_PROBABILITY = 0.25
+CAMERA_COLOR_CAST_PROBABILITY = 0.65
+CAMERA_COLOR_CAST_STRENGTH = 0.24
 MOTION_BLUR_PROBABILITY = 0.18
 DEFOCUS_BLUR_PROBABILITY = 0.18
 RESOLUTION_DEGRADE_PROBABILITY = 0.20
@@ -359,6 +361,8 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
         split_name: str,
         seed: int,
         gaussian_sigmas: float,
+        camera_color_cast_probability: float = CAMERA_COLOR_CAST_PROBABILITY,
+        camera_color_cast_strength: float = CAMERA_COLOR_CAST_STRENGTH,
         apply_augmentation: bool = True,
         *,
         base_dataset: datasets.ImageFolder | None = None,
@@ -377,6 +381,8 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
         self.split_name = split_name
         self.seed = seed
         self.gaussian_sigmas = gaussian_sigmas
+        self.camera_color_cast_probability = float(camera_color_cast_probability)
+        self.camera_color_cast_strength = float(camera_color_cast_strength)
         self.apply_augmentation = apply_augmentation
         # Only the training split is allowed to use stochastic augmentations.
         # Validation and test stay strictly clean.
@@ -538,7 +544,14 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
                         else self._seed_for_variant(source_index, variant_index, view_offset) + attempt
                     )
                     rng = random.Random(seed)
-                    tensor = augmented_tensor_from_image(image, self.image_size, rng, self.gaussian_sigmas)
+                    tensor = augmented_tensor_from_image(
+                        image,
+                        self.image_size,
+                        rng,
+                        self.gaussian_sigmas,
+                        camera_color_cast_probability=self.camera_color_cast_probability,
+                        camera_color_cast_strength=self.camera_color_cast_strength,
+                    )
                 else:
                     tensor = evaluation_tensor_from_image(image, self.image_size)
                 return tensor, target
@@ -963,7 +976,81 @@ def apply_cutout(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: floa
     return tensor
 
 
-def augmented_tensor_from_image(image: Image.Image, image_size: int, rng: random.Random, gaussian_sigmas: float) -> torch.Tensor:
+def apply_camera_color_cast(
+    tensor: torch.Tensor,
+    rng: random.Random,
+    gaussian_sigmas: float,
+    probability: float,
+    strength: float,
+) -> torch.Tensor:
+    """Simulate the Raspberry Pi camera's magenta/pink white-balance cast."""
+    probability = max(0.0, min(1.0, float(probability)))
+    strength = max(0.0, float(strength))
+    if strength <= 0.0 or rng.random() >= probability:
+        return tensor
+
+    cast_strength = sample_safe_range(
+        rng,
+        0.35 * strength,
+        strength,
+        0.0,
+        1.6 * strength,
+        gaussian_sigmas,
+        mean=0.7 * strength,
+    )
+    red_gain = sample_safe_range(
+        rng,
+        1.0 + 0.35 * cast_strength,
+        1.0 + 1.05 * cast_strength,
+        0.95,
+        1.0 + 1.6 * cast_strength,
+        gaussian_sigmas,
+        mean=1.0 + 0.7 * cast_strength,
+    )
+    green_gain = sample_safe_range(
+        rng,
+        1.0 - 0.65 * cast_strength,
+        1.0 - 0.18 * cast_strength,
+        0.62,
+        1.05,
+        gaussian_sigmas,
+        mean=1.0 - 0.35 * cast_strength,
+    )
+    blue_gain = sample_safe_range(
+        rng,
+        1.0 + 0.25 * cast_strength,
+        1.0 + 0.95 * cast_strength,
+        0.95,
+        1.0 + 1.45 * cast_strength,
+        gaussian_sigmas,
+        mean=1.0 + 0.62 * cast_strength,
+    )
+    gains = torch.tensor([red_gain, green_gain, blue_gain], dtype=tensor.dtype, device=tensor.device).view(3, 1, 1)
+    tensor = tensor * gains
+
+    # A weak global magenta light wash makes white backgrounds turn pink, matching the Pi setup.
+    wash_opacity = sample_safe_range(
+        rng,
+        0.06 * cast_strength,
+        0.28 * cast_strength,
+        0.0,
+        0.42 * cast_strength,
+        gaussian_sigmas,
+        mean=0.16 * cast_strength,
+    )
+    wash_color = torch.tensor([1.0, 0.72, 0.98], dtype=tensor.dtype, device=tensor.device).view(3, 1, 1)
+    return tensor * (1.0 - wash_opacity) + wash_color * wash_opacity
+
+
+def augmented_tensor_from_image(
+    image: Image.Image,
+    image_size: int,
+    rng: random.Random,
+    gaussian_sigmas: float,
+    *,
+    camera_color_cast_probability: float = CAMERA_COLOR_CAST_PROBABILITY,
+    camera_color_cast_strength: float = CAMERA_COLOR_CAST_STRENGTH,
+) -> torch.Tensor:
     image = random_resized_crop(image, image_size, rng, gaussian_sigmas)
     image = apply_border_truncation(image, rng, gaussian_sigmas)
 
@@ -999,6 +1086,13 @@ def augmented_tensor_from_image(image: Image.Image, image_size: int, rng: random
     image = apply_resolution_degradation(image, rng, gaussian_sigmas)
 
     tensor = TF.to_tensor(image)
+    tensor = apply_camera_color_cast(
+        tensor,
+        rng,
+        gaussian_sigmas,
+        probability=camera_color_cast_probability,
+        strength=camera_color_cast_strength,
+    )
     blur_sigma = sample_safe_range(rng, 0.0, 1.0, 0.0, 1.8, gaussian_sigmas, mean=0.5)
     if blur_sigma > 0.05:
         kernel_size = 5 if blur_sigma < 1.0 else 7
@@ -1435,6 +1529,8 @@ def build_datasets(
             "train",
             args.seed,
             args.augment_gaussian_sigmas,
+            args.camera_color_cast_probability,
+            args.camera_color_cast_strength,
             apply_augmentation=True,
             class_mapping=class_mapping,
             dataset_root=root,
@@ -1447,6 +1543,8 @@ def build_datasets(
             "val",
             args.seed,
             args.augment_gaussian_sigmas,
+            args.camera_color_cast_probability,
+            args.camera_color_cast_strength,
             apply_augmentation=False,
             class_mapping=class_mapping,
             dataset_root=root,
@@ -1459,6 +1557,8 @@ def build_datasets(
             "test",
             args.seed,
             args.augment_gaussian_sigmas,
+            args.camera_color_cast_probability,
+            args.camera_color_cast_strength,
             apply_augmentation=False,  # test is always clean — no augmentation
             class_mapping=class_mapping,
             dataset_root=root,
@@ -1607,6 +1707,8 @@ def build_auto_split_datasets(
         "train",
         args.seed,
         args.augment_gaussian_sigmas,
+        args.camera_color_cast_probability,
+        args.camera_color_cast_strength,
         apply_augmentation=True,
         base_dataset=base_dataset,
         samples=train_samples,
@@ -1620,6 +1722,8 @@ def build_auto_split_datasets(
         "val",
         args.seed,
         args.augment_gaussian_sigmas,
+        args.camera_color_cast_probability,
+        args.camera_color_cast_strength,
         apply_augmentation=False,
         base_dataset=base_dataset,
         samples=val_samples,
@@ -1633,6 +1737,8 @@ def build_auto_split_datasets(
         "test",
         args.seed,
         args.augment_gaussian_sigmas,
+        args.camera_color_cast_probability,
+        args.camera_color_cast_strength,
         apply_augmentation=False,  # test is always clean — no augmentation
         base_dataset=base_dataset,
         samples=test_samples,
@@ -4306,6 +4412,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--augment-repeats", type=int, default=16)
     parser.add_argument("--augment-gaussian-sigmas", type=float, default=0.5)
+    parser.add_argument(
+        "--camera-color-cast-probability",
+        type=float,
+        default=CAMERA_COLOR_CAST_PROBABILITY,
+        help=(
+            "Probability of applying Raspberry Pi style magenta/pink white-balance cast "
+            "to train augmentations. Validation and test remain clean."
+        ),
+    )
+    parser.add_argument(
+        "--camera-color-cast-strength",
+        type=float,
+        default=CAMERA_COLOR_CAST_STRENGTH,
+        help="Maximum strength of the train-time magenta/pink camera color-cast augmentation.",
+    )
     # SupCon and CE both respect the same permanent frozen-core boundary by default.
     # Only the semantic tail after this frozen core is eligible for unfreezing.
     parser.add_argument(
@@ -4553,6 +4674,10 @@ def run_experiment(args: argparse.Namespace) -> int:
         raise ValueError("--augment-repeats must be >= 1")
     if args.augment_gaussian_sigmas <= 0:
         raise ValueError("--augment-gaussian-sigmas must be > 0")
+    if not (0.0 <= args.camera_color_cast_probability <= 1.0):
+        raise ValueError("--camera-color-cast-probability must be between 0 and 1")
+    if args.camera_color_cast_strength < 0:
+        raise ValueError("--camera-color-cast-strength must be >= 0")
     if args.log_every_steps < 1:
         raise ValueError("--log-every-steps must be >= 1")
     if args.log_eval_every_steps < 1:
@@ -6287,6 +6412,8 @@ def run_experiment(args: argparse.Namespace) -> int:
         "augmentation_bank_test_count": len(test_dataset),
         "augment_repeats": args.augment_repeats,
         "augment_gaussian_sigmas": args.augment_gaussian_sigmas,
+        "camera_color_cast_probability": args.camera_color_cast_probability,
+        "camera_color_cast_strength": args.camera_color_cast_strength,
         "sampling_strategy": args.sampling_strategy,
         "train_class_counts": class_counts(train_dataset),
         "val_class_counts": class_counts(val_dataset),
@@ -6321,6 +6448,8 @@ def run_experiment(args: argparse.Namespace) -> int:
             "gaussian_sigmas": args.augment_gaussian_sigmas,
             "shadow_probability": SHADOW_PROBABILITY,
             "glare_probability": GLARE_PROBABILITY,
+            "camera_color_cast_probability": args.camera_color_cast_probability,
+            "camera_color_cast_strength": args.camera_color_cast_strength,
         },
         "early_stopping": {
             "supcon_patience": args.supcon_early_stopping_patience,
