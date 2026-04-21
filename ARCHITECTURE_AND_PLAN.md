@@ -4,7 +4,7 @@ This document defines the current architectural specifications and training meth
 
 ## 1. Model Specifications
 
-- **Architecture:** Configurable backbone registry; Phase 0 defaults to `ConvNeXt V2 Nano FCMAE`, while direct supervised / recursive starts default to `ConvNeXt V2 Nano FCMAE_ft_in22k_in1k_384`
+- **Architecture:** Configurable backbone registry; Phase 0 defaults to `ConvNeXt V2 Nano FCMAE`, while direct supervised / recursive starts default to `ConvNeXt V2 Nano FCMAE_ft_in22k_in1k`
 - **Parameters:** Backbone-dependent
 - **Precision:** FP16 Mixed Precision via `torch.amp`
 - **Optimization:** AdamW with per-stage learning rate groups
