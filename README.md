@@ -56,6 +56,8 @@ source .venv/bin/activate
 # - Phase 0 MIM trains the full backbone with the same balanced class sampler and an effective 256 batch size via 128-image physical batches plus 2-step accumulation, then SupCon/CE re-freeze the earliest 40 leaf modules
 # - Phase 0 seeds from pure `convnextv2_nano.fcmae`; direct SupCon/CE/recursive starts seed from `convnextv2_nano.fcmae_ft_in22k_in1k_384`
 # - Dataset_Final train/val/test and the default train-only REDACTED_DATA_ROOT append root are rendered through the same fixed Pi-camera magenta tint by default after aspect-preserving letterbox resize; no stochastic augmentations remain
+# - Phase 0 MIM uses patch-normalized reconstruction with `1e-2` epsilon and clips gradients at norm `1.0`
+# - Phase 0 decoder is back to a single reconstruction block
 # - validation triggered by train-step patience
 # - patience 3 across SupCon, CE head, CE stages, and recursive stages
 # - automatic same-command resume from the incomplete phase's own step_last.pt or last.pt

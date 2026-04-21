@@ -66,6 +66,7 @@ PHASE0_MIM_ACCUM_STEPS="${PHASE0_MIM_ACCUM_STEPS:-2}"
 PHASE0_MIM_MASK_RATIO="${PHASE0_MIM_MASK_RATIO:-0.6}"
 PHASE0_MIM_PATCH_SIZE="${PHASE0_MIM_PATCH_SIZE:-32}"
 PHASE0_MIM_DECODER_DIM="${PHASE0_MIM_DECODER_DIM:-512}"
+PHASE0_MIM_GRAD_CLIP_NORM="${PHASE0_MIM_GRAD_CLIP_NORM:-1.0}"
 PHASE0_MIM_LR="${PHASE0_MIM_LR:-1.5e-4}"
 PHASE0_MIM_WEIGHT_DECAY="${PHASE0_MIM_WEIGHT_DECAY:-0.05}"
 PHASE0_MIM_TRAIN_LOSS_WINDOW="${PHASE0_MIM_TRAIN_LOSS_WINDOW:-5000}"
@@ -88,7 +89,7 @@ for ARG in "$@"; do
     --phase0-mim)
       ENABLE_PHASE0_MIM=1
       ;;
-    --phase0-mim-epochs|--phase0-mim-batch-size|--phase0-mim-accum-steps|--phase0-mim-mask-ratio|--phase0-mim-patch-size|--phase0-mim-decoder-dim|--phase0-mim-learning-rate|--phase0-mim-weight-decay|--phase0-mim-train-loss-window)
+    --phase0-mim-epochs|--phase0-mim-batch-size|--phase0-mim-accum-steps|--phase0-mim-mask-ratio|--phase0-mim-patch-size|--phase0-mim-decoder-dim|--phase0-mim-grad-clip-norm|--phase0-mim-learning-rate|--phase0-mim-weight-decay|--phase0-mim-train-loss-window)
       case "$ARG" in
         --phase0-mim-epochs) NEXT_PHASE0_VAR=PHASE0_MIM_EPOCHS ;;
         --phase0-mim-batch-size) NEXT_PHASE0_VAR=PHASE0_MIM_BATCH_SIZE ;;
@@ -96,6 +97,7 @@ for ARG in "$@"; do
         --phase0-mim-mask-ratio) NEXT_PHASE0_VAR=PHASE0_MIM_MASK_RATIO ;;
         --phase0-mim-patch-size) NEXT_PHASE0_VAR=PHASE0_MIM_PATCH_SIZE ;;
         --phase0-mim-decoder-dim) NEXT_PHASE0_VAR=PHASE0_MIM_DECODER_DIM ;;
+        --phase0-mim-grad-clip-norm) NEXT_PHASE0_VAR=PHASE0_MIM_GRAD_CLIP_NORM ;;
         --phase0-mim-learning-rate) NEXT_PHASE0_VAR=PHASE0_MIM_LR ;;
         --phase0-mim-weight-decay) NEXT_PHASE0_VAR=PHASE0_MIM_WEIGHT_DECAY ;;
         --phase0-mim-train-loss-window) NEXT_PHASE0_VAR=PHASE0_MIM_TRAIN_LOSS_WINDOW ;;
@@ -161,6 +163,7 @@ if [[ "$ENABLE_PHASE0_MIM" -eq 1 ]]; then
       --mask-ratio "$PHASE0_MIM_MASK_RATIO" \
       --patch-size "$PHASE0_MIM_PATCH_SIZE" \
       --decoder-dim "$PHASE0_MIM_DECODER_DIM" \
+      --grad-clip-norm "$PHASE0_MIM_GRAD_CLIP_NORM" \
       --learning-rate "$PHASE0_MIM_LR" \
       --weight-decay "$PHASE0_MIM_WEIGHT_DECAY" \
       --train-loss-window "$PHASE0_MIM_TRAIN_LOSS_WINDOW" \

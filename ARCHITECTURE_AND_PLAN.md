@@ -9,6 +9,7 @@ This document defines the current architectural specifications and training meth
 - **Precision:** FP16 Mixed Precision via `torch.amp`
 - **Optimization:** AdamW with per-stage learning rate groups
 - **Output Classes:** **6**
+- **Phase 0 Stability:** Patch-normalized MSE uses `1e-2` epsilon, the MIM decoder is a single block, and gradients are clipped to norm `1.0` before the optimizer step.
 
 ---
 
