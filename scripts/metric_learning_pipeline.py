@@ -94,9 +94,9 @@ class BackboneSpec:
 
 BACKBONE_REGISTRY: dict[str, BackboneSpec] = {
     "convnextv2_nano": BackboneSpec(
-        pretrained_name="convnextv2_nano.fcmae",
+        pretrained_name="convnextv2_nano.fcmae_ft_in22k_in1k_384",
         scratch_name="convnextv2_nano",
-        description="ConvNeXt V2 Nano FCMAE",
+        description="ConvNeXt V2 Nano FCMAE fine-tuned on IN22K + IN1K",
     ),
     "convnextv2_tiny": BackboneSpec(
         pretrained_name="convnextv2_tiny.fcmae",
@@ -776,6 +776,26 @@ def apply_camera_color_cast(
     return tensor * (1.0 - wash_opacity) + wash_color * wash_opacity
 
 
+def resize_with_letterbox(image: Image.Image, image_size: int, *, fill: tuple[int, int, int] = (0, 0, 0)) -> Image.Image:
+    """Resize while preserving aspect ratio, then pad to a square canvas."""
+    target = int(image_size)
+    if target <= 0:
+        raise ValueError("image_size must be positive")
+    width, height = image.size
+    if width <= 0 or height <= 0:
+        raise ValueError("input image must have positive dimensions")
+
+    scale = min(target / float(width), target / float(height))
+    new_width = max(1, int(round(width * scale)))
+    new_height = max(1, int(round(height * scale)))
+    resized = image.resize((new_width, new_height), resample=Image.Resampling.BILINEAR)
+    canvas = Image.new("RGB", (target, target), fill)
+    offset_x = (target - new_width) // 2
+    offset_y = (target - new_height) // 2
+    canvas.paste(resized, (offset_x, offset_y))
+    return canvas
+
+
 def augmented_tensor_from_image(
     image: Image.Image,
     image_size: int,
@@ -786,8 +806,7 @@ def augmented_tensor_from_image(
     camera_color_cast_strength: float = CAMERA_COLOR_CAST_STRENGTH,
 ) -> torch.Tensor:
     _ = rng, gaussian_sigmas, camera_color_cast_probability
-    image = TF.resize(image, image_size, interpolation=InterpolationMode.BILINEAR)
-    image = TF.center_crop(image, [image_size, image_size])
+    image = resize_with_letterbox(image, image_size)
     tensor = TF.to_tensor(image).clamp(0.0, 1.0)
     tensor = apply_camera_color_cast(
         tensor,
@@ -807,8 +826,7 @@ def evaluation_tensor_from_image(
     camera_color_cast_eval: bool = False,
     camera_color_cast_strength: float = CAMERA_COLOR_CAST_STRENGTH,
 ) -> torch.Tensor:
-    image = TF.resize(image, image_size, interpolation=InterpolationMode.BILINEAR)
-    image = TF.center_crop(image, [image_size, image_size])
+    image = resize_with_letterbox(image, image_size)
     tensor = TF.to_tensor(image).clamp(0.0, 1.0)
     _ = rng, camera_color_cast_eval
     tensor = apply_camera_color_cast(

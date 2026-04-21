@@ -11,7 +11,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from PIL import Image
-from torchvision.transforms import InterpolationMode
 from torchvision.transforms import functional as TF
 
 try:
@@ -19,6 +18,7 @@ try:
         CAMERA_COLOR_CAST_STRENGTH,
         apply_camera_color_cast,
         build_datasets,
+        resize_with_letterbox,
         seed_everything,
     )
 except ModuleNotFoundError:
@@ -29,6 +29,7 @@ except ModuleNotFoundError:
         CAMERA_COLOR_CAST_STRENGTH,
         apply_camera_color_cast,
         build_datasets,
+        resize_with_letterbox,
         seed_everything,
     )
 
@@ -63,9 +64,8 @@ def _load_source_image(path: Path) -> Image.Image:
 
 
 def _aspect_preserving_base_tensor(image: Image.Image, image_size: int) -> torch.Tensor:
-    resized = TF.resize(image, image_size, interpolation=InterpolationMode.BILINEAR)
-    cropped = TF.center_crop(resized, [image_size, image_size])
-    return TF.to_tensor(cropped).clamp(0.0, 1.0)
+    letterboxed = resize_with_letterbox(image, image_size)
+    return TF.to_tensor(letterboxed).clamp(0.0, 1.0)
 
 
 def _make_panel(images: list[np.ndarray], titles: list[str], output_path: Path) -> None:
@@ -133,7 +133,7 @@ def main() -> int:
             np.asarray(source_image),
             model_view.permute(1, 2, 0).cpu().numpy(),
         ],
-        ["source image", "model input after resize/crop + tint"],
+        ["source image", "model input after letterbox + tint"],
         model_path,
     )
 
