@@ -3,7 +3,7 @@
 This file documents the live training, evaluation, and utility flags in the current repo state.
 Defaults are the values used when the flag is omitted. Boolean defaults are shown as `true` / `false`.
 The next-run logical training taxonomy is strictly 3 classes: `organic`, `metal`, `paper`.
-Live logs now print pure accuracy plus `per_class_accuracy` and `per_class_avg_confidence`; thresholded accuracy fields are no longer emitted.
+SupCon logs report contrastive diagnostics only: same-image view cosine, same-class positive cosine, different-class negative cosine, and positive-minus-negative cosine margin. Classifier/CE logs report pure accuracy plus `per_class_accuracy` and `per_class_avg_confidence`; thresholded accuracy fields are no longer emitted.
 
 ## Main Trainer: `scripts/metric_learning_pipeline.py`
 

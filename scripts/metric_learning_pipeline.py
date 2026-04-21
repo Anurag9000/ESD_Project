@@ -1016,6 +1016,44 @@ class SupConLoss(nn.Module):
         return loss
 
 
+def supcon_contrastive_metrics(
+    proj_one: torch.Tensor,
+    proj_two: torch.Tensor,
+    labels: torch.Tensor,
+) -> dict[str, float | int]:
+    with torch.no_grad():
+        proj_one = F.normalize(proj_one.detach().float(), dim=1)
+        proj_two = F.normalize(proj_two.detach().float(), dim=1)
+        labels = labels.detach()
+
+        view_pair_cosine = (proj_one * proj_two).sum(dim=1).mean()
+        features = torch.stack([proj_one, proj_two], dim=1)
+        batch_size, view_count, feature_dim = features.shape
+        del feature_dim
+
+        flat_features = features.reshape(batch_size * view_count, -1)
+        flat_labels = labels.repeat_interleave(view_count)
+        similarities = torch.matmul(flat_features, flat_features.T)
+        self_mask = torch.eye(batch_size * view_count, device=similarities.device, dtype=torch.bool)
+        positive_mask = flat_labels.unsqueeze(0).eq(flat_labels.unsqueeze(1)) & ~self_mask
+        negative_mask = ~flat_labels.unsqueeze(0).eq(flat_labels.unsqueeze(1))
+
+        positive_values = similarities[positive_mask]
+        negative_values = similarities[negative_mask]
+        positive_mean = positive_values.mean() if positive_values.numel() else similarities.new_tensor(float("nan"))
+        negative_mean = negative_values.mean() if negative_values.numel() else similarities.new_tensor(float("nan"))
+        margin = positive_mean - negative_mean
+
+    return {
+        "same_image_view_cosine": float(view_pair_cosine.item()),
+        "same_class_positive_cosine": float(positive_mean.item()),
+        "different_class_negative_cosine": float(negative_mean.item()),
+        "positive_negative_cosine_margin": float(margin.item()),
+        "positive_pair_count": int(positive_values.numel()),
+        "negative_pair_count": int(negative_values.numel()),
+    }
+
+
 class SAM(Optimizer):
     def __init__(self, params, base_optimizer, rho: float = 0.05, adaptive: bool = False, **kwargs) -> None:
         defaults = dict(rho=rho, adaptive=adaptive, **kwargs)
@@ -2089,23 +2127,14 @@ def train_supcon_epoch(
         scheduler.step()
 
         batch_size = labels.size(0)
-        with torch.no_grad():
-            with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
-                batch_logits = model.classify(model.encode(view_one), labels=None)
-        batch_predictions = batch_logits.detach().argmax(dim=1)
-        batch_acc = float((batch_predictions == labels).float().mean().item())
-        batch_per_class_accuracy, batch_per_class_confidence = per_class_accuracy_and_confidence_from_logits(
-            batch_logits,
-            labels,
-            getattr(loader.dataset, "classes", []),
-        )
+        batch_contrastive_metrics = supcon_contrastive_metrics(proj_one, proj_two, labels)
         total_loss += second_loss.item() * batch_size
         total_seen += batch_size
         train_progress["global_train_step"] += 1
         train_progress["global_source_samples_seen"] += batch_size
         progress.set_postfix(
             loss=f"{second_loss.item():.4f}",
-            acc=f"{batch_acc:.4f}",
+            margin=f"{batch_contrastive_metrics['positive_negative_cosine_margin']:.4f}",
         )
 
         if train_progress["global_train_step"] % log_every_steps == 0:
@@ -2121,9 +2150,7 @@ def train_supcon_epoch(
                 "epoch_source_samples_seen": total_seen,
                 "global_source_samples_seen": train_progress["global_source_samples_seen"],
                 "loss": float(second_loss.item()),
-                "acc": batch_acc,
-                "per_class_accuracy": batch_per_class_accuracy,
-                "per_class_avg_confidence": batch_per_class_confidence,
+                **batch_contrastive_metrics,
                 "learning_rates": optimizer_learning_rates(optimizer),
             }
             log_json_event(log_path, event)
@@ -2239,24 +2266,11 @@ def train_supcon_steps(
         step_resume_payload["validation_reason"] = validation_reason
 
         batch_size = labels.size(0)
-        with torch.no_grad():
-            with torch.amp.autocast("cuda", enabled=autocast_enabled(device, args)):
-                batch_logits = model.classify(model.encode(view_one), labels=None)
-        batch_predictions = batch_logits.detach().argmax(dim=1)
-        batch_acc = float((batch_predictions == labels).float().mean().item())
-        batch_per_class_accuracy, batch_per_class_confidence = per_class_accuracy_and_confidence_from_logits(
-            batch_logits,
-            labels,
-            class_names,
-        )
+        batch_contrastive_metrics = supcon_contrastive_metrics(proj_one, proj_two, labels)
         step_checkpoint_payload["last_batch_loss"] = float(second_loss.item())
-        step_checkpoint_payload["last_batch_acc"] = batch_acc
-        step_checkpoint_payload["last_batch_per_class_accuracy"] = batch_per_class_accuracy
-        step_checkpoint_payload["last_batch_per_class_avg_confidence"] = batch_per_class_confidence
+        step_checkpoint_payload["last_batch_contrastive_metrics"] = batch_contrastive_metrics
         step_resume_payload["last_batch_loss"] = float(second_loss.item())
-        step_resume_payload["last_batch_acc"] = batch_acc
-        step_resume_payload["last_batch_per_class_accuracy"] = batch_per_class_accuracy
-        step_resume_payload["last_batch_per_class_avg_confidence"] = batch_per_class_confidence
+        step_resume_payload["last_batch_contrastive_metrics"] = batch_contrastive_metrics
         total_loss += second_loss.item() * batch_size
         total_seen += batch_size
         steps_done += 1
@@ -2294,9 +2308,7 @@ def train_supcon_steps(
                 "epoch_source_samples_seen": total_seen,
                 "global_source_samples_seen": train_progress["global_source_samples_seen"],
                 "loss": float(second_loss.item()),
-                "acc": batch_acc,
-                "per_class_accuracy": batch_per_class_accuracy,
-                "per_class_avg_confidence": batch_per_class_confidence,
+                **batch_contrastive_metrics,
                 "learning_rates": optimizer_learning_rates(optimizer),
                 "phase_train_loss_best": best_train_loss,
                 "phase_train_loss_wait": train_loss_wait,
@@ -2328,9 +2340,14 @@ def evaluate_supcon(
     model.eval()
     total_loss = 0.0
     total_seen = 0
-    total_correct = 0.0
-    all_logits: list[torch.Tensor] = []
-    all_targets: list[torch.Tensor] = []
+    metric_sums = {
+        "same_image_view_cosine": 0.0,
+        "same_class_positive_cosine": 0.0,
+        "different_class_negative_cosine": 0.0,
+        "positive_negative_cosine_margin": 0.0,
+    }
+    total_positive_pairs = 0
+    total_negative_pairs = 0
     eval_context = dict(eval_context or {})
     
     # Calculate total for tqdm
@@ -2350,19 +2367,13 @@ def evaluate_supcon(
                 proj_one = model.supcon_projection(emb_one)
                 proj_two = model.supcon_projection(emb_two)
                 loss = criterion(torch.stack([proj_one, proj_two], dim=1), labels)
-                logits = model.classify(emb_one, labels=None)
-            batch_predictions = logits.detach().argmax(dim=1)
-            batch_acc = float((batch_predictions == labels).float().mean().item())
+            batch_contrastive_metrics = supcon_contrastive_metrics(proj_one, proj_two, labels)
             total_loss += loss.item() * labels.size(0)
             total_seen += labels.size(0)
-            total_correct += batch_acc * labels.size(0)
-            all_logits.append(logits.detach().cpu())
-            all_targets.append(labels.detach().cpu())
-            batch_per_class_accuracy, batch_per_class_confidence = per_class_accuracy_and_confidence_from_logits(
-                logits,
-                labels,
-                getattr(loader.dataset, "classes", []),
-            )
+            for key in metric_sums:
+                metric_sums[key] += float(batch_contrastive_metrics[key]) * labels.size(0)
+            total_positive_pairs += int(batch_contrastive_metrics["positive_pair_count"])
+            total_negative_pairs += int(batch_contrastive_metrics["negative_pair_count"])
             if eval_step % log_every_eval_steps == 0:
                 log_json_event(
                     log_path,
@@ -2374,25 +2385,15 @@ def evaluate_supcon(
                         "batch_size": labels.size(0),
                         "samples_seen": total_seen,
                         "loss": float(loss.item()),
-                        "acc": batch_acc,
-                        "per_class_accuracy": batch_per_class_accuracy,
-                        "per_class_avg_confidence": batch_per_class_confidence,
+                        **batch_contrastive_metrics,
                         **eval_context,
                     },
                 )
-    if all_logits and all_targets:
-        per_class_accuracy, per_class_avg_confidence = per_class_accuracy_and_confidence_from_logits(
-            torch.cat(all_logits, dim=0),
-            torch.cat(all_targets, dim=0),
-            getattr(loader.dataset, "classes", []),
-        )
-    else:
-        per_class_accuracy = {}
-        per_class_avg_confidence = {}
+    contrastive_metrics = {key: value / max(1, total_seen) for key, value in metric_sums.items()}
+    contrastive_metrics["positive_pair_count"] = total_positive_pairs
+    contrastive_metrics["negative_pair_count"] = total_negative_pairs
     return total_loss / max(1, total_seen), {
-        "accuracy": total_correct / max(1, total_seen),
-        "per_class_accuracy": per_class_accuracy,
-        "per_class_avg_confidence": per_class_avg_confidence,
+        "contrastive_metrics": contrastive_metrics,
     }
 
 
@@ -3576,6 +3577,15 @@ def format_console_event(payload: dict[str, Any]) -> str | None:
             pieces.append(f"per_class_accuracy={per_class_accuracy_text}")
         if classwise_confidence_text:
             pieces.append(f"per_class_avg_confidence={classwise_confidence_text}")
+        for key in (
+            "same_image_view_cosine",
+            "same_class_positive_cosine",
+            "different_class_negative_cosine",
+            "positive_negative_cosine_margin",
+        ):
+            value = payload.get(key)
+            if isinstance(value, (int, float)):
+                pieces.append(f"{key}={value:.6f}")
         learning_rates = payload.get("learning_rates")
         if learning_rates:
             pieces.append("lr=" + ",".join(f"{lr:.8g}" for lr in learning_rates))
@@ -3598,6 +3608,15 @@ def format_console_event(payload: dict[str, Any]) -> str | None:
             pieces.append(f"per_class_accuracy={per_class_accuracy_text}")
         if classwise_confidence_text:
             pieces.append(f"per_class_avg_confidence={classwise_confidence_text}")
+        for key in (
+            "same_image_view_cosine",
+            "same_class_positive_cosine",
+            "different_class_negative_cosine",
+            "positive_negative_cosine_margin",
+        ):
+            value = payload.get(key)
+            if isinstance(value, (int, float)):
+                pieces.append(f"{key}={value:.6f}")
         return " ".join(piece for piece in pieces if piece)
     if event == "validation_started":
         pieces = [
@@ -3637,6 +3656,15 @@ def format_console_event(payload: dict[str, Any]) -> str | None:
             pieces.append(f"per_class_accuracy={per_class_accuracy_text}")
         if classwise_confidence_text:
             pieces.append(f"per_class_avg_confidence={classwise_confidence_text}")
+        for key in (
+            "same_image_view_cosine",
+            "same_class_positive_cosine",
+            "different_class_negative_cosine",
+            "positive_negative_cosine_margin",
+        ):
+            value = payload.get(key)
+            if isinstance(value, (int, float)):
+                pieces.append(f"{key}={value:.6f}")
         return " ".join(piece for piece in pieces if piece)
     if event == "resume_initial_val_pass":
         return f"[{timestamp}] resume_initial_val_pass stage={payload.get('stage')}{phase_piece} starting verification..."
@@ -5039,9 +5067,10 @@ def run_experiment(args: argparse.Namespace) -> int:
                     epoch_loss_sum += window_train_loss * window_samples
                     validation_index += 1
                     progress.update(steps_done)
+                    last_supcon_metrics = supcon_step_resume_payload.get("last_batch_contrastive_metrics", {})
                     progress.set_postfix(
                         loss=f"{supcon_step_resume_payload.get('last_batch_loss', window_train_loss):.4f}",
-                        acc=f"{supcon_step_resume_payload.get('last_batch_acc', 0.0):.4f}",
+                        margin=f"{last_supcon_metrics.get('positive_negative_cosine_margin', 0.0):.4f}",
                     )
                     release_training_memory(device, supcon_train_loader)
 
@@ -5107,9 +5136,7 @@ def run_experiment(args: argparse.Namespace) -> int:
                             "global_train_step": train_progress["global_train_step"],
                             "eval_batches": val_eval_batches,
                             "val_loss": val_loss,
-                            "accuracy": val_per_class_metrics["accuracy"],
-                            "per_class_accuracy": val_per_class_metrics["per_class_accuracy"],
-                            "per_class_avg_confidence": val_per_class_metrics["per_class_avg_confidence"],
+                            **val_per_class_metrics["contrastive_metrics"],
                             "phase_train_loss_best": phase_train_loss_best,
                             "phase_train_loss_wait": phase_train_loss_wait,
                             "phase_validation_wait": phase_validation_wait,
@@ -5195,13 +5222,17 @@ def run_experiment(args: argparse.Namespace) -> int:
                         "trainable_params": supcon_trainable_params,
                         "total_params": total_params,
                         "batch_train_loss": supcon_step_resume_payload.get("last_batch_loss", window_train_loss),
-                        "batch_train_acc": supcon_step_resume_payload.get("last_batch_acc"),
-                        "batch_per_class_accuracy": supcon_step_resume_payload.get("last_batch_per_class_accuracy"),
-                        "batch_per_class_avg_confidence": supcon_step_resume_payload.get("last_batch_per_class_avg_confidence"),
+                        **{
+                            f"batch_{key}": value
+                            for key, value in (
+                                supcon_step_resume_payload.get("last_batch_contrastive_metrics", {}) or {}
+                            ).items()
+                        },
                         "val_loss": val_loss,
-                        "val_accuracy": val_per_class_metrics["accuracy"],
-                        "val_per_class_accuracy": val_per_class_metrics["per_class_accuracy"],
-                        "val_per_class_avg_confidence": val_per_class_metrics["per_class_avg_confidence"],
+                        **{
+                            f"val_{key}": value
+                            for key, value in val_per_class_metrics["contrastive_metrics"].items()
+                        },
                         "phase_best_val_loss": phase_best_loss,
                         "supcon_best_val_loss": supcon_best_loss,
                         "phase_train_loss_best": phase_train_loss_best,
