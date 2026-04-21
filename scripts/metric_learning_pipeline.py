@@ -399,9 +399,9 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
         self.camera_color_cast_strength = float(camera_color_cast_strength)
         self.camera_color_cast_eval = bool(camera_color_cast_eval)
         self.apply_augmentation = apply_augmentation
-        # The repo-wide policy is now a single deterministic pink tint for every split.
-        # Keep the compatibility flag for parser stability, but never enable stochastic augmentation again.
-        self.stochastic_augmentation = False
+        # Train-time views may use deterministic-seeded random crop/flip augmentation.
+        # Validation/test stay deterministic apart from the fixed tint.
+        self.stochastic_augmentation = bool(apply_augmentation)
         self.dataset_root = dataset_root
         self.enable_runtime_bad_sample_cleanup = enable_runtime_bad_sample_cleanup
         self.disabled_paths: set[str] = set()
@@ -546,19 +546,37 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
                     warnings.filterwarnings("ignore", message=PALETTE_TRANSPARENCY_WARNING, category=UserWarning)
                     warnings.simplefilter("error", Image.DecompressionBombWarning)
                     raw_image = self.base_dataset.loader(path)
-                # Handle images with transparency or palettes properly before training
+                # Handle images with transparency or palettes properly before preprocessing.
                 if raw_image.mode in ("RGBA", "P"):
                     image = raw_image.convert("RGB")
                 else:
                     image = raw_image.convert("RGB")
 
-                tensor = evaluation_tensor_from_image(
-                    image,
-                    self.image_size,
-                    rng=None,
-                    camera_color_cast_eval=True,
-                    camera_color_cast_strength=self.camera_color_cast_strength,
-                )
+                if self.apply_augmentation:
+                    aug_rng = random.Random(
+                        self._runtime_augmentation_seed(
+                            current_source_index,
+                            variant_index,
+                            view_offset=view_offset,
+                            attempt=attempt,
+                        )
+                    )
+                    tensor = training_tensor_from_image(
+                        image,
+                        self.image_size,
+                        aug_rng,
+                        self.gaussian_sigmas,
+                        camera_color_cast_probability=self.camera_color_cast_probability,
+                        camera_color_cast_strength=self.camera_color_cast_strength,
+                    )
+                else:
+                    tensor = evaluation_tensor_from_image(
+                        image,
+                        self.image_size,
+                        rng=None,
+                        camera_color_cast_eval=self.camera_color_cast_eval,
+                        camera_color_cast_strength=self.camera_color_cast_strength,
+                    )
                 return tensor, target
                 
             except Exception as e:
@@ -652,8 +670,22 @@ def sample_log_safe_ratio(
 
 
 def random_resized_crop(image: Image.Image, image_size: int, rng: random.Random, gaussian_sigmas: float) -> Image.Image:
-    del image_size, rng, gaussian_sigmas
-    return image
+    del image_size, gaussian_sigmas
+    width, height = image.size
+    if width <= 1 or height <= 1:
+        return image
+
+    scale = sample_safe_range(rng, 0.70, 1.00, 0.70, 1.00, 0.0)
+    crop_width = max(1, min(width, int(round(width * scale))))
+    crop_height = max(1, min(height, int(round(height * scale))))
+    if crop_width >= width and crop_height >= height:
+        return image
+
+    max_left = max(0, width - crop_width)
+    max_top = max(0, height - crop_height)
+    left = rng.randint(0, max_left) if max_left > 0 else 0
+    top = rng.randint(0, max_top) if max_top > 0 else 0
+    return image.crop((left, top, left + crop_width, top + crop_height))
 
 
 def random_perspective(image: Image.Image, rng: random.Random, gaussian_sigmas: float) -> Image.Image:
@@ -750,6 +782,37 @@ def apply_specular_glare(tensor: torch.Tensor, rng: random.Random, gaussian_sigm
 def apply_cutout(tensor: torch.Tensor, rng: random.Random, gaussian_sigmas: float) -> torch.Tensor:
     del rng, gaussian_sigmas
     return tensor
+
+
+def apply_random_flips(image: Image.Image, rng: random.Random) -> Image.Image:
+    if rng.random() < 0.5:
+        image = image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+    if rng.random() < 0.5:
+        image = image.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+    return image
+
+
+def training_tensor_from_image(
+    image: Image.Image,
+    image_size: int,
+    rng: random.Random,
+    gaussian_sigmas: float,
+    *,
+    camera_color_cast_probability: float = CAMERA_COLOR_CAST_PROBABILITY,
+    camera_color_cast_strength: float = CAMERA_COLOR_CAST_STRENGTH,
+) -> torch.Tensor:
+    image = random_resized_crop(image, image_size, rng, gaussian_sigmas)
+    image = apply_random_flips(image, rng)
+    image = resize_with_letterbox(image, image_size)
+    tensor = TF.to_tensor(image).clamp(0.0, 1.0)
+    tensor = apply_camera_color_cast(
+        tensor,
+        random.Random(0),
+        gaussian_sigmas=0.0,
+        probability=1.0 if camera_color_cast_probability > 0 else 0.0,
+        strength=camera_color_cast_strength,
+    )
+    return TF.normalize(tensor, IMAGENET_MEAN, IMAGENET_STD)
 
 
 def apply_camera_color_cast(
@@ -1251,7 +1314,7 @@ def build_datasets(
             args.camera_color_cast_probability,
             args.camera_color_cast_strength,
             args.camera_color_cast_eval,
-            apply_augmentation=False,
+            apply_augmentation=True,
             class_mapping=class_mapping,
             dataset_root=root,
             enable_runtime_bad_sample_cleanup=args.runtime_bad_sample_cleanup,
@@ -1281,7 +1344,7 @@ def build_datasets(
             args.camera_color_cast_probability,
             args.camera_color_cast_strength,
             args.camera_color_cast_eval,
-            apply_augmentation=False,  # no stochastic/geometric aug; deterministic camera cast may apply
+            apply_augmentation=False,  # deterministic eval path; only fixed tint is applied
             class_mapping=class_mapping,
             dataset_root=root,
             enable_runtime_bad_sample_cleanup=args.runtime_bad_sample_cleanup,
@@ -1441,7 +1504,7 @@ def build_auto_split_datasets(
         args.camera_color_cast_probability,
         args.camera_color_cast_strength,
         args.camera_color_cast_eval,
-        apply_augmentation=False,
+        apply_augmentation=True,
         base_dataset=base_dataset,
         samples=train_samples,
         dataset_root=root,
@@ -1473,7 +1536,7 @@ def build_auto_split_datasets(
         args.camera_color_cast_probability,
         args.camera_color_cast_strength,
         args.camera_color_cast_eval,
-        apply_augmentation=False,  # no stochastic/geometric aug; deterministic camera cast may apply
+        apply_augmentation=False,  # deterministic eval path; only fixed tint is applied
         base_dataset=base_dataset,
         samples=test_samples,
         dataset_root=root,
@@ -6221,9 +6284,9 @@ def run_experiment(args: argparse.Namespace) -> int:
             "warmup_steps": args.warmup_steps,
         },
         "image_augmentation": {
-            "policy": "deterministic_fixed_tint_only",
-            "stochastic_augmentations_enabled": False,
-            "spatial_augmentations_enabled": False,
+            "policy": "aspect_preserving_random_crop_plus_flips_for_train_only",
+            "stochastic_augmentations_enabled": bool(getattr(train_dataset, "stochastic_augmentation", False)),
+            "spatial_augmentations_enabled": bool(getattr(train_dataset, "stochastic_augmentation", False)),
             "photometric_augmentations_enabled": False,
             "camera_color_cast_strength": args.camera_color_cast_strength,
             "camera_color_cast_eval": args.camera_color_cast_eval,
