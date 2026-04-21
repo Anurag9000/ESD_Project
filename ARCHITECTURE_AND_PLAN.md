@@ -154,6 +154,7 @@ Resume is fully automatic: re-running the same `./run_training.sh --phase0-mim -
 - **Minimum Size:** 224px (strictly enforced on physical disk)
 - **Split Ratios:** 70% train / 20% val / 10% test
 - **Augmentation:** Train-time SupCon/CE views use deterministic-seeded random aspect-preserving crops plus horizontal/vertical flips; val/test stay deterministic apart from the fixed repo-wide Pi-camera pink tint
+- **SupCon diagnostics:** SupCon phases log loss plus same-image view cosine, same-class positive cosine, different-class negative cosine, and positive-minus-negative cosine margin. Classifier accuracy/confidence is logged only in CE/classifier phases.
 - **Class Balancing:** Balanced per-batch class cycling is the default and mandatory production path.
 - **Interpretability Audit:** At run start and after every completed phase, the pipeline generates fixed-tint test-set visualizations:
   a UMAP thumbnail embedding map, calibration plots, and optional Grad-CAM overlays.
