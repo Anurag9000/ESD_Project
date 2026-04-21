@@ -29,6 +29,7 @@ logs/smoke_*
 /local.properties
 /gradlew
 /gradlew.bat
+.tmp/
 
 # Android module local build metadata
 /SmartBin_Android/.kotlin/
