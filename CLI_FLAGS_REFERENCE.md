@@ -102,11 +102,11 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--backbone` | `convnextv2_nano` | Backbone selection used for the encoder. Any timm backbone string is accepted. Phase 0 uses pure `convnextv2_nano.fcmae`; direct Phase 1+ starts use `convnextv2_nano.fcmae_ft_in22k_in1k` by default. |
 | `--weights` | `default` | For Phase 0, `default` means use the pure `.fcmae` backbone weights; `none` means scratch init. |
 | `--image-size` | `224` | Input resolution for masking and reconstruction. |
-| `--augment-repeats` | `1` | Passed through to the repo dataset builder. The train split uses seeded random crop + flip views; val/test stay deterministic. |
+| `--augment-repeats` | `1` | Passed through to the repo dataset builder. The train split uses seeded random crop + flip views; val/test stay deterministic. Phase 0 uses the same crop/flip policy now. |
 | `--augment-gaussian-sigmas` | `1.0` | Legacy compatibility knob retained for parser compatibility only. |
 | `--camera-color-cast-probability` | `1.0` | Fixed Pi-camera color cast applied to every Phase 0 image. |
 | `--camera-color-cast-strength` | `0.50` | Strength of the fixed Phase 0 magenta/pink cast. |
-| `--camera-color-cast-eval` / `--no-camera-color-cast-eval` | `true` | Compatibility flag; the fixed cast is always applied, while train-time views also use seeded random crop + flip augmentation. |
+| `--camera-color-cast-eval` / `--no-camera-color-cast-eval` | `true` | Compatibility flag; the fixed cast is always applied, while train-time views and Phase 0 also use seeded random crop + flip augmentation. |
 | `--class-mapping` | `""` | Optional JSON merge map passed to the repo dataset builder. |
 | `--auto-split-ratios` | `0.9,0.05,0.05` | Auto-split ratios when the dataset root has no explicit train/val/test layout. |
 | `--runtime-bad-sample-cleanup` | `false` | Mirror the main trainer's runtime bad-sample cleanup behavior. |

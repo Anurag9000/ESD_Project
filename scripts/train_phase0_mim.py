@@ -31,6 +31,7 @@ try:
         build_datasets,
         make_balanced_sampler,
         evaluation_tensor_from_image,
+        training_tensor_from_image,
         load_resume_checkpoint,
         log_json_event,
         seed_everything,
@@ -47,6 +48,7 @@ except ModuleNotFoundError:
         build_datasets,
         make_balanced_sampler,
         evaluation_tensor_from_image,
+        training_tensor_from_image,
         load_resume_checkpoint,
         log_json_event,
         seed_everything,
@@ -54,20 +56,37 @@ except ModuleNotFoundError:
 
 
 class Phase0WasteDataset(Dataset[tuple[torch.Tensor, int, str]]):
-    def __init__(self, samples: list[tuple[str, int]], classes: list[str], image_size: int) -> None:
+    def __init__(self, samples: list[tuple[str, int]], classes: list[str], image_size: int, seed: int) -> None:
         self.samples = list(samples)
         self.classes = list(classes)
         self.class_to_idx = {name: index for index, name in enumerate(self.classes)}
         self.image_size = int(image_size)
+        self.seed = int(seed)
+        self.current_epoch = 0
 
     def __len__(self) -> int:
         return len(self.samples)
+
+    def set_epoch(self, epoch: int) -> None:
+        self.current_epoch = max(0, int(epoch))
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, int, str]:
         path, target = self.samples[index]
         with Image.open(path) as image:
             image = image.convert("RGB")
-            tensor = evaluation_tensor_from_image(image, self.image_size)
+            rng = random.Random(
+                self.seed * 1_000_003
+                + self.current_epoch * 104_729
+                + index * 9_973
+            )
+            tensor = training_tensor_from_image(
+                image,
+                self.image_size,
+                rng,
+                gaussian_sigmas=1.0,
+                camera_color_cast_probability=CAMERA_COLOR_CAST_PROBABILITY,
+                camera_color_cast_strength=CAMERA_COLOR_CAST_STRENGTH,
+            )
         return tensor, int(target), str(path)
 
 
@@ -459,13 +478,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--augment-repeats",
         type=int,
         default=1,
-        help="Legacy compatibility knob retained for parser stability. Phase 0 uses deterministic fixed-tint preprocessing.",
+        help="Legacy compatibility knob retained for parser stability. Phase 0 now uses seeded crop/flip augmentation plus fixed tint.",
     )
     parser.add_argument(
         "--augment-gaussian-sigmas",
         type=float,
         default=1.0,
-        help="Legacy compatibility knob retained for parser stability. Phase 0 uses deterministic fixed-tint preprocessing.",
+        help="Legacy compatibility knob retained for parser stability. Phase 0 now uses seeded crop/flip augmentation plus fixed tint.",
     )
     parser.add_argument(
         "--camera-color-cast-probability",
@@ -620,7 +639,7 @@ def main() -> int:
     )
 
     train_dataset, _, _, _, _ = build_datasets(args)
-    phase0_dataset = train_dataset
+    phase0_dataset = Phase0WasteDataset(list(train_dataset.samples), list(train_dataset.classes), args.image_size, args.seed)
     phase0_sampler = make_balanced_sampler(phase0_dataset, phase0_dataset.classes, args.batch_size, args.seed + 202)
     loader = DataLoader(
         phase0_dataset,
@@ -748,6 +767,7 @@ def main() -> int:
 
     epoch_iterator = range(start_epoch, args.epochs) if args.epochs > 0 else itertools.count(start_epoch)
     for epoch in epoch_iterator:
+        phase0_dataset.set_epoch(epoch)
         epoch_batch_offset = resume_batch_index if have_resume_epoch_batch_offset and epoch == resume_epoch else 0
         if epoch_batch_offset > 0:
             phase0_sampler.set_start_index(epoch_batch_offset * args.batch_size)
