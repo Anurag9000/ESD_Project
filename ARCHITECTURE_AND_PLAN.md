@@ -153,11 +153,11 @@ Resume is fully automatic: re-running the same `./run_training.sh --phase0-mim -
 - **Corpus:** WSS-304K — 304,258 verified images, all ≥224×224px
 - **Minimum Size:** 224px (strictly enforced on physical disk)
 - **Split Ratios:** 70% train / 20% val / 10% test
-- **Augmentation:** None beyond the fixed repo-wide Pi-camera pink tint; every train/val/test image is rendered through the same deterministic tint
+- **Augmentation:** Train-time SupCon/CE views use deterministic-seeded random aspect-preserving crops plus horizontal/vertical flips; val/test stay deterministic apart from the fixed repo-wide Pi-camera pink tint
 - **Class Balancing:** Balanced per-batch class cycling is the default and mandatory production path.
 - **Interpretability Audit:** At run start and after every completed phase, the pipeline generates fixed-tint test-set visualizations:
   a UMAP thumbnail embedding map, calibration plots, and optional Grad-CAM overlays.
-- **Augmentation types:** None. The only image transform applied anywhere in the pipeline is the fixed Pi-camera pink tint.
+- **Augmentation types:** Train-only aspect-preserving random crop + horizontal/vertical flips, plus the fixed Pi-camera pink tint. Val/test remain deterministic apart from the tint.
 
 ---
 
