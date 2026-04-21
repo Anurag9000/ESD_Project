@@ -117,7 +117,8 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--grad-accum-steps` | `2` | Gradient accumulation factor for Phase 0. The default effective batch size is 256. |
 | `--mask-ratio` | `0.6` | Fraction of patches masked before reconstruction. |
 | `--patch-size` | `32` | Patch size used by the spatial mask generator. |
-| `--decoder-dim` | `512` | Hidden width of the reconstruction decoder. |
+| `--decoder-dim` | `512` | Hidden width of the reconstruction decoder. Phase 0 currently uses a single decoder block again. |
+| `--grad-clip-norm` | `1.0` | Global norm cap applied after `backward()` and before the Phase 0 optimizer step. |
 | `--learning-rate` | `1.5e-4` | AdamW learning rate for Phase 0. |
 | `--weight-decay` | `0.05` | AdamW weight decay for Phase 0. |
 | `--seed` | `42` | RNG seed. |
@@ -281,6 +282,7 @@ These are not `argparse` flags, but they control the shell wrappers and the acti
 - `run_training.sh` ignores user-supplied `--dataset-root`, `--batch-size`, `--output-dir`, and `--log-file` because those are wrapper-managed.
 - `run_training.sh` always injects `--dataset-root "$DATASET_ROOT"` and `--sampling-strategy balanced` into the progressive trainer.
 - `run_training.sh` supports optional Phase 0 MIM pretraining via `--phase0-mim` plus `--phase0-mim-*` controls; when enabled it exports `phase0_mim/phase0_encoder_final.pth` and passes it into the progressive trainer via `--phase0-encoder-checkpoint`.
+- `run_training.sh` forwards `--phase0-mim-grad-clip-norm` into Phase 0. The default is `1.0`, matching the standalone Phase 0 launcher.
 - `--phase0-mim-train-loss-window` controls the Phase 0 early-stopping window in effective optimizer batches. The default is `5000`.
 - Phase 0 uses the same balanced class sampler as SupCon and CE. It defaults to `batch-size 128` with `grad-accum-steps 2`, giving the same effective batch size of 256 without changing the rest of the pipeline defaults.
 - The default train split appends `REDACTED_DATA_ROOT` as extra training-only data and still excludes plastic from the logical 3-class taxonomy.

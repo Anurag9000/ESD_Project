@@ -18,6 +18,8 @@ from torchvision.utils import make_grid
 from tqdm import tqdm
 
 PHASE0_EARLY_STOPPING_MODE = "effective_batch_window_best_v3"
+PHASE0_PATCH_NORMALIZATION_EPS = 1e-2
+PHASE0_GRAD_CLIP_NORM = 1.0
 
 try:
     from metric_learning_pipeline import (
@@ -113,7 +115,7 @@ def compute_patch_normalized_mse_loss(
 
     patch_mean = targs.mean(dim=(4, 5), keepdim=True)
     patch_var = targs.var(dim=(4, 5), unbiased=False, keepdim=True)
-    targs = (targs - patch_mean) / torch.sqrt(patch_var + 1e-6)
+    targs = (targs - patch_mean) / torch.sqrt(patch_var + PHASE0_PATCH_NORMALIZATION_EPS)
 
     loss = (preds - targs).pow(2)
     masked_loss = (loss * mask).sum()
@@ -158,14 +160,6 @@ class RepoSafeConvNeXtMIM(nn.Module):
         self.feat_res = feat_res
         self.decoder_proj = nn.Conv2d(enc_channels, decoder_dim, kernel_size=1)
         self.decoder_block = nn.Sequential(
-            nn.Conv2d(decoder_dim, decoder_dim, kernel_size=7, padding=3, groups=decoder_dim),
-            nn.GroupNorm(1, decoder_dim),
-            nn.GELU(),
-            nn.Conv2d(decoder_dim, decoder_dim * 4, kernel_size=1),
-            nn.GELU(),
-            nn.Conv2d(decoder_dim * 4, decoder_dim, kernel_size=1),
-            nn.GroupNorm(1, decoder_dim),
-            nn.GELU(),
             nn.Conv2d(decoder_dim, decoder_dim, kernel_size=7, padding=3, groups=decoder_dim),
             nn.GroupNorm(1, decoder_dim),
             nn.GELU(),
@@ -313,7 +307,7 @@ def _render_patch_normalized_phase0_preview(
     patch_mean = orig_patches.mean(dim=(4, 5), keepdim=True)
     patch_var = orig_patches.var(dim=(4, 5), unbiased=False, keepdim=True)
 
-    unnormalized_pred_patches = pred_patches * torch.sqrt(patch_var + 1e-6) + patch_mean
+    unnormalized_pred_patches = pred_patches * torch.sqrt(patch_var + PHASE0_PATCH_NORMALIZATION_EPS) + patch_mean
     blended_patches = orig_patches * (1.0 - mask_patches) + unnormalized_pred_patches * mask_patches
     blended = blended_patches.permute(0, 1, 2, 4, 3, 5).contiguous().view(batch_size, channels, height, width)
     return _denormalize_phase0_images(blended)
@@ -435,6 +429,7 @@ def log_phase0_state(
         payload["effective_batch_size"] = int(args.batch_size * args.grad_accum_steps)
         payload["mask_ratio"] = float(args.mask_ratio)
         payload["patch_size"] = int(args.patch_size)
+        payload["grad_clip_norm"] = float(args.grad_clip_norm)
         payload["train_loss_window"] = int(args.train_loss_window)
         payload["early_stopping_patience"] = int(args.early_stopping_patience)
         payload["early_stopping_min_delta"] = float(args.early_stopping_min_delta)
@@ -510,6 +505,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mask-ratio", type=float, default=0.6)
     parser.add_argument("--patch-size", type=int, default=32)
     parser.add_argument("--decoder-dim", type=int, default=512)
+    parser.add_argument(
+        "--grad-clip-norm",
+        type=float,
+        default=PHASE0_GRAD_CLIP_NORM,
+        help="Clip Phase 0 gradients to this global norm before the optimizer step. Default is 1.0.",
+    )
     parser.add_argument("--learning-rate", type=float, default=1.5e-4)
     parser.add_argument("--weight-decay", type=float, default=0.05)
     parser.add_argument("--seed", type=int, default=42)
@@ -581,6 +582,8 @@ def main() -> int:
         raise ValueError("--mask-ratio must be between 0 and 1")
     if args.patch_size < 1:
         raise ValueError("--patch-size must be >= 1")
+    if args.grad_clip_norm <= 0:
+        raise ValueError("--grad-clip-norm must be > 0")
     if args.image_size % args.patch_size != 0:
         raise ValueError("--image-size must be divisible by --patch-size")
 
@@ -841,6 +844,8 @@ def main() -> int:
             )
 
             if step_index % args.grad_accum_steps == 0 or step_index == len(loader):
+                scaler.unscale_(optimizer)
+                grad_norm = float(nn.utils.clip_grad_norm_(model.parameters(), max_norm=float(args.grad_clip_norm)))
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad(set_to_none=True)
@@ -868,6 +873,17 @@ def main() -> int:
                     loss_plateau_windows_without_improvement=loss_plateau_windows_without_improvement,
                     optimizer_lr=current_lr,
                     args=args,
+                )
+                log_json_event(
+                    log_path,
+                    {
+                        "event": "phase0_gradient_clipped",
+                        "epoch": epoch + 1,
+                        "global_step": global_step,
+                        "grad_norm": grad_norm,
+                        "grad_clip_norm": float(args.grad_clip_norm),
+                        "microbatches_in_effective_batch": completed_microbatches,
+                    },
                 )
 
                 if train_loss_window_batch_count >= args.train_loss_window:
