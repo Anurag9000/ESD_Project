@@ -56,6 +56,7 @@ source .venv/bin/activate
 # - Phase 0 MIM trains the full backbone with the same balanced class sampler and an effective 256 batch size via 128-image physical batches plus 2-step accumulation, then SupCon/CE re-freeze the earliest 40 leaf modules
 # - Phase 0 seeds from pure `convnextv2_nano.fcmae`; direct SupCon/CE/recursive starts seed from `convnextv2_nano.fcmae_ft_in22k_in1k`
 # - Train split SupCon/CE views and Phase 0 MIM use deterministic-seeded random aspect-preserving crops plus H/V flips; val/test remain deterministic letterbox + fixed Pi-camera magenta tint
+# - `REDACTED_DATA_ROOT` is appended into the train split only and is matched case-insensitively to the 3-class taxonomy
 # - Phase 0 MIM uses patch-normalized reconstruction with `1e-2` epsilon and clips gradients at norm `1.0`
 # - Phase 0 decoder is back to a single reconstruction block
 # - validation triggered by train-step patience
