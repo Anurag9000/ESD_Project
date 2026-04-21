@@ -90,6 +90,8 @@ def main() -> int:
     model = RepoSafeConvNeXtMIM(args.backbone, args.weights, input_res=args.image_size, decoder_dim=args.decoder_dim).to(device)
     payload = torch.load(checkpoint_path, map_location="cpu")
     state_dict = payload.get("model_state_dict") if isinstance(payload, dict) and "model_state_dict" in payload else payload
+    epoch = int(payload.get("epoch", 0)) if isinstance(payload, dict) else 0
+    global_step = int(payload.get("step", 0)) if isinstance(payload, dict) else 0
     model.load_state_dict(state_dict)
     model.eval()
 
@@ -113,8 +115,9 @@ def main() -> int:
         originals=images,
         pixel_mask=pixel_mask,
         reconstructed=reconstructed,
-        epoch=0,
-        global_step=0,
+        patch_size=args.patch_size,
+        epoch=epoch,
+        global_step=global_step,
         sample_count=args.sample_count,
     )
     print(output_path)

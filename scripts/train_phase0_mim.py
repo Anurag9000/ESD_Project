@@ -285,6 +285,40 @@ def _denormalize_phase0_images(images: torch.Tensor) -> torch.Tensor:
     return torch.clamp(images * std + mean, 0.0, 1.0)
 
 
+def _render_patch_normalized_phase0_preview(
+    originals: torch.Tensor,
+    pixel_mask: torch.Tensor,
+    reconstructed: torch.Tensor,
+    patch_size: int,
+) -> torch.Tensor:
+    """Map patch-normalized predictions back to a human-readable RGB preview.
+
+    The decoder predicts patch-normalized tensors, so we recover an approximate
+    image by using the original image's patch mean and variance as the local
+    affine transform, then keep the visible patches from the original image.
+    """
+    if originals.shape != reconstructed.shape:
+        raise ValueError(f"Preview shape mismatch: {tuple(originals.shape)} vs {tuple(reconstructed.shape)}")
+    if originals.ndim != 4:
+        raise ValueError(f"Expected 4D image tensors, got shape {tuple(originals.shape)}")
+    if originals.shape[2] % patch_size != 0 or originals.shape[3] % patch_size != 0:
+        raise ValueError("Image size must be divisible by patch_size for preview rendering.")
+
+    batch_size, channels, height, width = originals.shape
+
+    orig_patches = originals.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size)
+    pred_patches = reconstructed.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size)
+    mask_patches = pixel_mask.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size)
+
+    patch_mean = orig_patches.mean(dim=(4, 5), keepdim=True)
+    patch_var = orig_patches.var(dim=(4, 5), unbiased=False, keepdim=True)
+
+    unnormalized_pred_patches = pred_patches * torch.sqrt(patch_var + 1e-6) + patch_mean
+    blended_patches = orig_patches * (1.0 - mask_patches) + unnormalized_pred_patches * mask_patches
+    blended = blended_patches.permute(0, 1, 2, 4, 3, 5).contiguous().view(batch_size, channels, height, width)
+    return _denormalize_phase0_images(blended)
+
+
 def _tensor_batch_to_grid_image(images: torch.Tensor, nrow: int) -> Image.Image:
     grid = make_grid(images, nrow=max(1, nrow), padding=2, pad_value=0.06)
     grid_np = grid.detach().cpu().clamp(0.0, 1.0).permute(1, 2, 0).numpy()
@@ -297,6 +331,7 @@ def save_phase0_reconstruction_preview(
     originals: torch.Tensor,
     pixel_mask: torch.Tensor,
     reconstructed: torch.Tensor,
+    patch_size: int,
     epoch: int,
     global_step: int,
     sample_count: int,
@@ -305,7 +340,12 @@ def save_phase0_reconstruction_preview(
     sample_count = max(1, min(int(sample_count), int(originals.shape[0])))
     originals_vis = _denormalize_phase0_images(originals[:sample_count].detach())
     masked_vis = _denormalize_phase0_images((originals[:sample_count] * (1.0 - pixel_mask[:sample_count])).detach())
-    reconstructed_vis = _denormalize_phase0_images(reconstructed[:sample_count].detach())
+    reconstructed_vis = _render_patch_normalized_phase0_preview(
+        originals[:sample_count].detach(),
+        pixel_mask[:sample_count].detach(),
+        reconstructed[:sample_count].detach(),
+        patch_size=int(patch_size),
+    )
 
     grid_original = _tensor_batch_to_grid_image(originals_vis, nrow=sample_count)
     grid_masked = _tensor_batch_to_grid_image(masked_vis, nrow=sample_count)
@@ -1033,6 +1073,7 @@ def main() -> int:
                 originals=last_preview_images,
                 pixel_mask=last_preview_pixel_mask,
                 reconstructed=last_preview_reconstructed,
+                patch_size=args.patch_size,
                 epoch=epoch + 1,
                 global_step=global_step,
                 sample_count=args.reconstruction_preview_count,
