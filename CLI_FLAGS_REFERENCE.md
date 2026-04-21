@@ -10,7 +10,7 @@ Live logs now print pure accuracy plus `per_class_accuracy` and `per_class_avg_c
 | Flag | Default | What it does |
 | --- | --- | --- |
 | `--dataset-root` | `Dataset_Final` | Root of the physical dataset tree. |
-| `--image-size` | `224` | Training crop / resize size. |
+| `--image-size` | `224` | Square canvas size after aspect-preserving letterbox resize. |
 | `--batch-size` | `320` | Physical batch size per optimizer step. |
 | `--num-workers` | `2` | `DataLoader` worker count. |
 | `--prefetch-factor` | `1` | Prefetch depth per worker. |
@@ -27,7 +27,7 @@ Live logs now print pure accuracy plus `per_class_accuracy` and `per_class_avg_c
 | `--head-lr` | `1e-3` | Learning rate for classifier head warmup. |
 | `--backbone-lr` | `1e-5` | Learning rate for classifier backbone phases. |
 | `--weight-decay` | `1e-4` | Optimizer weight decay. |
-| `--backbone` | `convnextv2_nano` | Backbone selection. The trainer accepts any timm backbone name; registered aliases resolve pretrained/scratch defaults cleanly. |
+| `--backbone` | `convnextv2_nano` | Backbone selection. The trainer accepts any timm backbone name; registered aliases resolve pretrained/scratch defaults cleanly. For direct non-Phase-0 training, the default `convnextv2_nano` alias resolves to `convnextv2_nano.fcmae_ft_in22k_in1k_384`. |
 | `--optimizer` | `adamw` | Optimizer family: `adamw` or `sam`. |
 | `--precision` | `mixed` | Training precision: `mixed`, `32`, or `64`. |
 | `--adam-beta1` | `0.9` | Adam beta1. |
@@ -47,7 +47,7 @@ Live logs now print pure accuracy plus `per_class_accuracy` and `per_class_avg_c
 | `--augment-gaussian-sigmas` | `1.0` | Legacy compatibility knob retained for parser compatibility only. It no longer drives any random augmentation. |
 | `--camera-color-cast-probability` | `1.0` | Fixed Pi-camera style magenta/pink white-balance cast applied to every image in the pipeline. |
 | `--camera-color-cast-strength` | `0.50` | Strength of the fixed magenta/pink cast applied to every image. |
-| `--camera-color-cast-eval` / `--no-camera-color-cast-eval` | `true` | Kept for compatibility. The fixed magenta cast is always applied to train, val, test, and holdout images. |
+| `--camera-color-cast-eval` / `--no-camera-color-cast-eval` | `true` | Kept for compatibility. The fixed magenta cast is always applied to train, val, test, and holdout images after letterbox resize. |
 | `--frozen-core-backbone-modules` | `40` | Number of earliest backbone leaf modules kept frozen in every SupCon, CE, and recursive phase. Default freezes the stem/core 40 modules. |
 | `--supcon-unfreeze-backbone-modules` | `None` | Optional extra cap on how many tail modules SupCon may unfreeze. When unset, SupCon may train only the tail left after the frozen 40-module core. |
 | `--ce-max-unfreeze-modules` | `None` | Optional extra cap on how many tail modules CE may unfreeze, including the `full_model` path. When unset, CE may train only the tail left after the frozen 40-module core. |
@@ -99,7 +99,7 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--aux-train-dataset-root` | `REDACTED_DATA_ROOT` | Optional extra physical dataset root appended to the Phase 0 training split only. |
 | `--output-dir` | `Results/phase0_mim` | Phase 0 checkpoint output root. |
 | `--log-file` | `logs/phase0_mim.log.jsonl` | Structured Phase 0 JSONL log. |
-| `--backbone` | `convnextv2_nano` | Backbone selection used for the encoder. Any timm backbone string is accepted. |
+| `--backbone` | `convnextv2_nano` | Backbone selection used for the encoder. Any timm backbone string is accepted. Phase 0 uses pure `convnextv2_nano.fcmae`; direct Phase 1+ starts use `convnextv2_nano.fcmae_ft_in22k_in1k_384` by default. |
 | `--weights` | `default` | For Phase 0, `default` means use the pure `.fcmae` backbone weights; `none` means scratch init. |
 | `--image-size` | `224` | Input resolution for masking and reconstruction. |
 | `--augment-repeats` | `1` | Passed through to the repo dataset builder. The pipeline uses a single fixed image version per source image. |
