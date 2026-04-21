@@ -96,7 +96,7 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | Flag | Default | What it does |
 | --- | --- | --- |
 | `--dataset-root` | `Dataset_Final` | Dataset root used to build the clean train split. |
-| `--aux-train-dataset-root` | `REDACTED_DATA_ROOT` | Optional extra physical dataset root appended to the Phase 0 training split only. |
+| `--aux-train-dataset-root` | `REDACTED_DATA_ROOT` | Optional extra physical dataset root appended to the Phase 0 training split only. Folder names are matched case-insensitively to the 3-class taxonomy. |
 | `--output-dir` | `Results/phase0_mim` | Phase 0 checkpoint output root. |
 | `--log-file` | `logs/phase0_mim.log.jsonl` | Structured Phase 0 JSONL log. |
 | `--backbone` | `convnextv2_nano` | Backbone selection used for the encoder. Any timm backbone string is accepted. Phase 0 uses pure `convnextv2_nano.fcmae`; direct Phase 1+ starts use `convnextv2_nano.fcmae_ft_in22k_in1k` by default. |

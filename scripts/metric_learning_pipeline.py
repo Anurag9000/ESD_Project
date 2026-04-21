@@ -157,6 +157,10 @@ def parse_json_class_mapping(spec: str | None) -> dict[str, list[str]]:
     return mapping
 
 
+def normalize_class_name(name: str) -> str:
+    return name.strip().lower()
+
+
 def enforced_training_class_mapping(custom_mapping: dict[str, list[str]] | None = None) -> dict[str, list[str]]:
     """Return the repo-wide training taxonomy mapping.
 
@@ -166,12 +170,14 @@ def enforced_training_class_mapping(custom_mapping: dict[str, list[str]] | None 
     """
     merged: dict[str, list[str]] = {target: list(sources) for target, sources in TRAINING_CLASS_MAPPING.items()}
     for target, sources in (custom_mapping or {}).items():
-        if target in TRAINING_EXCLUDED_CLASSES:
+        normalized_target = normalize_class_name(target)
+        if normalized_target in TRAINING_EXCLUDED_CLASSES:
             continue
-        target_sources = merged.setdefault(target, [])
+        target_sources = merged.setdefault(normalized_target, [])
         for source in sources:
-            if source not in TRAINING_EXCLUDED_CLASSES and source not in target_sources:
-                target_sources.append(source)
+            normalized_source = normalize_class_name(source)
+            if normalized_source not in TRAINING_EXCLUDED_CLASSES and normalized_source not in target_sources:
+                target_sources.append(normalized_source)
     return merged
 
 
@@ -179,13 +185,15 @@ def project_class_name_to_training_taxonomy(
     source_name: str,
     class_mapping: dict[str, list[str]] | None = None,
 ) -> str | None:
-    if source_name in TRAINING_EXCLUDED_CLASSES:
+    normalized_source = normalize_class_name(source_name)
+    if normalized_source in TRAINING_EXCLUDED_CLASSES:
         return None
     effective_mapping = enforced_training_class_mapping(class_mapping)
     for target, sources in effective_mapping.items():
-        if source_name in sources:
-            return target if target in TRAINING_CLASS_ORDER else None
-    return source_name if source_name in TRAINING_CLASS_ORDER else None
+        if normalized_source in [normalize_class_name(source) for source in sources]:
+            normalized_target = normalize_class_name(target)
+            return normalized_target if normalized_target in TRAINING_CLASS_ORDER else None
+    return normalized_source if normalized_source in TRAINING_CLASS_ORDER else None
 
 
 def project_samples_to_training_taxonomy(
