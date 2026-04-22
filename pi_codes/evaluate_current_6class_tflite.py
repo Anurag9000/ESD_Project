@@ -39,7 +39,7 @@ except Exception:  # pragma: no cover
 # 1. CONFIGURATION
 # ==============================
 MODEL_PATH = "model/current_best_3class_quantized.tflite"
-DATASET_DIR = "REDACTED_DATA_ROOT"
+DATASET_DIR = "Dataset_Final"
 OUTPUT_DIR = "pi_eval_outputs"
 IMG_SIZE = (224, 224)
 CONFIDENCE_THRESHOLD = 0.80

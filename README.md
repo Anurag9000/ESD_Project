@@ -6,7 +6,7 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 
 ### Machine Learning Engine
 - **Backbone:** Configurable; default ConvNeXt V2 Nano FCMAE for Phase 0, ConvNeXt V2 Nano FCMAE fine-tuned on IN22K + IN1K for direct supervised / recursive starts
-- **Corpus:** 304,258 verified physical images on disk, plus the default train-only `REDACTED_DATA_ROOT` append root for extra organic / metal / paper samples; the next-run logical training taxonomy keeps only the 3 supervised classes
+- **Corpus:** 304,258 verified physical images on disk; the next-run logical training taxonomy keeps only the 3 supervised classes
 - **Taxonomy:** **3 logical training classes** — organic, metal, paper
 - **Orchestration:** 8-stage pipeline: SupCon Head → SupCon Last-20 → SupCon full tail after frozen core → CE Head → CE Last-20 → CE full tail after frozen core → Recursive val_loss → Recursive val_raw_acc, with the same frozen 40-module stem/core preserved through recursive refinement
 - **Logging:** SupCon phases log contrastive diagnostics only; classifier/CE phases log accuracy, per-class accuracy, and per-class average confidence.
@@ -57,7 +57,6 @@ source .venv/bin/activate
 # - Phase 0 seeds from pure `convnextv2_nano.fcmae`; direct SupCon/CE/recursive starts seed from `convnextv2_nano.fcmae_ft_in22k_in1k`
 # - Train split SupCon/CE views and Phase 0 MIM use deterministic-seeded random aspect-preserving crops plus H/V flips; val/test remain deterministic letterbox + fixed Pi-camera magenta tint
 # - SupCon logs same-image view cosine, same-class positive cosine, different-class negative cosine, and positive-minus-negative cosine margin instead of classifier accuracy
-# - `REDACTED_DATA_ROOT` is appended into the train split only and is matched case-insensitively to the 3-class taxonomy
 # - Phase 0 MIM uses patch-normalized reconstruction with `1e-2` epsilon and clips gradients at norm `1.0`
 # - Phase 0 decoder is back to a single reconstruction block
 # - validation triggered by train-step patience

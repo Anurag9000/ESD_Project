@@ -458,14 +458,6 @@ def log_phase0_state(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Phase 0 masked image modeling pretraining for ConvNeXt backbones.")
     parser.add_argument("--dataset-root", default="Dataset_Final")
-    parser.add_argument(
-        "--aux-train-dataset-root",
-        default="REDACTED_DATA_ROOT",
-        help=(
-            "Optional extra physical dataset root to append to the Phase 0 training split only. "
-            "It is projected through the same logical taxonomy and excluded from validation/test."
-        ),
-    )
     parser.add_argument("--output-dir", default="Results/phase0_mim")
     parser.add_argument("--log-file", default="logs/phase0_mim.log.jsonl")
     parser.add_argument(
