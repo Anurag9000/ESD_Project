@@ -27,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset-root", default="Dataset_Final")
     parser.add_argument("--split", choices=("train", "val", "test"), default="train")
     parser.add_argument("--image", default="", help="Optional explicit image path. Defaults to the first image in the split.")
-    parser.add_argument("--output-dir", default=".tmp/supcon_augmentation_previews")
+    parser.add_argument("--output-dir", default="Results/supcon_augmentation_previews")
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--class-mapping", type=str, default="")
