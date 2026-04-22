@@ -138,7 +138,7 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--backbone` | `convnextv2_nano` | Backbone name forwarded to the recursive trainer. Any timm backbone string is accepted. |
 | `--weights` | `default` | Pretrained-weight mode forwarded to the recursive trainer. |
 | `--metric` | required | Accept/reject metric: `val_loss` or `val_raw_acc`. |
-| `--threshold` | required | Stop threshold for recursive refinement. |
+| `--threshold` | `0.0` | Stop threshold for recursive refinement. Applied to both recursive `val_loss` and `val_raw_acc` passes. |
 | `--initial-head-lr` | required | Initial head learning rate for refinement. |
 | `--initial-backbone-lr` | required | Initial backbone learning rate for refinement. |
 | `--batch-size` | `320` | Batch size forwarded to the trainer. |

@@ -61,6 +61,7 @@ source .venv/bin/activate
 # - Phase 0 decoder is back to a single reconstruction block
 # - validation triggered by train-step patience
 # - patience 3 across SupCon, CE head, CE stages, and recursive stages
+# - recursive acceptance threshold 0.0 for both recursive val_loss and val_raw_acc passes
 # - automatic same-command resume from the incomplete phase's own step_last.pt or last.pt
 ./run_training.sh --phase0-mim --backbone convnextv2_nano --num-workers 2 --prefetch-factor 1
 ```
