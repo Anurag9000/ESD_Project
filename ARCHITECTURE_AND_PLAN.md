@@ -105,6 +105,7 @@ The pipeline follows the research-validated principle: **Contrastive representat
 
 ### Stage 8 — Recursive val_raw_acc Refinement
 - Same mechanism as Stage 5 but optimises for raw validation accuracy.
+- This pass is opt-in in the default wrapper flow and only runs when `ENABLE_RAWACC_REFINEMENT=1` is set.
 - Uses the same 40-module frozen core as Stage 7 and the main CE/SupCon pipeline.
 - LRs bootstrapped from Stage 5 final state (halved further).
 - Produces final deployment-ready `accepted_best.pt`.

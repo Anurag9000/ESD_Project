@@ -29,6 +29,7 @@ RUN_ROOT="${RUN_ROOT:-Results/${BACKBONE_NAME}_master_run}"
 LOG_ROOT="${LOG_ROOT:-logs/${BACKBONE_NAME}_master_run}"
 INITIAL_CHECKPOINT="${INITIAL_CHECKPOINT:-$RUN_ROOT/progressive/best.pt}"
 RECURSIVE_ACCEPTANCE_MIN_DELTA="${RECURSIVE_ACCEPTANCE_MIN_DELTA:-0.0}"
+ENABLE_RAWACC_REFINEMENT="${ENABLE_RAWACC_REFINEMENT:-0}"
 
 if [[ -z "$INITIAL_CHECKPOINT" ]]; then
   echo "INITIAL_CHECKPOINT must point to the progressive best checkpoint." >&2
@@ -97,56 +98,62 @@ python scripts/run_recursive_refinement.py \
   --resume-phase-index 1 \
   "${FILTERED_ARGS[@]}"
 
+LOSS_STATE_JSON="$LOSS_OUTPUT_DIR/recursive_state.json"
 RAWACC_OUTPUT_DIR="$RUN_ROOT/rawacc_refine"
 RAWACC_LOG_FILE="$LOG_ROOT/rawacc_refine.log.jsonl"
-LOSS_STATE_JSON="$LOSS_OUTPUT_DIR/recursive_state.json"
-RAWACC_BASE_CHECKPOINT="$LOSS_OUTPUT_DIR/accepted_best.pt"
-RAWACC_HEAD_LR="5e-5"
-RAWACC_BACKBONE_LR="3e-5"
+if [[ "$ENABLE_RAWACC_REFINEMENT" -eq 1 ]]; then
+  RAWACC_BASE_CHECKPOINT="$LOSS_OUTPUT_DIR/accepted_best.pt"
+  RAWACC_HEAD_LR="5e-5"
+  RAWACC_BACKBONE_LR="3e-5"
 
-if [[ -f "$LOSS_STATE_JSON" ]]; then
-  eval "$(
-    .venv/bin/python scripts/derive_recursive_bootstrap.py \
-      --state-json "$LOSS_STATE_JSON" \
-      --fallback-checkpoint "$RAWACC_BASE_CHECKPOINT" \
-      --fallback-head-lr 1e-4 \
-      --fallback-backbone-lr 5e-5 \
-      --halve-lrs \
-      --use-half-backbone-for-both
-  )"
-  RAWACC_BASE_CHECKPOINT="$BOOTSTRAP_CHECKPOINT"
-  RAWACC_HEAD_LR="$BOOTSTRAP_HEAD_LR"
-  RAWACC_BACKBONE_LR="$BOOTSTRAP_BACKBONE_LR"
+  if [[ -f "$LOSS_STATE_JSON" ]]; then
+    eval "$(
+      .venv/bin/python scripts/derive_recursive_bootstrap.py \
+        --state-json "$LOSS_STATE_JSON" \
+        --fallback-checkpoint "$RAWACC_BASE_CHECKPOINT" \
+        --fallback-head-lr 1e-4 \
+        --fallback-backbone-lr 5e-5 \
+        --halve-lrs \
+        --use-half-backbone-for-both
+    )"
+    RAWACC_BASE_CHECKPOINT="$BOOTSTRAP_CHECKPOINT"
+    RAWACC_HEAD_LR="$BOOTSTRAP_HEAD_LR"
+    RAWACC_BACKBONE_LR="$BOOTSTRAP_BACKBONE_LR"
+  fi
+
+  if [[ ! -f "$RAWACC_BASE_CHECKPOINT" ]]; then
+    RAWACC_BASE_CHECKPOINT="$LOSS_BASE_CHECKPOINT"
+  fi
+
+  python scripts/run_recursive_refinement.py \
+    --base-output-dir "$RAWACC_OUTPUT_DIR" \
+    --base-log-file "$RAWACC_LOG_FILE" \
+    --initial-checkpoint "$RAWACC_BASE_CHECKPOINT" \
+    --backbone "$BACKBONE_NAME" \
+    --metric val_raw_acc \
+    --threshold "$RECURSIVE_ACCEPTANCE_MIN_DELTA" \
+    --initial-head-lr "$RAWACC_HEAD_LR" \
+    --initial-backbone-lr "$RAWACC_BACKBONE_LR" \
+    --dataset-root "$DATASET_ROOT" \
+    --sampling-strategy balanced \
+    --skip-supcon \
+    --optimizer adamw \
+    --batch-size 320 \
+    --patience 3 \
+    --resume-phase-index 1 \
+    "${FILTERED_ARGS[@]}"
+else
+  echo "[wrapper] rawacc refinement disabled by default; skipping val_raw_acc recursive stage." >&2
 fi
-
-if [[ ! -f "$RAWACC_BASE_CHECKPOINT" ]]; then
-  RAWACC_BASE_CHECKPOINT="$LOSS_BASE_CHECKPOINT"
-fi
-
-python scripts/run_recursive_refinement.py \
-  --base-output-dir "$RAWACC_OUTPUT_DIR" \
-  --base-log-file "$RAWACC_LOG_FILE" \
-  --initial-checkpoint "$RAWACC_BASE_CHECKPOINT" \
-  --backbone "$BACKBONE_NAME" \
-  --metric val_raw_acc \
-  --threshold "$RECURSIVE_ACCEPTANCE_MIN_DELTA" \
-  --initial-head-lr "$RAWACC_HEAD_LR" \
-  --initial-backbone-lr "$RAWACC_BACKBONE_LR" \
-  --dataset-root "$DATASET_ROOT" \
-  --sampling-strategy balanced \
-  --skip-supcon \
-  --optimizer adamw \
-  --batch-size 320 \
-  --patience 3 \
-  --resume-phase-index 1 \
-  "${FILTERED_ARGS[@]}"
 
 # ─── Final test-set evaluation on the best accepted model ────────────────────
 # Runs ONCE at the very end of the entire pipeline (after all recursive
 # refinement is complete). Full 16-aug stochastic test pass — no skipping.
-FINAL_CHECKPOINT="$RAWACC_OUTPUT_DIR/accepted_best.pt"
-if [[ ! -f "$FINAL_CHECKPOINT" ]]; then
-  FINAL_CHECKPOINT="$LOSS_OUTPUT_DIR/accepted_best.pt"
+FINAL_CHECKPOINT="$LOSS_OUTPUT_DIR/accepted_best.pt"
+if [[ "$ENABLE_RAWACC_REFINEMENT" -eq 1 ]]; then
+  if [[ -f "$RAWACC_OUTPUT_DIR/accepted_best.pt" ]]; then
+    FINAL_CHECKPOINT="$RAWACC_OUTPUT_DIR/accepted_best.pt"
+  fi
 fi
 if [[ ! -f "$FINAL_CHECKPOINT" ]]; then
   FINAL_CHECKPOINT="$INITIAL_CHECKPOINT"
