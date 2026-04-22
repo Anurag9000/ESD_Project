@@ -29,17 +29,10 @@ logs/smoke_*
 /local.properties
 /gradlew
 /gradlew.bat
-.tmp/
 
 # Android module local build metadata
 /SmartBin_Android/.kotlin/
 
-# Local Android verification artifacts
-/.tooling/__pycache__/
-/.tooling/phone_screens/
-/.tooling/screens/
-/.tooling/jdk-21/
-/.tooling/temurin21.tar.gz
 Dataset_Final.zip
 
 Dataset_Mock/
