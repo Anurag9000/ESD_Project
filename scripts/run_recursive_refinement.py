@@ -72,7 +72,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--backbone", default=DEFAULT_BACKBONE_NAME)
     parser.add_argument("--weights", default="default")
     parser.add_argument("--metric", choices=("val_loss", "val_raw_acc"), required=True)
-    parser.add_argument("--threshold", type=float, required=True)
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.0,
+        help="Minimum improvement required to accept a recursive candidate for either recursive metric.",
+    )
     parser.add_argument("--initial-head-lr", type=float, required=True)
     parser.add_argument("--initial-backbone-lr", type=float, required=True)
     parser.add_argument("--batch-size", type=int, default=320)
