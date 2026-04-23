@@ -29,8 +29,12 @@ class ExportableClassifier(nn.Module):
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Export flat Results checkpoints to ONNX.")
-    parser.add_argument("--results-dir", default="Results", help="Directory containing flat *_best.pt checkpoints.")
+    parser = argparse.ArgumentParser(description="Export grouped Results checkpoints to ONNX.")
+    parser.add_argument(
+        "--results-dir",
+        default="Results/convnextv2_nano.fcmae_ft_in22k_in1k",
+        help="Directory containing the grouped pt_models/ tree and output subfolders.",
+    )
     parser.add_argument("--opset", type=int, default=17, help="ONNX opset version.")
     parser.add_argument("--verify", action="store_true", default=True, help="Verify ONNX against PyTorch after export.")
     parser.add_argument("--no-verify", dest="verify", action="store_false", help="Skip numerical verification.")
@@ -38,8 +42,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-overwrite", dest="overwrite", action="store_false", help="Keep existing ONNX files.")
     parser.add_argument(
         "--pattern",
-        default="*_best.pt",
-        help="Glob pattern relative to Results/ for checkpoints to export.",
+        default="pt_models/*/*.pt",
+        help="Glob pattern relative to the selected results root for checkpoints to export.",
     )
     return parser.parse_args()
 
@@ -147,12 +151,12 @@ def main() -> int:
 
     reports: list[dict[str, Any]] = []
     for pt_path in checkpoints:
-        onnx_path = pt_path.with_suffix(".onnx")
+        onnx_path = results_dir / "onnx_models" / pt_path.parent.name / f"{pt_path.stem}.onnx"
         report = export_one(pt_path, onnx_path, args.opset, args.verify, args.overwrite)
         reports.append(report)
         print(json.dumps(report, sort_keys=True))
 
-    report_path = results_dir / "onnx_export_report.json"
+    report_path = results_dir / "onnx_models" / "onnx_export_report.json"
     report_path.write_text(json.dumps(reports, indent=2) + "\n", encoding="utf-8")
     print(f"wrote {report_path}")
     return 0

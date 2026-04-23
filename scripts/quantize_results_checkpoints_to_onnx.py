@@ -23,8 +23,12 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Quantize flat Results ONNX checkpoints to INT8.")
-    parser.add_argument("--results-dir", default="Results", help="Directory containing *_best.onnx checkpoints.")
+    parser = argparse.ArgumentParser(description="Quantize grouped Results ONNX checkpoints to INT8.")
+    parser.add_argument(
+        "--results-dir",
+        default="Results/convnextv2_nano.fcmae_ft_in22k_in1k",
+        help="Directory containing the grouped onnx_models/ tree and output subfolders.",
+    )
     parser.add_argument("--calibration-root", default="Dataset_Final", help="Dataset root used to calibrate INT8.")
     parser.add_argument("--verification-root", default="Test_Dataset_Real", help="Dataset root used to verify INT8.")
     parser.add_argument("--calibration-samples", type=int, default=256, help="Number of calibration images to use.")
@@ -202,9 +206,9 @@ def main() -> int:
     calibration_root = Path(args.calibration_root)
     verification_root = Path(args.verification_root)
 
-    fp32_checkpoints = sorted(results_dir.glob("*_best.onnx"))
+    fp32_checkpoints = sorted((results_dir / "onnx_models").glob("*/*.onnx"))
     if not fp32_checkpoints:
-        print(f"No fp32 ONNX checkpoints found in {results_dir}")
+        print(f"No fp32 ONNX checkpoints found in {results_dir / 'onnx_models'}")
         return 1
 
     calibration_paths = sample_paths(collect_image_paths(calibration_root), args.calibration_samples, args.seed)
@@ -222,12 +226,12 @@ def main() -> int:
 
     reports: list[dict[str, Any]] = []
     for fp32_path in fp32_checkpoints:
-        out_path = fp32_path.with_name(fp32_path.stem + "_quantised_int8.onnx")
+        out_path = results_dir / "onnx_quantised_models" / fp32_path.parent.name / f"{fp32_path.stem}_quantised_int8.onnx"
         report = export_quantized_model(fp32_path, out_path, calibration_paths, verification_paths, args.overwrite)
         reports.append(report)
         print(json.dumps(report, sort_keys=True))
 
-    report_path = results_dir / "onnx_int8_quantization_report.json"
+    report_path = results_dir / "onnx_quantised_models" / "onnx_int8_quantization_report.json"
     report_path.write_text(json.dumps(reports, indent=2) + "\n", encoding="utf-8")
     print(f"wrote {report_path}")
     return 0
