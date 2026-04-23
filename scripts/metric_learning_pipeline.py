@@ -103,6 +103,11 @@ BACKBONE_REGISTRY: dict[str, BackboneSpec] = {
         scratch_name="convnextv2_tiny",
         description="ConvNeXt V2 Tiny FCMAE",
     ),
+    "convnextv2_pico": BackboneSpec(
+        pretrained_name="convnextv2_pico.fcmae_ft_in1k",
+        scratch_name="convnextv2_pico",
+        description="ConvNeXt V2 Pico FCMAE fine-tuned on IN1K",
+    ),
     "efficientnet_b0": BackboneSpec(
         pretrained_name="efficientnet_b0",
         scratch_name="efficientnet_b0",
