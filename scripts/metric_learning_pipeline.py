@@ -4172,9 +4172,9 @@ def build_parser() -> argparse.ArgumentParser:
     description = (
         "Configurable backbone staged training pipeline: "
         "(1) SupCon head-only warm-up [frozen backbone] → "
-        "(2) SupCon progressive backbone unfreezing [20 leaf modules/step, capped semantic tail] → "
+        "(2) SupCon progressive backbone unfreezing [10 leaf modules/step, capped semantic tail] → "
         "(3) CE head-only warm-up [backbone re-frozen] → "
-        "(4) CE progressive backbone unfreezing [20 leaf modules/step, same frozen-core boundary] → "
+        "(4) CE progressive backbone unfreezing [10 leaf modules/step, same frozen-core boundary] → "
         "(5) Recursive val_loss refinement → "
         "(6) Recursive val_raw_acc refinement. "
         "Checkpoints saved at every step, validation, and phase transition. "
@@ -4188,7 +4188,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prefetch-factor", type=int, default=1)
     parser.add_argument("--embedding-dim", type=int, default=128)
     parser.add_argument("--projection-dim", type=int, default=128)
-    parser.add_argument("--unfreeze-chunk-size", type=int, default=20)
+    parser.add_argument("--unfreeze-chunk-size", type=int, default=10)
     parser.add_argument("--skip-supcon", action="store_true")
     parser.add_argument("--classifier-train-mode", choices=("progressive", "full_model"), default="progressive")
     parser.add_argument("--classifier-early-stopping-metric", choices=("val_loss", "val_raw_acc"), default="val_loss")

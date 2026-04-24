@@ -8,7 +8,7 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 - **Backbone:** Configurable; default ConvNeXt V2 Nano FCMAE for Phase 0, ConvNeXt V2 Nano FCMAE fine-tuned on IN22K + IN1K for direct supervised / recursive starts
 - **Corpus:** 304,258 verified physical images on disk; the next-run logical training taxonomy keeps only the 3 supervised classes
 - **Taxonomy:** **3 logical training classes** — organic, metal, paper
-- **Orchestration:** Default full pipeline: SupCon Head → SupCon Last-20 → SupCon full tail after frozen core → CE Head → CE Last-20 → CE full tail after frozen core → Recursive val_loss, with `val_raw_acc` refinement opt-in only via `ENABLE_RAWACC_REFINEMENT=1`
+- **Orchestration:** Default full pipeline: SupCon Head → SupCon Last-10 → SupCon full tail after frozen core → CE Head → CE Last-10 → CE full tail after frozen core → Recursive val_loss, with `val_raw_acc` refinement opt-in only via `ENABLE_RAWACC_REFINEMENT=1`
 - **Logging:** SupCon phases log contrastive diagnostics only; classifier/CE phases log accuracy, per-class accuracy, and per-class average confidence.
 - **Balancing:** Balanced per-batch class cycling (default in all training scripts)
 - **Visual Audit:** Startup + end-of-epoch fixed-tint test-set visualizations, plus optional Grad-CAM and calibration plots
@@ -29,7 +29,7 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 | **Current Taxonomy** | **3 logical training classes** (organic, metal, paper) |
 | **Total Images**     | **Trainable logical samples are projected from the physical dataset into the 3-class head** |
 | **Class Balancing**  | Balanced per-batch class cycling                                              |
-| **Unfreeze Step**    | 20 leaf modules per SupCon and CE progressive phase                           |
+| **Unfreeze Step**    | 10 leaf modules per SupCon and CE progressive phase                           |
 | **Optimization**     | AdamW + warmup-cosine decay (default)                                         |
 | **Training Precision**| Mixed Precision (FP16) via `torch.amp`                                       |
 | **Mobile State**     | Clean Architecture / MVVM / Hilt                                              |

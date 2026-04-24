@@ -43,10 +43,10 @@ The pipeline follows the research-validated principle: **Contrastive representat
 | **Stopping:**        | Early stopping patience=1 on SupCon val_loss |
 | **Goal:**            | Orient the randomly-initialised projection head into a stable contrastive attractor before touching backbone weights |
 
-### Stage 2 — SupCon Last-20 Modules
+### Stage 2 — SupCon Last-10 Modules
 | Parameter            | Value  |
 | :------------------- | :----- |
-| **Trainable:**       | Top 20 semantic leaf modules + SupCon head |
+| **Trainable:**       | Top 10 semantic leaf modules + SupCon head |
 | **Loss:**            | Supervised Contrastive (SupCon) |
 | **Head LR:**         | `3e-3` |
 | **Backbone LR:**     | `5e-5` |
@@ -75,10 +75,10 @@ The pipeline follows the research-validated principle: **Contrastive representat
 | **Stopping:**        | Early stopping patience=1 on classifier val_loss/val_raw_acc |
 | **Goal:**            | **Critical safety gate.** The `ce_head` is randomly initialised. Without this warm-up, random CE gradients would backpropagate into the carefully arranged contrastive embedding space and corrupt it. This phase stabilises the CE hyperplanes between the tight SupCon clusters before any backbone gradients flow. |
 
-### Stage 5 — CE Last-20 Modules
+### Stage 5 — CE Last-10 Modules
 | Parameter            | Value  |
 | :------------------- | :----- |
-| **Trainable:**       | Top 20 semantic leaf modules + CE head |
+| **Trainable:**       | Top 10 semantic leaf modules + CE head |
 | **Loss:**            | Cross-Entropy |
 | **Head LR:**         | `1e-4` after exponential decay from the `1e-3` head-only phase |
 | **Backbone LR:**     | `1e-5` |

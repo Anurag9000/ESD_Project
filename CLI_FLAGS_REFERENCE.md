@@ -16,7 +16,7 @@ SupCon logs report contrastive diagnostics only: same-image view cosine, same-cl
 | `--prefetch-factor` | `1` | Prefetch depth per worker. |
 | `--embedding-dim` | `128` | Width of the learned embedding layer. |
 | `--projection-dim` | `128` | Width of the SupCon projection head. |
-| `--unfreeze-chunk-size` | `20` | Number of backbone leaf modules unfrozen per progressive step. |
+| `--unfreeze-chunk-size` | `10` | Number of backbone leaf modules unfrozen per progressive step. |
 | `--skip-supcon` | `false` | Skip the SupCon stage entirely when enabled. |
 | `--classifier-train-mode` | `progressive` | Choose `progressive` unfreezing or `full_model` training; both modes preserve `--frozen-core-backbone-modules`. |
 | `--classifier-early-stopping-metric` | `val_loss` | Classifier phase selection metric: `val_loss` or `val_raw_acc`. |
