@@ -164,6 +164,7 @@ def export_quantized_model(
     image_size = int(session.get_inputs()[0].shape[2] or 224)
     calibrator = ImageCalibrationDataReader(calibration_paths, image_size)
 
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     if out_path.exists():
         out_path.unlink()
     out_data_path = out_path.with_suffix(out_path.suffix + ".data")
