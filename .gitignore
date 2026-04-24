@@ -40,6 +40,7 @@ Results/demo_run_*/
 logs/demo_run_*/dataset_audit/
 dataset_tars/
 dataset_audit/incoming/
+review_downloads/
 
 # Local/external image datasets and generated image visualizations should not be
 # committed. Keep metrics/checkpoints/logs, but leave images local-only.
