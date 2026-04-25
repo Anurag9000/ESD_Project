@@ -64,6 +64,7 @@ from ollama_pipeline_state import (
     mark_download_job,
     pending_integration_rows,
     pending_prefilter_rows,
+    pending_yolo_rows,
     pending_vlm_rows,
     upsert_image,
 )
@@ -82,6 +83,11 @@ except Exception:
     CLIPProcessor = None
 
 try:
+    from ultralytics import YOLO
+except Exception:
+    YOLO = None
+
+try:
     from icrawler.builtin import BaiduImageCrawler, BingImageCrawler, GoogleImageCrawler
     from icrawler.downloader import ImageDownloader
     import icrawler.parser as icrawler_parser
@@ -95,6 +101,7 @@ except Exception:
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 CLIP_MODEL_ID = "openai/clip-vit-base-patch32"
+YOLO_MODEL_ID = "yolov8n.pt"
 PHASH_DISTANCE_THRESHOLD = 4
 CLIP_PREFILTER_PROMPTS = {
     "dominant_item": "a clear real-world training photo where the target {category} {item} object is the dominant subject",
@@ -104,6 +111,7 @@ CLIP_PREFILTER_PROMPTS = {
     "multiple_salient": "a busy scene with multiple equally important objects",
 }
 _CLIP_PREFILTER: dict[str, Any] = {"model": None, "processor": None, "device": None}
+_YOLO_PREFILTER: dict[str, Any] = {"model": None, "device": None}
 
 
 def patch_icrawler_parser_worker() -> None:
@@ -182,6 +190,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bing-limit", type=int, default=DEFAULT_DOWNLOADER_PROFILE.bing_limit)
     parser.add_argument("--baidu-limit", type=int, default=DEFAULT_DOWNLOADER_PROFILE.baidu_limit)
     parser.add_argument("--min-resolution", type=int, default=DEFAULT_DOWNLOADER_PROFILE.min_resolution)
+    parser.add_argument("--yolo-model", default=YOLO_MODEL_ID)
     parser.add_argument("--integrate-accepted", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--write-split-manifest", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--metadata-file", default="dataset_metadata.json")
@@ -594,6 +603,20 @@ def load_clip_prefilter() -> tuple[Any, Any, str] | tuple[None, None, str]:
         _CLIP_PREFILTER["device"] = device
         logging.info("CLIP prefilter loaded successfully.")
     return _CLIP_PREFILTER["model"], _CLIP_PREFILTER["processor"], _CLIP_PREFILTER["device"]
+
+
+def load_yolo_prefilter(model_id: str) -> tuple[Any, str] | tuple[None, str]:
+    if YOLO is None:
+        logging.info("YOLO prefilter unavailable; stage will default to accepted.")
+        return None, "cpu"
+    if _YOLO_PREFILTER["model"] is None:
+        device = "cuda:0" if torch is not None and torch.cuda.is_available() else "cpu"
+        logging.info("Loading YOLO prefilter model=%s device=%s", model_id, device)
+        model = YOLO(model_id)
+        _YOLO_PREFILTER["model"] = model
+        _YOLO_PREFILTER["device"] = device
+        logging.info("YOLO prefilter loaded successfully.")
+    return _YOLO_PREFILTER["model"], _YOLO_PREFILTER["device"]
 
 
 def encode_image_base64(path: Path) -> str:
@@ -1085,6 +1108,122 @@ def run_clip_prefilter(
     return dict(counts)
 
 
+def run_yolo_prefilter(
+    db_path: Path,
+    filtered_root: Path,
+    rejected_root: Path,
+    yolo_model_id: str,
+) -> dict[str, int]:
+    rows = pending_yolo_rows(db_path)
+    counts = Counter()
+    model, device = load_yolo_prefilter(yolo_model_id)
+    logging.info("[yolo_prefilter] pending_rows=%d", len(rows))
+    for row in rows:
+        raw_path = Path(str(row["raw_path"]))
+        filtered_path = Path(str(row["filtered_path"])) if row["filtered_path"] else filtered_root / str(row["category"]) / slugify(str(row["item"])) / raw_path.name
+        ensure_dir(filtered_path.parent)
+        if row["filtered_path"] and raw_path.exists() and not filtered_path.exists():
+            shutil.copy2(raw_path, filtered_path)
+
+        source_engine = str(row["source_engine"] or "unknown")
+        source_domain = str(row["source_domain"] or "unknown")
+        if model is None:
+            upsert_image(
+                db_path,
+                {
+                    "raw_path": str(raw_path),
+                    "yolo_prefilter_decision": "accepted",
+                    "yolo_prefilter_score": 1.0,
+                    "yolo_prefilter_reason": "yolo_prefilter_unavailable",
+                    "yolo_prefilter_details_json": json.dumps({"detected": []}, sort_keys=True),
+                },
+            )
+            counts["accepted"] += 1
+            logging.info("[yolo_prefilter] accepted_without_yolo raw=%s", raw_path)
+            continue
+
+        started = time.perf_counter()
+        logging.info("[yolo_prefilter] start raw=%s category=%s item=%s", raw_path, row["category"], row["item"])
+        try:
+            image_source = filtered_path if filtered_path.exists() else raw_path
+            with Image.open(image_source) as image:
+                width, height = image.size
+            results = model.predict(source=str(image_source), verbose=False, imgsz=640, conf=0.25, device=device)
+            detections: list[dict[str, Any]] = []
+            if results:
+                result = results[0]
+                names = getattr(result, "names", None) or getattr(model, "names", {})
+                boxes = getattr(result, "boxes", None)
+                if boxes is not None:
+                    for box in boxes:
+                        xyxy = box.xyxy[0].tolist()
+                        left, top, right, bottom = [float(v) for v in xyxy]
+                        area_ratio = max(0.0, (right - left) * (bottom - top) / max(width * height, 1))
+                        cls_idx = int(box.cls[0].item() if hasattr(box.cls[0], "item") else box.cls[0])
+                        label = names.get(cls_idx, str(cls_idx)) if isinstance(names, dict) else names[cls_idx]
+                        detections.append(
+                            {
+                                "label": str(label),
+                                "confidence": float(box.conf[0].item() if hasattr(box.conf[0], "item") else box.conf[0]),
+                                "area_ratio": area_ratio,
+                            }
+                        )
+
+            person_boxes = [det for det in detections if det["label"] == "person"]
+            max_person_area = max((det["area_ratio"] for det in person_boxes), default=0.0)
+            max_box_area = max((det["area_ratio"] for det in detections), default=0.0)
+            total_box_area = sum(det["area_ratio"] for det in detections)
+            detection_count = len(detections)
+
+            decision = "accepted"
+            reason = "no_dominant_human_or_clutter_detected"
+            if max_person_area >= 0.03:
+                decision = "rejected"
+                reason = "person_dominates_frame"
+            elif detection_count >= 10:
+                decision = "rejected"
+                reason = "too_many_detections"
+            elif detection_count >= 5 and total_box_area > 0.85:
+                decision = "rejected"
+                reason = "scene_too_crowded"
+            elif detection_count >= 3 and max_box_area < 0.05:
+                decision = "rejected"
+                reason = "no_dominant_object_box"
+
+            score = 1.0 - min(1.0, total_box_area)
+            details = {
+                "image_size": [width, height],
+                "detection_count": detection_count,
+                "max_person_area_ratio": max_person_area,
+                "max_box_area_ratio": max_box_area,
+                "total_box_area_ratio": total_box_area,
+                "detections": detections,
+            }
+        except Exception as exc:
+            bump_model_health(db_path, "yolo-prefilter", "prefilter", success=False, latency_ms=(time.perf_counter() - started) * 1000.0, error=str(exc))
+            logging.exception("[yolo_prefilter] failed raw=%s", raw_path)
+            continue
+
+        bump_model_health(db_path, "yolo-prefilter", "prefilter", success=True, latency_ms=(time.perf_counter() - started) * 1000.0)
+        updates: dict[str, Any] = {
+            "raw_path": str(raw_path),
+            "yolo_prefilter_decision": decision,
+            "yolo_prefilter_score": score,
+            "yolo_prefilter_reason": reason,
+            "yolo_prefilter_details_json": json.dumps(details, sort_keys=True),
+        }
+        if decision == "rejected":
+            updates["prefilter_decision"] = "rejected"
+            updates["prefilter_reason"] = f"yolo_{reason}"
+            updates["final_decision"] = "rejected"
+            copy_decision_file(filtered_path if filtered_path.exists() else raw_path, rejected_root, str(row["category"]), str(row["item"]))
+            bump_domain_health(db_path, source_engine, source_domain, prefilter_rejections=1, rejected=1)
+        upsert_image(db_path, updates)
+        counts[decision] += 1
+        logging.info("[yolo_prefilter] done raw=%s decision=%s score=%.4f reason=%s", raw_path, decision, score, reason)
+    return dict(counts)
+
+
 def normalize_photo_stage(parsed: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(parsed)
     normalized["confidence"] = safe_float(parsed.get("confidence"), 0.0)
@@ -1528,6 +1667,10 @@ def main() -> int:
     logging.info("Starting CLIP prefilter")
     prefilter_summary = run_clip_prefilter(db_path, dirs["filtered"], dirs["rejected"], args.min_resolution)
     logging.info("[prefilter] %s", json.dumps(prefilter_summary, sort_keys=True))
+
+    logging.info("Starting YOLO prefilter model=%s", args.yolo_model)
+    yolo_summary = run_yolo_prefilter(db_path, dirs["filtered"], dirs["rejected"], args.yolo_model)
+    logging.info("[yolo_prefilter] %s", json.dumps(yolo_summary, sort_keys=True))
 
     categories = list(discovered.keys())
     logging.info("Starting VLM pass model=%s categories=%s", args.vision_model, categories)
