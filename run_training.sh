@@ -8,7 +8,7 @@ source .venv/bin/activate
 
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
-BACKBONE_NAME="${BACKBONE_NAME:-convnextv2_nano}"
+BACKBONE_NAME="${BACKBONE_NAME:-femto}"
 WEIGHTS_MODE="${WEIGHTS_MODE:-default}"
 for ((i = 1; i <= $#; i++)); do
   arg="${!i}"

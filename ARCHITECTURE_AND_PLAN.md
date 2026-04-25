@@ -4,7 +4,7 @@ This document defines the current architectural specifications and training meth
 
 ## 1. Model Specifications
 
-- **Architecture:** Configurable backbone registry; Phase 0 defaults to `ConvNeXt V2 Nano FCMAE`, while direct supervised / recursive starts default to `ConvNeXt V2 Nano FCMAE_ft_in22k_in1k`
+- **Architecture:** Configurable backbone registry; Phase 0 defaults to `ConvNeXt V2 Femto FCMAE`, while direct supervised / recursive starts default to `ConvNeXt V2 Femto FCMAE_ft_in1k`
 - **Parameters:** Backbone-dependent
 - **Precision:** FP16 Mixed Precision via `torch.amp`
 - **Optimization:** AdamW with per-stage learning rate groups
@@ -56,7 +56,7 @@ The pipeline follows the research-validated principle: **Contrastive representat
 ### Stage 3 — SupCon Full Tail After Frozen Core
 | Parameter            | Value  |
 | :------------------- | :----- |
-| **Trainable:**       | Tail after the frozen core; for default `convnextv2_nano`, top semantic leaf modules after the 40-module frozen core + SupCon head |
+| **Trainable:**       | Tail after the frozen core; for default `femto`, top semantic leaf modules after the 40-module frozen core + SupCon head |
 | **Frozen forever:**  | First 40 leaf modules (stem, early stages: edges, textures, patterns) remain frozen in the default backbone |
 | **Loss:**            | Supervised Contrastive (SupCon) |
 | **Head LR:**         | `3e-3` |
@@ -89,7 +89,7 @@ The pipeline follows the research-validated principle: **Contrastive representat
 ### Stage 6 — CE Full Tail After Frozen Core
 | Parameter            | Value  |
 | :------------------- | :----- |
-| **Trainable:**       | Tail after the frozen core; for default `convnextv2_nano`, top semantic leaf modules after the 40-module frozen core + CE head |
+| **Trainable:**       | Tail after the frozen core; for default `femto`, top semantic leaf modules after the 40-module frozen core + CE head |
 | **Loss:**            | Cross-Entropy |
 | **Head LR:**         | `1e-5` |
 | **Backbone LR:**     | `1e-5` |
@@ -145,7 +145,7 @@ The pipeline follows the research-validated principle: **Contrastive representat
 | Phase-end visual audit | `visualizations/<phase_label>/...` | `Results/<run>/progressive/phases/<phase_name>/` |
 | Final protected test report | `confmat_counts_test.csv`, `confmat_rate_pct_test.csv`, `classification_report_test.csv`, `test_confusion_matrix.png`, `test_reliability_diagram.png`, `test_confidence_histogram.png`, `summary.json` | `Results/<run>/final_test_evaluation/` |
 
-Resume is fully automatic: re-running the same `./run_training.sh --phase0-mim --backbone convnextv2_nano --num-workers 2 --prefetch-factor 1` command detects the most recent run stamp, skips completed phases, and resumes the incomplete phase from its own `step_last.pt` or `last.pt`.
+Resume is fully automatic: re-running the same `./run_training.sh --phase0-mim --backbone femto --num-workers 2 --prefetch-factor 1` command detects the most recent run stamp, skips completed phases, and resumes the incomplete phase from its own `step_last.pt` or `last.pt`.
 
 ---
 
@@ -154,6 +154,7 @@ Resume is fully automatic: re-running the same `./run_training.sh --phase0-mim -
 - **Corpus:** WSS-304K — 304,258 verified images, all ≥224×224px
 - **Minimum Size:** 224px (strictly enforced on physical disk)
 - **Split Ratios:** 70% train / 20% val / 10% test
+- **Holdout Rule:** The test split is a strict protected holdout; it is not merged into training at any stage and is only evaluated after the best checkpoint is selected.
 - **Augmentation:** Train-time SupCon/CE views use deterministic-seeded random aspect-preserving crops plus horizontal/vertical flips; val/test stay deterministic apart from the fixed repo-wide Pi-camera pink tint
 - **SupCon diagnostics:** SupCon phases log loss plus same-image view cosine, same-class positive cosine, different-class negative cosine, and positive-minus-negative cosine margin. Classifier accuracy/confidence is logged only in CE/classifier phases.
 - **Class Balancing:** Balanced per-batch class cycling is the default and mandatory production path.
