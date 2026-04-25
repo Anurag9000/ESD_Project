@@ -14,6 +14,13 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 - **Visual Audit:** Startup + end-of-epoch fixed-tint test-set visualizations, plus optional Grad-CAM and calibration plots
 - **Phase 0 Reconstruction Audit:** Saved MIM checkpoints can be rendered into original / masked / reconstruction previews with `scripts/visualize_phase0_reconstruction.py`
 
+### Data Curation Engine
+- **Ingestion:** Ollama-first end-to-end dataset curation pipeline for class discovery, multi-source download, dedupe, prefiltering, train-worthiness judging, and dataset integration
+- **Target Classes:** Defaults to `organic`, `metal`, and `paper`
+- **Models:** Local text expansion via `deepseek-r1:8b`; local vision judging via `qwen2.5vl:3b`
+- **Logging:** Terminal + file logging is emitted per stage and per image, with resume-aware SQLite provenance and health tracking
+- **Artifacts:** Clean separation of `raw/`, `filtered/`, `accepted/`, `rejected/`, `uncertain/`, `integrated/`, `manifests/`, and `logs/`
+
 ### SmartBin Android Fleet Dashboard
 - **Framework:** Native Kotlin, Jetpack Compose, Material 3
 - **Geospatial:** OpenStreetMap (OSM) via MapLibre
@@ -42,6 +49,7 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 - **`PYTORCH_SETUP.md`**: Environment configuration and execution manual.
 - **`scripts/evaluate_external_holdout.py`**: No-augmentation evaluation on a genuinely unseen dataset root.
 - **`scripts/gradcam_classifier.py`**: Class-specific Grad-CAM overlays for trained checkpoints.
+- **`OLLAMA_PIPELINE.md`**: Ollama-first dataset curation pipeline, thresholds, logging, resume semantics, and calibration flow.
 - **`SmartBin_Android/docs/`**: Mobile-specific architectural and product specifications.
 
 ## 4. Execution Manual
