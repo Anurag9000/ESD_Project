@@ -33,6 +33,7 @@ These defaults are defined in [scripts/ollama_pipeline_defaults.py](/home/anurag
 10. Accepted samples are integrated into `Dataset_Final` by default with metadata sync.
 11. A deterministic train / val / test split manifest is written using the exact repo split logic.
 12. Training can optionally be triggered by a configured command.
+13. Terminal logging is emitted per stage and per image, so you can follow progress live without waiting for the corpus to finish.
 
 **Artifact Layout**
 - `raw/`
@@ -80,6 +81,8 @@ Each image row tracks:
   - `manifests/download_jobs.json`
 - provenance summary:
   - `manifests/provenance_summary.json`
+- live terminal log:
+  - `logs/pipeline.log`
 
 **Threshold Calibration**
 - `scripts/calibrate_ollama_thresholds.py`
@@ -89,6 +92,7 @@ Each image row tracks:
   - `paper`
   - `plastic`
 - Reports positive-class acceptance and plastic false-accept rates.
+- Use this to tune thresholds until the pristine classes stay above your target acceptance rate.
 
 Default download ceilings per listed item:
 - direct Bing: `1250`
@@ -113,3 +117,5 @@ Effective total requested ceiling per item:
   --output-root review_downloads/ollama_end_to_end_pipeline \
   --integrate-accepted
 ```
+
+If `--force` is set, the chosen output root is deleted before the new run starts. Resume state is stored under `manifests/pipeline.sqlite`, so repeated runs can continue from the last completed stage/image instead of replaying completed work.
