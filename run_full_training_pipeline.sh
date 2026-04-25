@@ -10,7 +10,7 @@ export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:T
 
 INITIAL_CHECKPOINT="${INITIAL_CHECKPOINT:-}"
 DATASET_ROOT="${DATASET_ROOT:-Dataset_Final}"
-BACKBONE_NAME="${BACKBONE_NAME:-convnextv2_nano}"
+BACKBONE_NAME="${BACKBONE_NAME:-femto}"
 for ((i = 1; i <= $#; i++)); do
   arg="${!i}"
   case "$arg" in

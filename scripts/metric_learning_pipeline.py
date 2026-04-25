@@ -43,7 +43,7 @@ except ImportError:  # pragma: no cover - surfaced explicitly when backbone crea
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
-DEFAULT_BACKBONE_NAME = "convnextv2_nano"
+DEFAULT_BACKBONE_NAME = "femto"
 DEFAULT_BATCH_SIZE = 320
 # The repo-wide training taxonomy is now strictly 3 classes.
 # Physical folders stay untouched; all datasets are projected into this order.
@@ -93,6 +93,11 @@ class BackboneSpec:
 
 
 BACKBONE_REGISTRY: dict[str, BackboneSpec] = {
+    "femto": BackboneSpec(
+        pretrained_name="convnextv2_femto.fcmae_ft_in1k",
+        scratch_name="convnextv2_femto",
+        description="ConvNeXt V2 Femto FCMAE fine-tuned on IN1K",
+    ),
     "convnextv2_nano": BackboneSpec(
         pretrained_name="convnextv2_nano.fcmae_ft_in22k_in1k",
         scratch_name="convnextv2_nano",
@@ -244,37 +249,6 @@ def project_samples_to_training_taxonomy(
         "logical_sample_count": len(new_samples),
     }
     return new_classes, new_class_to_idx, new_samples, metadata
-
-
-def load_projected_training_samples(
-    root: Path,
-    class_mapping: dict[str, list[str]] | None = None,
-) -> tuple[list[str], dict[str, int], list[tuple[str, int]], dict[str, Any]]:
-    base_dataset = datasets.ImageFolder(root)
-    return project_samples_to_training_taxonomy(
-        list(base_dataset.classes),
-        list(base_dataset.samples),
-        class_mapping,
-    )
-
-
-def resolve_aux_train_root() -> Path | None:
-    env_value = os.environ.get("ESD_AUX_TRAIN_ROOT", "").strip()
-    if env_value:
-        candidate = Path(env_value)
-        if candidate.exists():
-            return candidate
-    local_override = Path(".git/info/aux_train_root")
-    if local_override.exists():
-        try:
-            contents = local_override.read_text(encoding="utf-8").strip()
-        except OSError:
-            return None
-        if contents:
-            candidate = Path(contents)
-            if candidate.exists():
-                return candidate
-    return None
 
 
 def clone_state_dict(state_dict: dict[str, Any]) -> dict[str, Any]:
@@ -1370,7 +1344,6 @@ def build_datasets(
 ]:
     class_mapping = parse_json_class_mapping(getattr(args, "class_mapping", ""))
     root = Path(args.dataset_root)
-    aux_train_root = resolve_aux_train_root()
     if has_explicit_split_layout(root):
         train_dataset = DeterministicAugmentedImageFolder(
             root / "train",
@@ -1422,11 +1395,6 @@ def build_datasets(
     else:
         # Pass mapping through to auto-split logic too
         train_dataset, val_dataset, test_dataset = build_auto_split_datasets(root, args, class_mapping=class_mapping)
-
-    if aux_train_root is not None:
-        _, _, extra_samples, _ = load_projected_training_samples(aux_train_root, class_mapping)
-        train_dataset.samples.extend(extra_samples)
-        train_dataset.targets = [target for _, target in train_dataset.samples]
 
     return (
         train_dataset,
@@ -1484,7 +1452,6 @@ def build_auto_split_datasets(
 ) -> tuple[DeterministicAugmentedImageFolder, DeterministicAugmentedImageFolder, DeterministicAugmentedImageFolder]:
     ratios = parse_auto_split_ratios(args.auto_split_ratios)
     base_dataset = datasets.ImageFolder(root)
-    aux_train_root = resolve_aux_train_root()
     new_classes, new_class_to_idx, new_samples, taxonomy_metadata = project_samples_to_training_taxonomy(
         list(base_dataset.classes),
         list(base_dataset.samples),
@@ -1608,10 +1575,6 @@ def build_auto_split_datasets(
         dataset_root=root,
         enable_runtime_bad_sample_cleanup=args.runtime_bad_sample_cleanup,
     )
-    if aux_train_root is not None:
-        _, _, extra_samples, _ = load_projected_training_samples(aux_train_root, class_mapping)
-        train_dataset.samples.extend(extra_samples)
-        train_dataset.targets = [target for _, target in train_dataset.samples]
     return train_dataset, val_dataset, test_dataset
 
 

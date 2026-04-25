@@ -27,7 +27,7 @@ SupCon logs report contrastive diagnostics only: same-image view cosine, same-cl
 | `--head-lr` | `1e-3` | Learning rate for classifier head warmup. |
 | `--backbone-lr` | `1e-5` | Learning rate for classifier backbone phases. |
 | `--weight-decay` | `1e-4` | Optimizer weight decay. |
-| `--backbone` | `convnextv2_nano` | Backbone selection. The trainer accepts any timm backbone name; registered aliases resolve pretrained/scratch defaults cleanly. For direct non-Phase-0 training, the default `convnextv2_nano` alias resolves to `convnextv2_nano.fcmae_ft_in22k_in1k`. |
+| `--backbone` | `femto` | Backbone selection. The trainer accepts any timm backbone name; registered aliases resolve pretrained/scratch defaults cleanly. For direct non-Phase-0 training, the default `femto` alias resolves to `convnextv2_femto.fcmae_ft_in1k`. |
 | `--optimizer` | `adamw` | Optimizer family: `adamw` or `sam`. |
 | `--precision` | `mixed` | Training precision: `mixed`, `32`, or `64`. |
 | `--adam-beta1` | `0.9` | Adam beta1. |
@@ -98,7 +98,7 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--dataset-root` | `Dataset_Final` | Dataset root used to build the clean train split. |
 | `--output-dir` | `Results/phase0_mim` | Phase 0 checkpoint output root. |
 | `--log-file` | `logs/phase0_mim.log.jsonl` | Structured Phase 0 JSONL log. |
-| `--backbone` | `convnextv2_nano` | Backbone selection used for the encoder. Any timm backbone string is accepted. Phase 0 uses pure `convnextv2_nano.fcmae`; direct Phase 1+ starts use `convnextv2_nano.fcmae_ft_in22k_in1k` by default. |
+| `--backbone` | `femto` | Backbone selection used for the encoder. Any timm backbone string is accepted. Phase 0 uses pure `convnextv2_femto.fcmae`; direct Phase 1+ starts use `convnextv2_femto.fcmae_ft_in1k` by default. |
 | `--weights` | `default` | For Phase 0, `default` means use the pure `.fcmae` backbone weights; `none` means scratch init. |
 | `--image-size` | `224` | Input resolution for masking and reconstruction. |
 | `--augment-repeats` | `1` | Passed through to the repo dataset builder. The train split uses seeded random crop + flip views; val/test stay deterministic. Phase 0 uses the same crop/flip policy now. |
@@ -135,7 +135,7 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--base-output-dir` | required | Root output directory for recursive refinement. |
 | `--base-log-file` | required | JSONL log file for recursive refinement. |
 | `--initial-checkpoint` | required | Seed checkpoint for the first refinement pass. |
-| `--backbone` | `convnextv2_nano` | Backbone name forwarded to the recursive trainer. Any timm backbone string is accepted. |
+| `--backbone` | `femto` | Backbone name forwarded to the recursive trainer. Any timm backbone string is accepted. |
 | `--weights` | `default` | Pretrained-weight mode forwarded to the recursive trainer. |
 | `--metric` | required | Accept/reject metric: `val_loss` or `val_raw_acc`. |
 | `--threshold` | `0.0` | Stop threshold for recursive refinement. Applied to both recursive `val_loss` and `val_raw_acc` passes. |

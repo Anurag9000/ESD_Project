@@ -26,22 +26,26 @@ The training process is automated via deterministic shell scripts and now defaul
 ### Full Pipeline Orchestration
 Executes the staged pipeline:
 1. `supcon_head_only`
-2. `supcon_last_20_modules`
-3. `supcon_last_40_modules`
-4. `ce_head_only`
-5. `ce_last_20_modules`
-6. `ce_last_40_modules`
-7. recursive `val_loss` cleanup
-8. recursive `val_raw_acc` refinement
+2. `supcon_last_10_modules`
+3. `supcon_last_20_modules`
+4. `supcon_last_30_modules`
+5. `...`
+6. `ce_head_only`
+7. `ce_last_10_modules`
+8. `ce_last_20_modules`
+9. `ce_last_30_modules`
+10. `...`
+11. recursive `val_loss` cleanup
+12. recursive `val_raw_acc` refinement
 
 Each phase writes into its own folder under `Results/<run>/progressive/phases/<phase_name>/`.
 ```bash
-./run_training.sh --phase0-mim --backbone convnextv2_nano --num-workers 2 --prefetch-factor 1
+./run_training.sh --phase0-mim --backbone femto --num-workers 2 --prefetch-factor 1
 ```
 
 ### Manual Execution (Standardized Params)
 ```bash
-./run_training.sh --phase0-mim --backbone convnextv2_nano --num-workers 2 --prefetch-factor 1
+./run_training.sh --phase0-mim --backbone femto --num-workers 2 --prefetch-factor 1
 ```
 
 ### Default Hyperparameters
@@ -58,7 +62,7 @@ Each phase writes into its own folder under `Results/<run>/progressive/phases/<p
 | `weight_decay` | `1e-4` |
 | `label_smoothing` | `0.1` |
 | `warmup_steps` | `1024` |
-| `unfreeze_chunk_size` | `20` |
+| `unfreeze_chunk_size` | `10` |
 | `supcon_unfreeze_backbone_modules` | `40` |
 | `ce_max_unfreeze_modules` | `40` |
 | `train_loss_validation_patience` | `500` |

@@ -5,13 +5,13 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 ## 1. System Components
 
 ### Machine Learning Engine
-- **Backbone:** Configurable; default ConvNeXt V2 Nano FCMAE for Phase 0, ConvNeXt V2 Nano FCMAE fine-tuned on IN22K + IN1K for direct supervised / recursive starts
+- **Backbone:** Configurable; default ConvNeXt V2 Femto FCMAE for Phase 0, ConvNeXt V2 Femto FCMAE fine-tuned on IN1K for direct supervised / recursive starts
 - **Corpus:** 304,258 verified physical images on disk; the next-run logical training taxonomy keeps only the 3 supervised classes
 - **Taxonomy:** **3 logical training classes** — organic, metal, paper
-- **Orchestration:** Default full pipeline: SupCon Head → SupCon Last-10 → SupCon full tail after frozen core → CE Head → CE Last-10 → CE full tail after frozen core → Recursive val_loss, with `val_raw_acc` refinement opt-in only via `ENABLE_RAWACC_REFINEMENT=1`
+- **Orchestration:** Default full pipeline: SupCon Head → SupCon Last-10 → SupCon Last-20 → SupCon Last-30 → ... → CE Head → CE Last-10 → CE Last-20 → CE Last-30 → ... → Recursive val_loss, with `val_raw_acc` refinement opt-in only via `ENABLE_RAWACC_REFINEMENT=1`
 - **Logging:** SupCon phases log contrastive diagnostics only; classifier/CE phases log accuracy, per-class accuracy, and per-class average confidence.
 - **Balancing:** Balanced per-batch class cycling (default in all training scripts)
-- **Visual Audit:** Startup + end-of-epoch fixed-tint test-set visualizations, plus optional Grad-CAM and calibration plots
+- **Visual Audit:** Startup + end-of-epoch fixed-tint test-set visualizations, plus optional Grad-CAM and calibration plots; the protected test split is never mixed back into training and is evaluated only after the best checkpoint is chosen
 - **Phase 0 Reconstruction Audit:** Saved MIM checkpoints can be rendered into original / masked / reconstruction previews with `scripts/visualize_phase0_reconstruction.py`
 
 ### Data Curation Engine
@@ -63,7 +63,7 @@ source .venv/bin/activate
 # Launches the full staged lifecycle automatically.
 # Defaults now include:
 # - Phase 0 MIM trains the full backbone with the same balanced class sampler and an effective 256 batch size via 128-image physical batches plus 2-step accumulation, then SupCon/CE re-freeze the earliest 40 leaf modules
-# - Phase 0 seeds from pure `convnextv2_nano.fcmae`; direct SupCon/CE/recursive starts seed from `convnextv2_nano.fcmae_ft_in22k_in1k`
+# - Phase 0 seeds from pure `convnextv2_femto.fcmae`; direct SupCon/CE/recursive starts seed from `convnextv2_femto.fcmae_ft_in1k`
 # - Train split SupCon/CE views and Phase 0 MIM use deterministic-seeded random aspect-preserving crops plus H/V flips; val/test remain deterministic letterbox + fixed Pi-camera magenta tint
 # - SupCon logs same-image view cosine, same-class positive cosine, different-class negative cosine, and positive-minus-negative cosine margin instead of classifier accuracy
 # - Phase 0 MIM uses patch-normalized reconstruction with `1e-2` epsilon and clips gradients at norm `1.0`
@@ -73,7 +73,7 @@ source .venv/bin/activate
 # - recursive acceptance threshold 0.0 for the default val_loss recursive pass
 # - val_raw_acc recursive refinement is opt-in only via ENABLE_RAWACC_REFINEMENT=1
 # - automatic same-command resume from the incomplete phase's own step_last.pt or last.pt
-./run_training.sh --phase0-mim --backbone convnextv2_nano --num-workers 2 --prefetch-factor 1
+./run_training.sh --phase0-mim --backbone femto --num-workers 2 --prefetch-factor 1
 ```
 
 ### Resume After Interruption (Exact Same Command)
@@ -83,7 +83,7 @@ source .venv/bin/activate
 
 # Same command as fresh launch. Completed phases are skipped; the incomplete
 # phase resumes from its own step_last.pt or last.pt.
-./run_training.sh --phase0-mim --backbone convnextv2_nano --num-workers 2 --prefetch-factor 1
+./run_training.sh --phase0-mim --backbone femto --num-workers 2 --prefetch-factor 1
 ```
 
 ### End-of-Run Test Report
