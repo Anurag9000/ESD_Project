@@ -24,16 +24,18 @@ These defaults are defined in [scripts/ollama_pipeline_defaults.py](/home/anurag
    - Baidu via `icrawler`
 4. Images smaller than `224x224` are deleted immediately.
 5. Exact dedupe and perceptual dedupe (`sha256` + `imagehash phash`) run before model judging.
-6. A cheap CLIP prefilter rejects images where the target is not dominant or the frame is dominated by humans / clutter / multiple salient objects.
-7. The single default vision model runs after prefilter.
-8. Each image goes through a two-stage decision:
+6. The `filtered/` folder is the post-download unique candidate pool after step 5.
+7. A cheap CLIP prefilter rejects images where the target is not dominant or the frame is dominated by humans / clutter / multiple salient objects.
+8. A lightweight YOLO prefilter then rejects human-dominated or cluttered scenes that CLIP did not remove.
+9. The single default vision model runs after both prefilters.
+10. Each image goes through a two-stage decision:
    - stage 1: target superclass classification
    - stage 2: train-worthiness scoring for pristine, learnable, real-world data
-9. The model writes `accepted/`, `rejected/`, and `uncertain/` on the fly.
-10. Accepted samples are integrated into `Dataset_Final` by default with metadata sync.
-11. A deterministic train / val / test split manifest is written using the exact repo split logic.
-12. Training can optionally be triggered by a configured command.
-13. Terminal logging is emitted per stage and per image, so you can follow progress live without waiting for the corpus to finish.
+11. The model writes `accepted/`, `rejected/`, and `uncertain/` on the fly.
+12. Accepted samples are integrated into `Dataset_Final` by default with metadata sync.
+13. A deterministic train / val / test split manifest is written using the exact repo split logic.
+14. Training can optionally be triggered by a configured command.
+15. Terminal logging is emitted per stage and per image, so you can follow progress live without waiting for the corpus to finish.
 
 **Artifact Layout**
 - `raw/`
@@ -51,9 +53,10 @@ These defaults are defined in [scripts/ollama_pipeline_defaults.py](/home/anurag
 - Resume happens per stage:
   - class discovery reuses `manifests/class_discovery/discovered_classes.json`
   - per-item download jobs resume from `download_jobs`
-  - prefilter resumes from rows without `prefilter_decision`
-  - VLM judging resumes from rows without `final_decision`
-  - integration resumes from rows with `final_decision='accepted'` and pending integration
+- prefilter resumes from rows without `prefilter_decision`
+- YOLO resumes from rows with `prefilter_decision='accepted'` and no `yolo_prefilter_decision`
+- VLM judging resumes from rows without `final_decision`
+- integration resumes from rows with `final_decision='accepted'` and pending integration
 
 **Per-Image Ledger**
 Each image row tracks:
@@ -66,7 +69,8 @@ Each image row tracks:
 - resolution
 - exact dedupe result
 - perceptual dedupe result
-- prefilter decision
+- CLIP prefilter decision
+- YOLO prefilter decision
 - class-stage decision
 - train-worthiness decision
 - final decision

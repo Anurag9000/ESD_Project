@@ -52,6 +52,10 @@ def init_db(db_path: Path) -> None:
                 prefilter_score REAL,
                 prefilter_reason TEXT,
                 prefilter_details_json TEXT,
+                yolo_prefilter_decision TEXT,
+                yolo_prefilter_score REAL,
+                yolo_prefilter_reason TEXT,
+                yolo_prefilter_details_json TEXT,
                 class_decision TEXT,
                 class_conf REAL,
                 class_reason TEXT,
@@ -135,6 +139,10 @@ def init_db(db_path: Path) -> None:
             ("is_abnormal_artistic_case", "INTEGER"),
             ("is_visually_clean", "INTEGER"),
             ("is_trainworthy", "INTEGER"),
+            ("yolo_prefilter_decision", "TEXT"),
+            ("yolo_prefilter_score", "REAL"),
+            ("yolo_prefilter_reason", "TEXT"),
+            ("yolo_prefilter_details_json", "TEXT"),
         ):
             if column_name not in existing_columns:
                 conn.execute(f"ALTER TABLE images ADD COLUMN {column_name} {column_type}")
@@ -218,7 +226,22 @@ def pending_vlm_rows(db_path: Path) -> list[sqlite3.Row]:
             WHERE exact_dedupe_outcome = 'unique'
               AND phash_dedupe_outcome = 'unique'
               AND prefilter_decision = 'accepted'
+              AND yolo_prefilter_decision = 'accepted'
               AND final_decision IS NULL
+            ORDER BY category, item, filtered_path, raw_path
+            """
+        ).fetchall()
+
+
+def pending_yolo_rows(db_path: Path) -> list[sqlite3.Row]:
+    with connect(db_path) as conn:
+        return conn.execute(
+            """
+            SELECT * FROM images
+            WHERE exact_dedupe_outcome = 'unique'
+              AND phash_dedupe_outcome = 'unique'
+              AND prefilter_decision = 'accepted'
+              AND yolo_prefilter_decision IS NULL
             ORDER BY category, item, filtered_path, raw_path
             """
         ).fetchall()

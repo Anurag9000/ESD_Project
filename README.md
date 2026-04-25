@@ -18,6 +18,7 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 - **Ingestion:** Ollama-first end-to-end dataset curation pipeline for class discovery, multi-source download, dedupe, prefiltering, train-worthiness judging, and dataset integration
 - **Target Classes:** Defaults to `organic`, `metal`, and `paper`
 - **Models:** Local text expansion via `deepseek-r1:8b`; local vision judging via `qwen2.5vl:3b`
+- **Prefilters:** CLIP plus YOLO act as cheap pre-VLM filters to remove low-value, cluttered, or human-dominated frames before the expensive judge
 - **Logging:** Terminal + file logging is emitted per stage and per image, with resume-aware SQLite provenance and health tracking
 - **Artifacts:** Clean separation of `raw/`, `filtered/`, `accepted/`, `rejected/`, `uncertain/`, `integrated/`, `manifests/`, and `logs/`
 
