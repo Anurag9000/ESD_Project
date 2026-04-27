@@ -135,6 +135,7 @@ if [[ ${#IGNORED_ARGS[@]} -gt 0 ]]; then
 fi
 
 mkdir -p "$RUN_ROOT" "$LOG_ROOT"
+mkdir -p "$PROGRESSIVE_OUTPUT_DIR"
 
 PHASE0_ENCODER_CHECKPOINT=""
 if [[ "$ENABLE_PHASE0_MIM" -eq 1 ]]; then
