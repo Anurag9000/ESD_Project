@@ -8,7 +8,7 @@ source .venv/bin/activate
 
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
-BACKBONE_NAME="${BACKBONE_NAME:-femto}"
+BACKBONE_NAME="${BACKBONE_NAME:-atto}"
 WEIGHTS_MODE="${WEIGHTS_MODE:-default}"
 for ((i = 1; i <= $#; i++)); do
   arg="${!i}"
@@ -190,13 +190,17 @@ elif [[ -f "$PROGRESSIVE_OUTPUT_DIR/last.pt" ]]; then
 fi
 
 if [[ ! -f "$PROGRESSIVE_COMPLETE_MARKER" || ! -f "$PROGRESSIVE_OUTPUT_DIR/best.pt" ]]; then
-  python scripts/train_efficientnet_b0_progressive.py \
+  .venv/bin/python scripts/metric_learning_pipeline.py \
     --dataset-root "$DATASET_ROOT" \
     --sampling-strategy balanced \
     --output-dir "$PROGRESSIVE_OUTPUT_DIR" \
     --log-file "$PROGRESSIVE_LOG_FILE" \
     --backbone "$BACKBONE_NAME" \
     --weights "$WEIGHTS_MODE" \
+    --image-size "$IMAGE_SIZE" \
+    --num-workers "$NUM_WORKERS" \
+    --prefetch-factor "$PREFETCH_FACTOR" \
+    --seed "$SEED" \
     "${PHASE0_ARGS[@]}" \
     "${AUTO_RESUME_ARGS[@]}" \
     "${FILTERED_ARGS[@]}"
@@ -213,4 +217,15 @@ INITIAL_CHECKPOINT="$PROGRESSIVE_BEST_CHECKPOINT" \
 RUN_ROOT="$RUN_ROOT" \
 LOG_ROOT="$LOG_ROOT" \
 DATASET_ROOT="$DATASET_ROOT" \
-./run_full_training_pipeline.sh "${FILTERED_ARGS[@]}"
+.venv/bin/python scripts/metric_learning_pipeline.py \
+  --train-only \
+  --resume-checkpoint "$INITIAL_CHECKPOINT" \
+  --dataset-root "$DATASET_ROOT" \
+  --output-dir "$RUN_ROOT/final_refine" \
+  --log-file "$LOG_ROOT/final_refine.log.jsonl" \
+  --backbone "$BACKBONE_NAME" \
+  --weights "$WEIGHTS_MODE" \
+  --image-size "$IMAGE_SIZE" \
+  --num-workers "$NUM_WORKERS" \
+  --prefetch-factor "$PREFETCH_FACTOR" \
+  "${FILTERED_ARGS[@]}"

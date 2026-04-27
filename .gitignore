@@ -41,6 +41,8 @@ logs/demo_run_*/dataset_audit/
 dataset_tars/
 dataset_audit/incoming/
 review_downloads/
+review_downloads/ollama_end_to_end_pipeline/
+review_downloads/ollama_end_to_end_pipeline/**
 
 # Local/external image datasets and generated image visualizations should not be
 # committed. Keep metrics/checkpoints/logs, but leave images local-only.

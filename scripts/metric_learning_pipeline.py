@@ -43,7 +43,7 @@ except ImportError:  # pragma: no cover - surfaced explicitly when backbone crea
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
-DEFAULT_BACKBONE_NAME = "femto"
+DEFAULT_BACKBONE_NAME = "atto"
 DEFAULT_BATCH_SIZE = 320
 # The repo-wide training taxonomy is now strictly 3 classes.
 # Physical folders stay untouched; all datasets are projected into this order.
@@ -113,10 +113,10 @@ BACKBONE_REGISTRY: dict[str, BackboneSpec] = {
         scratch_name="convnextv2_pico",
         description="ConvNeXt V2 Pico FCMAE fine-tuned on IN1K",
     ),
-    "efficientnet_b0": BackboneSpec(
-        pretrained_name="efficientnet_b0",
-        scratch_name="efficientnet_b0",
-        description="EfficientNet-B0",
+    "atto": BackboneSpec(
+        pretrained_name="convnextv2_atto.fcmae_ft_in1k",
+        scratch_name="convnextv2_atto",
+        description="ConvNeXt V2 Atto FCMAE fine-tuned on IN1K",
     ),
     "efficientnetv2_s": BackboneSpec(
         pretrained_name="efficientnetv2_s",
@@ -1344,6 +1344,90 @@ def build_datasets(
 ]:
     class_mapping = parse_json_class_mapping(getattr(args, "class_mapping", ""))
     root = Path(args.dataset_root)
+    if getattr(args, "train_only", False):
+        base_dataset = datasets.ImageFolder(root)
+        new_classes, new_class_to_idx, new_samples, taxonomy_metadata = project_samples_to_training_taxonomy(
+            list(base_dataset.classes),
+            list(base_dataset.samples),
+            class_mapping,
+        )
+        base_dataset.classes = new_classes
+        base_dataset.class_to_idx = new_class_to_idx
+        base_dataset.samples = new_samples
+        base_dataset.targets = [sample[1] for sample in base_dataset.samples]
+
+        manifest = {
+            "dataset_root": str(root),
+            "split_mode": "train_only",
+            "seed": int(args.seed),
+            "split_ratios": {"train": 1.0, "val": 0.0, "test": 0.0},
+            "class_names": list(base_dataset.classes),
+            "taxonomy": taxonomy_metadata,
+            "source_samples": len(base_dataset.samples),
+            "train_samples": len(base_dataset.samples),
+            "val_samples": 0,
+            "test_samples": 0,
+        }
+        manifest_output_dir = Path(getattr(args, "output_dir", "")) if getattr(args, "output_dir", "") else None
+        if manifest_output_dir is not None:
+            manifest_output_dir.mkdir(parents=True, exist_ok=True)
+            save_json(manifest_output_dir / "auto_split_manifest.json", manifest)
+
+        train_dataset = DeterministicAugmentedImageFolder(
+            None,
+            args.image_size,
+            args.augment_repeats,
+            "train",
+            args.seed,
+            args.augment_gaussian_sigmas,
+            args.camera_color_cast_probability,
+            args.camera_color_cast_strength,
+            args.camera_color_cast_eval,
+            apply_augmentation=True,
+            base_dataset=base_dataset,
+            samples=list(base_dataset.samples),
+            dataset_root=root,
+            enable_runtime_bad_sample_cleanup=args.runtime_bad_sample_cleanup,
+        )
+        val_dataset = DeterministicAugmentedImageFolder(
+            None,
+            args.image_size,
+            1,
+            "val",
+            args.seed,
+            args.augment_gaussian_sigmas,
+            args.camera_color_cast_probability,
+            args.camera_color_cast_strength,
+            args.camera_color_cast_eval,
+            apply_augmentation=False,
+            base_dataset=base_dataset,
+            samples=[],
+            dataset_root=root,
+            enable_runtime_bad_sample_cleanup=args.runtime_bad_sample_cleanup,
+        )
+        test_dataset = DeterministicAugmentedImageFolder(
+            None,
+            args.image_size,
+            1,
+            "test",
+            args.seed,
+            args.augment_gaussian_sigmas,
+            args.camera_color_cast_probability,
+            args.camera_color_cast_strength,
+            args.camera_color_cast_eval,
+            apply_augmentation=False,
+            base_dataset=base_dataset,
+            samples=[],
+            dataset_root=root,
+            enable_runtime_bad_sample_cleanup=args.runtime_bad_sample_cleanup,
+        )
+        return (
+            train_dataset,
+            val_dataset,
+            test_dataset,
+            DeterministicSupConDataset(train_dataset),
+            DeterministicSupConDataset(val_dataset),
+        )
     if has_explicit_split_layout(root):
         train_dataset = DeterministicAugmentedImageFolder(
             root / "train",
@@ -1414,8 +1498,10 @@ def parse_auto_split_ratios(spec: str) -> tuple[float, float, float]:
     if len(parts) != 3:
         raise ValueError("--auto-split-ratios must contain exactly three comma-separated values.")
     values = [float(part) for part in parts]
-    if any(value <= 0.0 for value in values):
-        raise ValueError("--auto-split-ratios values must all be positive.")
+    if any(value < 0.0 for value in values):
+        raise ValueError("--auto-split-ratios values must be non-negative.")
+    if not any(value > 0.0 for value in values):
+        raise ValueError("--auto-split-ratios must contain at least one positive value.")
     total = sum(values)
     return (values[0] / total, values[1] / total, values[2] / total)
 
@@ -4293,6 +4379,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-file", default="logs/metric_learning_experiment.log.jsonl")
     parser.add_argument("--resume-checkpoint", default="")
     parser.add_argument(
+        "--train-only",
+        action="store_true",
+        help="Train on the entire dataset with train-loss plateau stopping and skip validation/test evaluation.",
+    )
+    parser.add_argument(
         "--class-mapping",
         type=str,
         default="",
@@ -5052,6 +5143,26 @@ def run_experiment(args: argparse.Namespace) -> int:
                     if validation_trigger_reason is None and epoch_steps_done < supcon_steps_full_epoch:
                         validation_trigger_reason = "epoch_boundary"
 
+                    if args.train_only:
+                        if validation_trigger_reason == "train_loss_plateau":
+                            log_json_event(
+                                log_path,
+                                {
+                                    "event": "train_only_phase_stopped",
+                                    "stage": "supcon",
+                                    "phase_index": supcon_phase_index,
+                                    "phase_name": supcon_phase.name,
+                                    "stopped_at_epoch_step": epoch_steps_done,
+                                    "global_train_step": train_progress["global_train_step"],
+                                    "reason": validation_trigger_reason,
+                                    "phase_train_loss_best": phase_train_loss_best,
+                                    "phase_train_loss_wait": phase_train_loss_wait,
+                                },
+                            )
+                            phase_stopped = True
+                            break
+                        continue
+
                     log_json_event(
                         log_path,
                         {
@@ -5596,6 +5707,26 @@ def run_experiment(args: argparse.Namespace) -> int:
                 if validation_trigger_reason is None and epoch_steps_done < phase_steps_full_epoch:
                     validation_trigger_reason = "epoch_boundary"
 
+                if args.train_only:
+                    if validation_trigger_reason == "train_loss_plateau":
+                        log_json_event(
+                            log_path,
+                            {
+                                "event": "train_only_phase_stopped",
+                                "stage": "classifier",
+                                "phase_index": phase_index,
+                                "phase_name": phase.name,
+                                "stopped_at_epoch_step": epoch_steps_done,
+                                "global_train_step": train_progress["global_train_step"],
+                                "reason": validation_trigger_reason,
+                                "phase_train_loss_best": phase_train_loss_best,
+                                "phase_train_loss_wait": phase_train_loss_wait,
+                            },
+                        )
+                        phase_stopped = True
+                        break
+                    continue
+
                 log_json_event(
                     log_path,
                     {
@@ -5984,6 +6115,54 @@ def run_experiment(args: argparse.Namespace) -> int:
             "epoch_step_completed": 0,
             "validation_index": 0,
         }
+
+    if args.train_only:
+        final_checkpoint = {
+            "model_state_dict": cpu_state_dict(model),
+            "class_names": train_dataset.classes,
+            "class_to_idx": train_dataset.class_to_idx,
+            "args": vars(args),
+            "history": history,
+            "best_val_loss": best_val_loss,
+            "best_val_acc": best_val_acc,
+            "best_val_raw_acc": best_val_raw_acc,
+            "best_classifier_state": cpu_state_dict(model),
+            "supcon_best_state": supcon_best_state,
+            "supcon_best_loss": supcon_best_loss,
+            "supcon_best_epoch": supcon_best_epoch,
+            "supcon_wait": supcon_wait,
+            "augmentation_epoch_cursor": augmentation_epoch_cursor,
+            "phase_train_loss_best": phase_train_loss_best,
+            "phase_train_loss_wait": phase_train_loss_wait,
+            "phase_validation_wait": phase_validation_wait,
+            "train_progress": train_progress,
+            "phase_best_state": cpu_state_dict(model),
+        }
+        torch.save(final_checkpoint, output_dir / "best.pt")
+        save_json(
+            output_dir / "train_only_summary.json",
+            {
+                "dataset_root": str(args.dataset_root),
+                "checkpoint": str(output_dir / "best.pt"),
+                "train_loss_validation_patience": args.train_loss_validation_patience,
+                "train_loss_best": phase_train_loss_best,
+                "train_loss_wait": phase_train_loss_wait,
+                "global_train_step": train_progress["global_train_step"],
+                "global_source_samples_seen": train_progress["global_source_samples_seen"],
+                "train_only": True,
+            },
+        )
+        log_json_event(
+            log_path,
+            {
+                "event": "train_only_complete",
+                "checkpoint": str(output_dir / "best.pt"),
+                "train_loss_best": phase_train_loss_best,
+                "train_loss_wait": phase_train_loss_wait,
+                "global_train_step": train_progress["global_train_step"],
+            },
+        )
+        return 0
 
     model.load_state_dict(best_classifier_state)
     release_training_memory(device, train_loader, val_loader, supcon_train_loader, supcon_val_loader)

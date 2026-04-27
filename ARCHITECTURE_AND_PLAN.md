@@ -56,7 +56,7 @@ The pipeline follows the research-validated principle: **Contrastive representat
 ### Stage 3 — SupCon Full Tail After Frozen Core
 | Parameter            | Value  |
 | :------------------- | :----- |
-| **Trainable:**       | Tail after the frozen core; for default `femto`, top semantic leaf modules after the 40-module frozen core + SupCon head |
+| **Trainable:**       | Tail after the frozen core; for default `atto`, top semantic leaf modules after the 40-module frozen core + SupCon head |
 | **Frozen forever:**  | First 40 leaf modules (stem, early stages: edges, textures, patterns) remain frozen in the default backbone |
 | **Loss:**            | Supervised Contrastive (SupCon) |
 | **Head LR:**         | `3e-3` |
@@ -89,7 +89,7 @@ The pipeline follows the research-validated principle: **Contrastive representat
 ### Stage 6 — CE Full Tail After Frozen Core
 | Parameter            | Value  |
 | :------------------- | :----- |
-| **Trainable:**       | Tail after the frozen core; for default `femto`, top semantic leaf modules after the 40-module frozen core + CE head |
+| **Trainable:**       | Tail after the frozen core; for default `atto`, top semantic leaf modules after the 40-module frozen core + CE head |
 | **Loss:**            | Cross-Entropy |
 | **Head LR:**         | `1e-5` |
 | **Backbone LR:**     | `1e-5` |
@@ -112,9 +112,7 @@ The pipeline follows the research-validated principle: **Contrastive representat
 
 ---
 
-## 4. Backbone Module Map (EfficientNet-B0 reference)
-
-> This module map is retained only as a reference for the `efficientnet_b0` backbone option. The current default training path uses the configurable backbone registry and may select a different pretrained model.
+## 4. Backbone Module Map
 
 | Top-level Module | Type                  | Params     | SupCon Stage | Notes |
 | :--------------- | :-------------------- | :--------- | :----------- | :---- |
@@ -145,7 +143,7 @@ The pipeline follows the research-validated principle: **Contrastive representat
 | Phase-end visual audit | `visualizations/<phase_label>/...` | `Results/<run>/progressive/phases/<phase_name>/` |
 | Final protected test report | `confmat_counts_test.csv`, `confmat_rate_pct_test.csv`, `classification_report_test.csv`, `test_confusion_matrix.png`, `test_reliability_diagram.png`, `test_confidence_histogram.png`, `summary.json` | `Results/<run>/final_test_evaluation/` |
 
-Resume is fully automatic: re-running the same `./run_training.sh --phase0-mim --backbone femto --num-workers 2 --prefetch-factor 1` command detects the most recent run stamp, skips completed phases, and resumes the incomplete phase from its own `step_last.pt` or `last.pt`.
+Resume is fully automatic: re-running the same `./run_training.sh --phase0-mim --backbone atto --num-workers 2 --prefetch-factor 1` command detects the most recent run stamp, skips completed phases, and resumes the incomplete phase from its own `step_last.pt` or `last.pt`.
 
 ---
 
@@ -159,7 +157,7 @@ Resume is fully automatic: re-running the same `./run_training.sh --phase0-mim -
 - **SupCon diagnostics:** SupCon phases log loss plus same-image view cosine, same-class positive cosine, different-class negative cosine, and positive-minus-negative cosine margin. Classifier accuracy/confidence is logged only in CE/classifier phases.
 - **Class Balancing:** Balanced per-batch class cycling is the default and mandatory production path.
 - **Interpretability Audit:** At run start and after every completed phase, the pipeline generates fixed-tint test-set visualizations:
-  a UMAP thumbnail embedding map, calibration plots, and optional Grad-CAM overlays.
+  a UMAP thumbnail embedding map and calibration plots.
 - **Augmentation types:** Train-only aspect-preserving random crop + horizontal/vertical flips, plus the fixed Pi-camera pink tint. Val/test remain deterministic apart from the tint.
 
 ---
@@ -174,5 +172,3 @@ Resume is fully automatic: re-running the same `./run_training.sh --phase0-mim -
 ---
 
 ## 8. Completed Additions
-
-- **Grad-CAM Localisation:** Classifier-side heatmap generation for class-specific overlays is available via `scripts/gradcam_classifier.py`.

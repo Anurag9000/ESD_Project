@@ -27,7 +27,7 @@ SupCon logs report contrastive diagnostics only: same-image view cosine, same-cl
 | `--head-lr` | `1e-3` | Learning rate for classifier head warmup. |
 | `--backbone-lr` | `1e-5` | Learning rate for classifier backbone phases. |
 | `--weight-decay` | `1e-4` | Optimizer weight decay. |
-| `--backbone` | `femto` | Backbone selection. The trainer accepts any timm backbone name; registered aliases resolve pretrained/scratch defaults cleanly. For direct non-Phase-0 training, the default `femto` alias resolves to `convnextv2_femto.fcmae_ft_in1k`. |
+| `--backbone` | `atto` | Backbone selection. The trainer accepts any timm backbone name; registered aliases resolve pretrained/scratch defaults cleanly. For direct non-Phase-0 training, the default `atto` alias resolves to `convnextv2_atto.fcmae_ft_in1k`. |
 | `--optimizer` | `adamw` | Optimizer family: `adamw` or `sam`. |
 | `--precision` | `mixed` | Training precision: `mixed`, `32`, or `64`. |
 | `--adam-beta1` | `0.9` | Adam beta1. |
@@ -82,15 +82,6 @@ SupCon logs report contrastive diagnostics only: same-image view cosine, same-cl
 | `--grad-accum-steps` | `1` | Gradient accumulation factor. |
 | `--run-final-test` | `false` | Run the final protected test pass at the end of training. |
 
-## Trainer Wrapper: `scripts/train_efficientnet_b0_progressive.py`
-
-This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline.py` and overrides only:
-
-| Setting | Default used by wrapper | What it does |
-| --- | --- | --- |
-| `output_dir` | `Results/<backbone>_progressive_three_classes` | Output root for the progressive pretraining run when not set explicitly. |
-| `log_file` | `logs/<backbone>_progressive_three_classes.log.jsonl` | Log file for the progressive pretraining run when not set explicitly. |
-
 ## Phase 0 MIM Launcher: `scripts/train_phase0_mim.py`
 
 | Flag | Default | What it does |
@@ -98,7 +89,7 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--dataset-root` | `Dataset_Final` | Dataset root used to build the clean train split. |
 | `--output-dir` | `Results/phase0_mim` | Phase 0 checkpoint output root. |
 | `--log-file` | `logs/phase0_mim.log.jsonl` | Structured Phase 0 JSONL log. |
-| `--backbone` | `femto` | Backbone selection used for the encoder. Any timm backbone string is accepted. Phase 0 uses pure `convnextv2_femto.fcmae`; direct Phase 1+ starts use `convnextv2_femto.fcmae_ft_in1k` by default. |
+| `--backbone` | `atto` | Backbone selection used for the encoder. Any timm backbone string is accepted. Phase 0 uses pure `convnextv2_femto.fcmae`; direct Phase 1+ starts use `convnextv2_atto.fcmae_ft_in1k` by default. |
 | `--weights` | `default` | For Phase 0, `default` means use the pure `.fcmae` backbone weights; `none` means scratch init. |
 | `--image-size` | `224` | Input resolution for masking and reconstruction. |
 | `--augment-repeats` | `1` | Passed through to the repo dataset builder. The train split uses seeded random crop + flip views; val/test stay deterministic. Phase 0 uses the same crop/flip policy now. |
@@ -135,7 +126,7 @@ This wrapper does not add new flags. It reuses `scripts/metric_learning_pipeline
 | `--base-output-dir` | required | Root output directory for recursive refinement. |
 | `--base-log-file` | required | JSONL log file for recursive refinement. |
 | `--initial-checkpoint` | required | Seed checkpoint for the first refinement pass. |
-| `--backbone` | `femto` | Backbone name forwarded to the recursive trainer. Any timm backbone string is accepted. |
+| `--backbone` | `atto` | Backbone name forwarded to the recursive trainer. Any timm backbone string is accepted. |
 | `--weights` | `default` | Pretrained-weight mode forwarded to the recursive trainer. |
 | `--metric` | required | Accept/reject metric: `val_loss` or `val_raw_acc`. |
 | `--threshold` | `0.0` | Stop threshold for recursive refinement. Applied to both recursive `val_loss` and `val_raw_acc` passes. |
@@ -200,17 +191,6 @@ The saved-classifier evaluator now writes `metrics.json`, `summary.json`, `corre
 | `--seed` | `42` | Deterministic split seed. |
 | `--class-mapping` | `""` | Optional JSON class merge map. |
 
-## Grad-CAM: `scripts/gradcam_classifier.py`
-
-| Flag | Default | What it does |
-| --- | --- | --- |
-| `--checkpoint` | required | Checkpoint to inspect. |
-| `--dataset-root` | required | Dataset root used for sampling images. |
-| `--output-dir` | required | Output directory for Grad-CAM overlays. |
-| `--class-name` | `[]` | Repeatable class filter for overlays. |
-| `--samples-per-class` | `4` | Number of overlays generated per class. |
-| `--seed` | `42` | Sampling seed. |
-
 ## Dataset Audit: `scripts/audit_dataset_by_source.py`
 
 | Flag | Default | What it does |
@@ -220,16 +200,6 @@ The saved-classifier evaluator now writes `metrics.json`, `summary.json`, `corre
 | `--n` | `10` | Number of images sampled per source batch. |
 | `--seed` | `42` | Sampling seed. |
 | `--classes` | unset | Optional subset of classes to audit. |
-
-## TrashBox Integration: `scripts/integrate_trashbox_dataset.py`
-
-| Flag | Default | What it does |
-| --- | --- | --- |
-| `--source-root` | `dataset_audit/incoming/TrashBox` | Source tree for TrashBox input. |
-| `--dataset-root` | `Dataset_Final` | Destination dataset root. |
-| `--metadata-file` | `dataset_metadata.json` | Metadata JSON file to update. |
-| `--dry-run` | `false` | Simulate integration without writing changes. |
-| `--keep-source` | `false` | Preserve the source tree instead of deleting it after import. |
 
 ## Refinement Acceptance: `scripts/finalize_refinement_acceptance.py`
 
