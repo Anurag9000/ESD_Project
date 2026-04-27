@@ -80,6 +80,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--initial-head-lr", type=float, required=True)
     parser.add_argument("--initial-backbone-lr", type=float, required=True)
+    parser.add_argument(
+        "--stop-at-metric-value",
+        type=float,
+        default=None,
+        help=(
+            "Optional absolute stop target for val_raw_acc refinement. "
+            "When set and metric is val_raw_acc, the recursive loop stops once the accepted "
+            "checkpoint reaches or exceeds this value."
+        ),
+    )
     parser.add_argument("--batch-size", type=int, default=320)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--prefetch-factor", type=int, default=1)
@@ -250,7 +260,7 @@ def run_training(
 
     command = [
         sys.executable,
-        "scripts/train_efficientnet_b0_progressive.py",
+        "scripts/metric_learning_pipeline.py",
         "--dataset-root",
         args.dataset_root,
         "--backbone",
@@ -485,6 +495,15 @@ def main() -> int:
             state["stop_reason"] = None
             sync_accepted_evaluation(base_output_dir, iteration_dir)
             write_state(base_output_dir, state)
+            if (
+                args.stop_at_metric_value is not None
+                and args.metric == "val_raw_acc"
+                and float(state["accepted_metric"]) >= float(args.stop_at_metric_value)
+            ):
+                state["stopped"] = True
+                state["stop_reason"] = f"target_val_raw_acc_reached:{args.stop_at_metric_value}"
+                write_state(base_output_dir, state)
+                break
             continue
 
         state["stopped"] = True

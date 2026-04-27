@@ -17,6 +17,8 @@ from torchvision import datasets
 
 from metric_learning_pipeline import (
     DEFAULT_BACKBONE_NAME,
+    IMAGENET_MEAN,
+    IMAGENET_STD,
     MetricLearningEfficientNetB0,
     TRAINING_CLASS_ORDER,
     adapt_checkpoint_state_dict_to_training_taxonomy,
@@ -28,6 +30,7 @@ from metric_learning_pipeline import (
     parse_json_class_mapping,
     project_class_name_to_training_taxonomy,
     resolve_runtime_selected_classes,
+    resize_with_letterbox,
     release_training_memory,
     save_classification_report_csv,
     save_confusion_matrix_csv,
@@ -41,9 +44,10 @@ warnings.filterwarnings("ignore", message="Palette images with Transparency", ca
 
 
 class NoAugDataset(Dataset):
-    def __init__(self, samples: list[tuple[str, int]], image_size: int) -> None:
+    def __init__(self, samples: list[tuple[str, int]], image_size: int, raw_input: bool) -> None:
         self.samples = samples
         self.image_size = image_size
+        self.raw_input = bool(raw_input)
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -54,10 +58,22 @@ class NoAugDataset(Dataset):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 img = Image.open(path).convert("RGB")
-            tensor = evaluation_tensor_from_image(img, self.image_size)
+            if self.raw_input:
+                tensor = raw_evaluation_tensor_from_image(img, self.image_size)
+            else:
+                tensor = evaluation_tensor_from_image(img, self.image_size)
         except Exception:
             tensor = torch.zeros(3, self.image_size, self.image_size)
         return tensor, label, path
+
+
+def raw_evaluation_tensor_from_image(image: Image.Image, image_size: int) -> torch.Tensor:
+    resized = resize_with_letterbox(image, image_size)
+    array = np.asarray(resized, dtype=np.float32) / 255.0
+    tensor = torch.from_numpy(array).permute(2, 0, 1).contiguous()
+    mean = torch.tensor(IMAGENET_MEAN, dtype=tensor.dtype).view(3, 1, 1)
+    std = torch.tensor(IMAGENET_STD, dtype=tensor.dtype).view(3, 1, 1)
+    return (tensor - mean) / std
 
 
 def collate(batch):
@@ -82,6 +98,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--other-label", default="other")
     parser.add_argument("--class-mapping", default="", help="JSON string for runtime class collapsing.")
+    parser.add_argument(
+        "--raw-input",
+        action="store_true",
+        help="Evaluate the saved images as raw untinted images without applying the repo-wide pink cast.",
+    )
     return parser.parse_args()
 
 
@@ -200,7 +221,11 @@ def main() -> int:
     }
     save_json(output_dir / "holdout_manifest.json", manifest)
 
-    loader = build_loader(NoAugDataset(remapped_samples, int(eval_args.image_size)), eval_args.batch_size, eval_args.num_workers)
+    loader = build_loader(
+        NoAugDataset(remapped_samples, int(eval_args.image_size), raw_input=bool(args.raw_input)),
+        eval_args.batch_size,
+        eval_args.num_workers,
+    )
     logits, targets, prediction_rows = [], [], []
     with torch.no_grad():
         for images, labels, paths in loader:

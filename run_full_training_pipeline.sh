@@ -10,7 +10,12 @@ export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:T
 
 INITIAL_CHECKPOINT="${INITIAL_CHECKPOINT:-}"
 DATASET_ROOT="${DATASET_ROOT:-Dataset_Final}"
-BACKBONE_NAME="${BACKBONE_NAME:-femto}"
+BACKBONE_NAME="${BACKBONE_NAME:-atto}"
+LOSS_REFINE_INITIAL_HEAD_LR="${LOSS_REFINE_INITIAL_HEAD_LR:-1e-4}"
+LOSS_REFINE_INITIAL_BACKBONE_LR="${LOSS_REFINE_INITIAL_BACKBONE_LR:-5e-5}"
+RAWACC_REFINE_INITIAL_HEAD_LR="${RAWACC_REFINE_INITIAL_HEAD_LR:-5e-5}"
+RAWACC_REFINE_INITIAL_BACKBONE_LR="${RAWACC_REFINE_INITIAL_BACKBONE_LR:-3e-5}"
+RAWACC_TARGET_VAL_RAW_ACC="${RAWACC_TARGET_VAL_RAW_ACC:-}"
 for ((i = 1; i <= $#; i++)); do
   arg="${!i}"
   case "$arg" in
@@ -87,8 +92,8 @@ python scripts/run_recursive_refinement.py \
   --backbone "$BACKBONE_NAME" \
   --metric val_loss \
   --threshold "$RECURSIVE_ACCEPTANCE_MIN_DELTA" \
-  --initial-head-lr 1e-4 \
-  --initial-backbone-lr 5e-5 \
+  --initial-head-lr "$LOSS_REFINE_INITIAL_HEAD_LR" \
+  --initial-backbone-lr "$LOSS_REFINE_INITIAL_BACKBONE_LR" \
   --dataset-root "$DATASET_ROOT" \
   --sampling-strategy balanced \
   --skip-supcon \
@@ -132,8 +137,9 @@ if [[ "$ENABLE_RAWACC_REFINEMENT" -eq 1 ]]; then
     --backbone "$BACKBONE_NAME" \
     --metric val_raw_acc \
     --threshold "$RECURSIVE_ACCEPTANCE_MIN_DELTA" \
-    --initial-head-lr "$RAWACC_HEAD_LR" \
-    --initial-backbone-lr "$RAWACC_BACKBONE_LR" \
+    --initial-head-lr "$RAWACC_REFINE_INITIAL_HEAD_LR" \
+    --initial-backbone-lr "$RAWACC_REFINE_INITIAL_BACKBONE_LR" \
+    ${RAWACC_TARGET_VAL_RAW_ACC:+--stop-at-metric-value "$RAWACC_TARGET_VAL_RAW_ACC"} \
     --dataset-root "$DATASET_ROOT" \
     --sampling-strategy balanced \
     --skip-supcon \
