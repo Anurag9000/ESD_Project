@@ -40,6 +40,7 @@ The Electronic Smart Dustbin (ESD) platform is an industrial-scale ecosystem for
 - **`ARCHITECTURE_AND_PLAN.md`**: Full staged pipeline specification, per-stage LRs, backbone module map, checkpointing strategy.
 - **`DATASET_SPECIFICATION.md`**: 304K corpus breakdown per class with decontamination history.
 - **`PYTORCH_SETUP.md`**: Environment configuration and execution manual.
+- **`OLLAMA_PIPELINE.md`**: End-to-end local curation pipeline for user-defined class expansion, download, filtering, and dataset integration.
 - **`scripts/evaluate_external_holdout.py`**: No-augmentation evaluation on a genuinely unseen dataset root.
 - **`scripts/evaluate_clip_holdout.py`**: Zero-shot CLIP holdout evaluation plus metal-subclass audit mode.
 - **`SmartBin_Android/docs/`**: Mobile-specific architectural and product specifications.
