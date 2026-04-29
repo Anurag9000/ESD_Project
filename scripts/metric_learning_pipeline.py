@@ -6493,3 +6493,13 @@ def run_experiment(args: argparse.Namespace) -> int:
         "test_summary": test_summary if args.run_final_test else {},
     }
     return 0
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    return run_experiment(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

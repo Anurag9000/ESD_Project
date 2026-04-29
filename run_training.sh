@@ -56,6 +56,7 @@ PROGRESSIVE_OUTPUT_DIR="$RUN_ROOT/progressive"
 PROGRESSIVE_LOG_FILE="$LOG_ROOT/progressive.log.jsonl"
 DATASET_ROOT="${DATASET_ROOT:-Dataset_Final}"
 IMAGE_SIZE="${IMAGE_SIZE:-224}"
+BATCH_SIZE="${BATCH_SIZE:-320}"
 NUM_WORKERS="${NUM_WORKERS:-2}"
 PREFETCH_FACTOR="${PREFETCH_FACTOR:-1}"
 SEED="${SEED:-42}"
@@ -116,11 +117,21 @@ for ARG in "$@"; do
         SKIP_NEXT=1
       fi
       ;;
-    --dataset-root|--batch-size|--output-dir|--log-file)
+    --batch-size)
+      next_index=$((i + 1))
+      if [[ $next_index -le $# ]]; then
+        BATCH_SIZE="${!next_index}"
+      fi
+      SKIP_NEXT=1
+      ;;
+    --batch-size=*)
+      BATCH_SIZE="${ARG#*=}"
+      ;;
+    --dataset-root|--output-dir|--log-file)
       IGNORED_ARGS+=("$ARG")
       SKIP_NEXT=1
       ;;
-    --dataset-root=*|--batch-size=*|--output-dir=*|--log-file=*)
+    --dataset-root=*|--output-dir=*|--log-file=*)
       IGNORED_ARGS+=("${ARG%%=*}")
       ;;
     *)
@@ -180,6 +191,10 @@ fi
 
 AUTO_RESUME_ARGS=()
 PROGRESSIVE_COMPLETE_MARKER="$PROGRESSIVE_OUTPUT_DIR/.progressive_complete"
+if [[ -f "$PROGRESSIVE_COMPLETE_MARKER" && ! -f "$PROGRESSIVE_OUTPUT_DIR/best.pt" ]]; then
+  echo "[wrapper] found stale progressive completion marker without best.pt; clearing it so training can resume cleanly."
+  rm -f "$PROGRESSIVE_COMPLETE_MARKER"
+fi
 if [[ -f "$PROGRESSIVE_COMPLETE_MARKER" && -f "$PROGRESSIVE_OUTPUT_DIR/best.pt" ]]; then
   echo "[wrapper] progressive SupCon/CE already complete; using $PROGRESSIVE_OUTPUT_DIR/best.pt"
 elif [[ -f "$PROGRESSIVE_OUTPUT_DIR/step_last.pt" ]]; then
@@ -192,27 +207,37 @@ fi
 
 if [[ ! -f "$PROGRESSIVE_COMPLETE_MARKER" || ! -f "$PROGRESSIVE_OUTPUT_DIR/best.pt" ]]; then
   .venv/bin/python scripts/metric_learning_pipeline.py \
-    --dataset-root "$DATASET_ROOT" \
-    --sampling-strategy balanced \
-    --output-dir "$PROGRESSIVE_OUTPUT_DIR" \
-    --log-file "$PROGRESSIVE_LOG_FILE" \
-    --backbone "$BACKBONE_NAME" \
-    --weights "$WEIGHTS_MODE" \
-    --image-size "$IMAGE_SIZE" \
-    --num-workers "$NUM_WORKERS" \
-    --prefetch-factor "$PREFETCH_FACTOR" \
-    --seed "$SEED" \
+      --dataset-root "$DATASET_ROOT" \
+      --sampling-strategy balanced \
+      --output-dir "$PROGRESSIVE_OUTPUT_DIR" \
+      --log-file "$PROGRESSIVE_LOG_FILE" \
+      --batch-size "$BATCH_SIZE" \
+      --backbone "$BACKBONE_NAME" \
+      --weights "$WEIGHTS_MODE" \
+      --image-size "$IMAGE_SIZE" \
+      --num-workers "$NUM_WORKERS" \
+      --prefetch-factor "$PREFETCH_FACTOR" \
+      --seed "$SEED" \
     "${PHASE0_ARGS[@]}" \
     "${AUTO_RESUME_ARGS[@]}" \
     "${FILTERED_ARGS[@]}"
-  touch "$PROGRESSIVE_COMPLETE_MARKER"
 fi
 
 PROGRESSIVE_BEST_CHECKPOINT="$PROGRESSIVE_OUTPUT_DIR/best.pt"
 if [[ ! -f "$PROGRESSIVE_BEST_CHECKPOINT" ]]; then
+  LATEST_PROGRESSIVE_CANDIDATE=$(find "$RUN_ROOT" -maxdepth 1 -type d -name 'progressive_*' 2>/dev/null | sort | tail -1 || true)
+  if [[ -n "$LATEST_PROGRESSIVE_CANDIDATE" && -f "$LATEST_PROGRESSIVE_CANDIDATE/best.pt" ]]; then
+    echo "[wrapper] progressive best.pt was written under $LATEST_PROGRESSIVE_CANDIDATE; adopting that run root."
+    PROGRESSIVE_OUTPUT_DIR="$LATEST_PROGRESSIVE_CANDIDATE"
+    PROGRESSIVE_BEST_CHECKPOINT="$PROGRESSIVE_OUTPUT_DIR/best.pt"
+  fi
+fi
+if [[ ! -f "$PROGRESSIVE_BEST_CHECKPOINT" ]]; then
   echo "[wrapper] progressive run did not produce $PROGRESSIVE_BEST_CHECKPOINT" >&2
   exit 1
 fi
+
+touch "$PROGRESSIVE_COMPLETE_MARKER"
 
 INITIAL_CHECKPOINT="$PROGRESSIVE_BEST_CHECKPOINT" \
 RUN_ROOT="$RUN_ROOT" \
@@ -224,6 +249,7 @@ DATASET_ROOT="$DATASET_ROOT" \
   --dataset-root "$DATASET_ROOT" \
   --output-dir "$RUN_ROOT/final_refine" \
   --log-file "$LOG_ROOT/final_refine.log.jsonl" \
+  --batch-size "$BATCH_SIZE" \
   --backbone "$BACKBONE_NAME" \
   --weights "$WEIGHTS_MODE" \
   --image-size "$IMAGE_SIZE" \
