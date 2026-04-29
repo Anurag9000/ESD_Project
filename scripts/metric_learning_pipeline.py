@@ -16,6 +16,7 @@ import subprocess
 import sys
 import warnings
 from dataclasses import asdict, dataclass
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -1989,6 +1990,73 @@ def json_safe_value(value: Any) -> Any:
     return str(value)
 
 
+def _progress_class_alias(name: str) -> str:
+    normalized = str(name).strip().lower().replace(" ", "_").replace("-", "_")
+    aliases = {
+        "organic": "org",
+        "metal": "met",
+        "paper": "pap",
+        "plastic": "pla",
+        "clothes": "clo",
+        "ewaste": "ew",
+        "glass": "gla",
+        "hard_plastic": "hard",
+        "soft_plastic": "soft",
+    }
+    return aliases.get(normalized, normalized[:4] or "cls")
+
+
+def _progress_value_for_postfix(key: str, value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, torch.Tensor):
+        value = value.detach().cpu().item() if value.numel() == 1 else value.detach().cpu().tolist()
+    if isinstance(value, (np.integer, int)) and not isinstance(value, bool):
+        return str(int(value))
+    if isinstance(value, (np.floating, float)):
+        scalar = float(value)
+        if not math.isfinite(scalar):
+            return str(scalar)
+        if key.endswith("_lr") or key in {"lr", "learning_rate", "optimizer_lr"}:
+            return f"{scalar:.2e}"
+        if "elapsed" in key or key.endswith("_seconds"):
+            return f"{scalar:.1f}"
+        if "samples_per_second" in key or key.endswith("_throughput"):
+            return f"{scalar:.1f}"
+        return f"{scalar:.4f}"
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, dict):
+        parts: list[str] = []
+        for subkey, subvalue in value.items():
+            subvalue_fmt = _progress_value_for_postfix(f"{key}_{subkey}", subvalue)
+            if subvalue_fmt is None:
+                continue
+            alias = _progress_class_alias(subkey)
+            parts.append(f"{alias}={subvalue_fmt}")
+        return "|".join(parts) if parts else None
+    if isinstance(value, (list, tuple)):
+        if len(value) == 0:
+            return None
+        formatted_items: list[str] = []
+        for index, item in enumerate(value):
+            item_fmt = _progress_value_for_postfix(f"{key}_{index}", item)
+            if item_fmt is not None:
+                formatted_items.append(item_fmt)
+        return ",".join(formatted_items) if formatted_items else None
+    return str(value)
+
+
+def build_progress_postfix(step_index: int, total_steps: int | None = None, **metrics: Any) -> OrderedDict[str, str]:
+    postfix: OrderedDict[str, str] = OrderedDict()
+    postfix["step"] = f"{step_index}/{total_steps}" if total_steps is not None and total_steps > 0 else str(step_index)
+    for key, value in metrics.items():
+        formatted = _progress_value_for_postfix(key, value)
+        if formatted is not None:
+            postfix[key] = formatted
+    return postfix
+
+
 def autocast_enabled(device: torch.device, args: argparse.Namespace) -> bool:
     return device.type == "cuda" and str(args.precision) == "mixed"
 
@@ -2134,7 +2202,13 @@ def train_supcon_epoch(
     total_loss = 0.0
     total_seen = 0
     total_batches = min(len(loader), max_batches) if max_batches > 0 else len(loader)
-    progress = tqdm(enumerate(limited_batches(loader, max_batches), start=1), total=total_batches, leave=False)
+    progress = tqdm(
+        enumerate(limited_batches(loader, max_batches), start=1),
+        total=total_batches,
+        leave=False,
+        dynamic_ncols=True,
+        desc=f"supcon/{phase_name}",
+    )
 
     for step_in_epoch, (view_one, view_two, labels) in progress:
         view_one = move_images_to_device(view_one, device, args)
@@ -2180,8 +2254,20 @@ def train_supcon_epoch(
         train_progress["global_train_step"] += 1
         train_progress["global_source_samples_seen"] += batch_size
         progress.set_postfix(
-            loss=f"{second_loss.item():.4f}",
-            margin=f"{batch_contrastive_metrics['positive_negative_cosine_margin']:.4f}",
+            build_progress_postfix(
+                step_in_epoch,
+                total_batches,
+                loss=second_loss.item(),
+                running_loss=total_loss / max(1, total_seen),
+                margin=batch_contrastive_metrics["positive_negative_cosine_margin"],
+                same_cls=batch_contrastive_metrics["same_class_positive_cosine"],
+                diff_cls=batch_contrastive_metrics["different_class_negative_cosine"],
+                pos_pairs=batch_contrastive_metrics["positive_pair_count"],
+                neg_pairs=batch_contrastive_metrics["negative_pair_count"],
+                lr=optimizer_learning_rates(optimizer),
+                samples=total_seen,
+                batch_size=batch_size,
+            )
         )
 
         if train_progress["global_train_step"] % log_every_steps == 0:
@@ -2559,7 +2645,13 @@ def train_classifier_epoch(
     total_targeted_penalty = 0.0
     total_seen = 0
     total_batches = min(len(loader), max_batches) if max_batches > 0 else len(loader)
-    progress = tqdm(enumerate(limited_batches(loader, max_batches), start=1), total=total_batches, leave=False)
+    progress = tqdm(
+        enumerate(limited_batches(loader, max_batches), start=1),
+        total=total_batches,
+        leave=False,
+        dynamic_ncols=True,
+        desc=f"supcon/{phase_name}",
+    )
 
     for step_in_epoch, (images, labels) in progress:
         images = move_images_to_device(images, device, args)
@@ -2609,10 +2701,16 @@ def train_classifier_epoch(
         step_checkpoint_payload["last_batch_acc"] = batch_acc
         step_checkpoint_payload["last_batch_per_class_accuracy"] = per_class_accuracy
         step_checkpoint_payload["last_batch_per_class_avg_confidence"] = per_class_avg_confidence
+        step_checkpoint_payload["last_batch_base_loss"] = float(second_base_loss.item())
+        step_checkpoint_payload["last_batch_confidence_gap_penalty"] = float(second_confidence_penalty.item())
+        step_checkpoint_payload["last_batch_targeted_confusion_penalty"] = float(second_targeted_penalty.item())
         step_resume_payload["last_batch_loss"] = float(second_loss.item())
         step_resume_payload["last_batch_acc"] = batch_acc
         step_resume_payload["last_batch_per_class_accuracy"] = per_class_accuracy
         step_resume_payload["last_batch_per_class_avg_confidence"] = per_class_avg_confidence
+        step_resume_payload["last_batch_base_loss"] = float(second_base_loss.item())
+        step_resume_payload["last_batch_confidence_gap_penalty"] = float(second_confidence_penalty.item())
+        step_resume_payload["last_batch_targeted_confusion_penalty"] = float(second_targeted_penalty.item())
         total_loss += second_loss.item() * batch_size
         total_base_loss += second_base_loss.item() * batch_size
         total_confidence_gap += second_confidence_penalty.item() * batch_size
@@ -2622,8 +2720,21 @@ def train_classifier_epoch(
         train_progress["global_train_step"] += 1
         train_progress["global_source_samples_seen"] += batch_size
         progress.set_postfix(
-            loss=f"{second_loss.item():.4f}",
-            acc=f"{batch_acc:.4f}",
+            build_progress_postfix(
+                step_in_epoch,
+                step_limit,
+                loss=second_loss.item(),
+                running_loss=total_loss / max(1, total_seen),
+                acc=batch_acc,
+                base_loss=second_base_loss.item(),
+                conf_gap=second_confidence_penalty.item(),
+                target_pen=second_targeted_penalty.item(),
+                lr=optimizer_learning_rates(optimizer),
+                samples=total_seen,
+                batch_size=batch_size,
+                pacc=per_class_accuracy,
+                pconf=per_class_avg_confidence,
+            )
         )
 
         if train_progress["global_train_step"] % log_every_steps == 0:
@@ -2864,6 +2975,7 @@ def evaluate_classifier(
             total=total_batches,
             desc=f"eval/{split}",
             leave=False,
+            dynamic_ncols=True,
         )
         for eval_step, (images, labels) in progress:
             images = move_images_to_device(images, device, args) if args is not None else images.to(device, non_blocking=True)
@@ -2889,7 +3001,21 @@ def evaluate_classifier(
             all_logits.append(logits.detach().cpu().float().numpy())
             all_targets.append(labels.detach().cpu().numpy())
             
-            progress.set_postfix(step=eval_step, loss=f"{loss.item():.4f}", acc=f"{batch_acc:.4f}")
+            progress.set_postfix(
+                build_progress_postfix(
+                    eval_step,
+                    total_batches,
+                    loss=loss.item(),
+                    acc=batch_acc,
+                    running_loss=total_loss / max(1, total_seen),
+                    samples=total_seen,
+                    batch_size=labels.size(0),
+                    **{
+                        "per_class_accuracy": batch_per_class_accuracy,
+                        "per_class_avg_confidence": batch_per_class_avg_confidence,
+                    },
+                )
+            )
             if eval_step % log_every_eval_steps == 0:
                 log_json_event(
                     log_path,
@@ -2949,6 +3075,7 @@ def collect_logits_and_labels(
             total=total_batches,
             desc=f"eval/{split}",
             leave=False,
+            dynamic_ncols=True,
         )
         for eval_step, (images, labels) in progress:
             images = move_images_to_device(images, device, eval_args)
@@ -2976,10 +3103,18 @@ def collect_logits_and_labels(
             
             total_seen += labels.size(0)
             
-            postfix = {"step": eval_step, "acc": f"{batch_acc:.4f}"}
-            if loss is not None:
-                postfix["loss"] = f"{loss.item():.4f}"
-            progress.set_postfix(**postfix)
+            progress.set_postfix(
+                build_progress_postfix(
+                    eval_step,
+                    total_batches,
+                    acc=batch_acc,
+                    loss=loss.item() if loss is not None else None,
+                    samples=total_seen,
+                    batch_size=labels.size(0),
+                    per_class_accuracy=batch_per_class_accuracy,
+                    per_class_avg_confidence=batch_per_class_avg_confidence,
+                )
+            )
             
             if eval_step % log_every_eval_steps == 0:
                 event = {
@@ -5042,7 +5177,7 @@ def run_experiment(args: argparse.Namespace) -> int:
                 epoch_loss_sum = 0.0
                 validation_index = start_supcon_validation_index if same_resume_phase and epoch == start_supcon_epoch else 0
                 phase_stopped = False
-                progress = tqdm(total=supcon_steps_per_epoch, leave=False)
+                progress = tqdm(total=supcon_steps_per_epoch, leave=False, dynamic_ncols=True, desc=f"supcon/{supcon_phase.name}")
 
                 while epoch_steps_done < supcon_steps_full_epoch:
                     step_start_index = epoch_steps_done * args.batch_size
@@ -5111,8 +5246,23 @@ def run_experiment(args: argparse.Namespace) -> int:
                     progress.update(steps_done)
                     last_supcon_metrics = supcon_step_resume_payload.get("last_batch_contrastive_metrics", {})
                     progress.set_postfix(
-                        loss=f"{supcon_step_resume_payload.get('last_batch_loss', window_train_loss):.4f}",
-                        margin=f"{last_supcon_metrics.get('positive_negative_cosine_margin', 0.0):.4f}",
+                        build_progress_postfix(
+                            epoch_steps_done,
+                            supcon_steps_full_epoch,
+                            loss=supcon_step_resume_payload.get("last_batch_loss", window_train_loss),
+                            running_loss=epoch_loss_sum / max(1, epoch_samples_seen),
+                            margin=last_supcon_metrics.get("positive_negative_cosine_margin", 0.0),
+                            same_cls=last_supcon_metrics.get("same_class_positive_cosine", 0.0),
+                            diff_cls=last_supcon_metrics.get("different_class_negative_cosine", 0.0),
+                            pos_pairs=last_supcon_metrics.get("positive_pair_count", 0),
+                            neg_pairs=last_supcon_metrics.get("negative_pair_count", 0),
+                            lr=optimizer_learning_rates(supcon_optimizer),
+                            samples=epoch_samples_seen,
+                            batch_size=args.batch_size,
+                            phase_train_loss_best=phase_train_loss_best,
+                            phase_train_loss_wait=phase_train_loss_wait,
+                            phase_validation_wait=phase_validation_wait,
+                        )
                     )
                     release_training_memory(device, supcon_train_loader)
 
@@ -5612,7 +5762,7 @@ def run_experiment(args: argparse.Namespace) -> int:
             epoch_correct_sum = 0.0
             validation_index = start_phase_validation_index if same_resume_phase and epoch == start_phase_epoch else 0
             phase_stopped = False
-            progress = tqdm(total=phase_steps_per_epoch, leave=False)
+            progress = tqdm(total=phase_steps_per_epoch, leave=False, dynamic_ncols=True, desc=f"classifier/{phase.name}")
 
             while epoch_steps_done < phase_steps_full_epoch:
                 step_start_index = epoch_steps_done * args.batch_size
@@ -5681,8 +5831,21 @@ def run_experiment(args: argparse.Namespace) -> int:
                 validation_index += 1
                 progress.update(steps_done)
                 progress.set_postfix(
-                    loss=f"{classifier_step_resume_payload.get('last_batch_loss', window_train_loss):.4f}",
-                    acc=f"{classifier_step_resume_payload.get('last_batch_acc', window_train_acc):.4f}",
+                    build_progress_postfix(
+                        epoch_steps_done,
+                        phase_steps_full_epoch,
+                        loss=classifier_step_resume_payload.get("last_batch_loss", window_train_loss),
+                        running_loss=epoch_loss_sum / max(1, epoch_samples_seen),
+                        acc=classifier_step_resume_payload.get("last_batch_acc", window_train_acc),
+                        base_loss=classifier_step_resume_payload.get("last_batch_base_loss", window_train_loss),
+                        conf_gap=classifier_step_resume_payload.get("last_batch_confidence_gap_penalty", 0.0),
+                        target_pen=classifier_step_resume_payload.get("last_batch_targeted_confusion_penalty", 0.0),
+                        lr=optimizer_learning_rates(optimizer),
+                        samples=epoch_samples_seen,
+                        batch_size=args.batch_size,
+                        pacc=classifier_step_resume_payload.get("last_batch_per_class_accuracy", {}),
+                        pconf=classifier_step_resume_payload.get("last_batch_per_class_avg_confidence", {}),
+                    )
                 )
                 release_training_memory(device, train_loader)
 

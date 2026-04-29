@@ -5,6 +5,8 @@ import argparse
 import itertools
 import json
 import math
+import random
+import time
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +30,7 @@ try:
         CAMERA_COLOR_CAST_PROBABILITY,
         CAMERA_COLOR_CAST_STRENGTH,
         CAMERA_COLOR_CAST_EVAL,
+        build_progress_postfix,
         build_datasets,
         make_balanced_sampler,
         evaluation_tensor_from_image,
@@ -45,6 +48,7 @@ except ModuleNotFoundError:
         CAMERA_COLOR_CAST_PROBABILITY,
         CAMERA_COLOR_CAST_STRENGTH,
         CAMERA_COLOR_CAST_EVAL,
+        build_progress_postfix,
         build_datasets,
         make_balanced_sampler,
         evaluation_tensor_from_image,
@@ -69,6 +73,12 @@ class Phase0WasteDataset(Dataset[tuple[torch.Tensor, int, str]]):
 
     def set_epoch(self, epoch: int) -> None:
         self.current_epoch = max(0, int(epoch))
+
+    def source_count(self) -> int:
+        return len(self.samples)
+
+    def source_target_for_index(self, index: int) -> int:
+        return int(self.samples[index][1])
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, int, str]:
         path, target = self.samples[index]
@@ -781,6 +791,9 @@ def main() -> int:
         effective_batch_loss_sum = 0.0
         effective_batch_microbatch_count = 0
         last_completed_epoch_batch_index = epoch_batch_offset
+        epoch_started_at = time.time()
+        latest_grad_norm = float("nan")
+        latest_effective_batch_loss = float("nan")
         optimizer.zero_grad(set_to_none=True)
         progress_total = len(loader)
         progress_desc = f"Phase0 epoch {epoch + 1}" if args.epochs <= 0 else f"Phase0 epoch {epoch + 1}/{args.epochs}"
@@ -796,7 +809,7 @@ def main() -> int:
             optimizer_lr=current_lr,
             args=args,
         )
-        progress = tqdm(loader, total=progress_total, desc=progress_desc)
+        progress = tqdm(loader, total=progress_total, desc=progress_desc, dynamic_ncols=True, leave=False)
         last_preview_images: torch.Tensor | None = None
         last_preview_pixel_mask: torch.Tensor | None = None
         last_preview_reconstructed: torch.Tensor | None = None
@@ -864,6 +877,8 @@ def main() -> int:
                 global_step += 1
                 completed_microbatches = effective_batch_microbatch_count
                 effective_batch_loss = effective_batch_loss_sum / max(1, completed_microbatches)
+                latest_effective_batch_loss = effective_batch_loss
+                latest_grad_norm = grad_norm
                 effective_batch_loss_sum = 0.0
                 effective_batch_microbatch_count = 0
                 train_loss_window_best_loss = min(train_loss_window_best_loss, effective_batch_loss)
@@ -1021,15 +1036,54 @@ def main() -> int:
                 if args.max_steps > 0 and global_step >= args.max_steps:
                     break
 
+            epoch_elapsed = max(time.time() - epoch_started_at, 1e-8)
             progress.set_postfix(
-                micro_loss=step_loss,
-                best=best_loss,
-                window_best=train_loss_window_best_loss,
-                batch_window=train_loss_window_batch_count,
-                plateaus=loss_plateau_windows_without_improvement,
+                build_progress_postfix(
+                    step_index,
+                    progress_total,
+                    micro_loss=step_loss,
+                    eff_loss=latest_effective_batch_loss,
+                    epoch_loss=epoch_loss_sum / max(1, epoch_sample_count),
+                    best=best_loss,
+                    window_best=train_loss_window_best_loss,
+                    grad_norm=latest_grad_norm,
+                    lr=current_lr,
+                    samples=epoch_sample_count,
+                    throughput=epoch_sample_count / epoch_elapsed,
+                    batch_window=train_loss_window_batch_count,
+                    plateaus=loss_plateau_windows_without_improvement,
+                    mb=f"{step_index}/{len(loader)}",
+                    mask_ratio=float(args.mask_ratio),
+                    batch_size=int(args.batch_size),
+                    eff_bs=int(args.batch_size * args.grad_accum_steps),
+                )
             )
 
         epoch_loss = epoch_loss_sum / max(1, epoch_sample_count)
+        epoch_elapsed = max(time.time() - epoch_started_at, 1e-8)
+        epoch_throughput = epoch_sample_count / epoch_elapsed
+        log_json_event(
+            log_path,
+            {
+                "event": "phase0_epoch_summary",
+                "epoch": epoch + 1,
+                "global_step": global_step,
+                "epoch_loss": epoch_loss,
+                "epoch_sample_count": epoch_sample_count,
+                "epoch_elapsed_seconds": epoch_elapsed,
+                "epoch_samples_per_second": epoch_throughput,
+                "best_loss": best_loss,
+                "train_loss_window_best_loss": train_loss_window_best_loss,
+                "train_loss_window_batch_count": train_loss_window_batch_count,
+                "loss_plateau_windows_without_improvement": loss_plateau_windows_without_improvement,
+                "optimizer_lr": current_lr,
+                "last_completed_epoch_batch_index": last_completed_epoch_batch_index,
+                "mask_ratio": float(args.mask_ratio),
+                "batch_size": int(args.batch_size),
+                "grad_accum_steps": int(args.grad_accum_steps),
+                "effective_batch_size": int(args.batch_size * args.grad_accum_steps),
+            },
+        )
         if args.max_steps > 0 and global_step >= args.max_steps:
             save_phase0_checkpoint(
                 last_checkpoint,
