@@ -36,12 +36,12 @@ except ModuleNotFoundError:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Generate a pink-tint sweep and a model-input preview using the repo's fixed preprocessing."
+        description="Generate a no-tint sweep and a model-input preview using the repo's fixed preprocessing."
     )
     parser.add_argument("--dataset-root", default="Dataset_Final")
     parser.add_argument("--split", choices=("train", "val", "test"), default="test")
     parser.add_argument("--image", default="", help="Optional explicit image path. Defaults to the first image in the split.")
-    parser.add_argument("--output-dir", default="Results/pink_tint_previews")
+    parser.add_argument("--output-dir", default="Results/no_tint_previews")
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--class-mapping", type=str, default="")
@@ -49,13 +49,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--runtime-bad-sample-cleanup", action="store_true")
     parser.add_argument("--augment-repeats", type=int, default=1)
     parser.add_argument("--augment-gaussian-sigmas", type=float, default=1.0)
-    parser.add_argument("--camera-color-cast-probability", type=float, default=1.0)
-    parser.add_argument("--camera-color-cast-strength", type=float, default=0.50)
-    parser.add_argument("--camera-color-cast-eval", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--camera-color-cast-probability", type=float, default=0.0)
+    parser.add_argument("--camera-color-cast-strength", type=float, default=0.0)
+    parser.add_argument("--camera-color-cast-eval", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument(
         "--tint-strengths",
         default="0.0,0.10,0.20,0.30,0.40,0.50,0.60",
-        help="Comma-separated tint strengths for the sweep panel.",
+        help="Comma-separated strengths for the sweep panel. Tint is disabled; values are kept for compatibility.",
     )
     return parser
 def _load_source_image(path: Path) -> Image.Image:
@@ -116,7 +116,7 @@ def main() -> int:
         sweep_images.append(tinted.clamp(0.0, 1.0).permute(1, 2, 0).cpu().numpy())
         sweep_titles.append(f"strength={strength:.2f}")
 
-    sweep_path = output_dir / f"{args.split}_pink_tint_sweep.png"
+    sweep_path = output_dir / f"{args.split}_no_tint_sweep.png"
     _make_panel(sweep_images, sweep_titles, sweep_path)
 
     model_input = apply_camera_color_cast(
@@ -133,7 +133,7 @@ def main() -> int:
             np.asarray(source_image),
             model_view.permute(1, 2, 0).cpu().numpy(),
         ],
-        ["source image", "model input after letterbox + tint"],
+        ["source image", "model input after letterbox"],
         model_path,
     )
 

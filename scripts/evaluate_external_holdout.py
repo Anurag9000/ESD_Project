@@ -101,7 +101,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--raw-input",
         action="store_true",
-        help="Evaluate the saved images as raw untinted images without applying the repo-wide pink cast.",
+        help="Evaluate the saved images as raw untinted images. Pink tint is disabled.",
     )
     return parser.parse_args()
 

@@ -470,31 +470,31 @@ def build_parser() -> argparse.ArgumentParser:
         "--augment-repeats",
         type=int,
         default=1,
-        help="Legacy compatibility knob retained for parser stability. Phase 0 now uses seeded crop/flip augmentation plus fixed tint.",
+        help="Legacy compatibility knob retained for parser stability. Phase 0 now uses seeded crop/flip augmentation with no tint.",
     )
     parser.add_argument(
         "--augment-gaussian-sigmas",
         type=float,
         default=1.0,
-        help="Legacy compatibility knob retained for parser stability. Phase 0 now uses seeded crop/flip augmentation plus fixed tint.",
+        help="Legacy compatibility knob retained for parser stability. Phase 0 now uses seeded crop/flip augmentation with no tint.",
     )
     parser.add_argument(
         "--camera-color-cast-probability",
         type=float,
         default=CAMERA_COLOR_CAST_PROBABILITY,
-        help="Fixed Raspberry Pi style magenta/pink cast applied to every Phase 0 image.",
+        help="Legacy compatibility knob retained for parser stability. Pink tint is disabled.",
     )
     parser.add_argument(
         "--camera-color-cast-strength",
         type=float,
         default=CAMERA_COLOR_CAST_STRENGTH,
-        help="Strength of the fixed Phase 0 magenta/pink cast. Default is 0.50.",
+        help="Legacy compatibility knob retained for parser stability. Pink tint is disabled.",
     )
     parser.add_argument(
         "--camera-color-cast-eval",
         action=argparse.BooleanOptionalAction,
         default=CAMERA_COLOR_CAST_EVAL,
-        help="Apply the same fixed magenta/pink cast to Phase 0 train, val, and test images.",
+        help="Legacy compatibility knob retained for parser stability. Pink tint is disabled.",
     )
     parser.add_argument("--class-mapping", type=str, default="")
     parser.add_argument("--auto-split-ratios", default="0.9,0.05,0.05")

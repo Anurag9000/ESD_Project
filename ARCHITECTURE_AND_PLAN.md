@@ -153,12 +153,12 @@ Resume is fully automatic: re-running the same `./run_training.sh --phase0-mim -
 - **Minimum Size:** 224px (strictly enforced on physical disk)
 - **Split Ratios:** 70% train / 20% val / 10% test
 - **Holdout Rule:** The test split is a strict protected holdout; it is not merged into training at any stage and is only evaluated after the best checkpoint is selected.
-- **Augmentation:** Train-time SupCon/CE views use deterministic-seeded random aspect-preserving crops plus horizontal/vertical flips; val/test stay deterministic apart from the fixed repo-wide Pi-camera pink tint
+- **Augmentation:** Train-time SupCon/CE views use deterministic-seeded random aspect-preserving crops plus horizontal/vertical flips; val/test stay deterministic with no tint
 - **SupCon diagnostics:** SupCon phases log loss plus same-image view cosine, same-class positive cosine, different-class negative cosine, and positive-minus-negative cosine margin. Classifier accuracy/confidence is logged only in CE/classifier phases.
 - **Class Balancing:** Balanced per-batch class cycling is the default and mandatory production path.
-- **Interpretability Audit:** At run start and after every completed phase, the pipeline generates fixed-tint test-set visualizations:
+- **Interpretability Audit:** At run start and after every completed phase, the pipeline generates test-set visualizations:
   a UMAP thumbnail embedding map and calibration plots.
-- **Augmentation types:** Train-only aspect-preserving random crop + horizontal/vertical flips, plus the fixed Pi-camera pink tint. Val/test remain deterministic apart from the tint.
+- **Augmentation types:** Train-only aspect-preserving random crop + horizontal/vertical flips. Val/test remain deterministic with no tint.
 
 ---
 

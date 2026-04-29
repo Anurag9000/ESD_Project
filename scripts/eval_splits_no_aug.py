@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 eval_splits_no_aug.py — Evaluate the model on train / val / test splits
-with the fixed repo-wide pink tint only.
+with the repo's no-tint preprocessing only.
 
 Uses the EXACT same deterministic split assignment as the training pipeline:
     seed=42, per-class source-stratified 90/5/5 shuffle via random.Random.

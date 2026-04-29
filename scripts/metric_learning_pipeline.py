@@ -63,9 +63,9 @@ LEGACY_8_CLASS_TAXONOMY = (
 SPLIT_OFFSETS = {"train": 0, "val": 10_000_000, "test": 20_000_000}
 SHADOW_PROBABILITY = 0.0
 GLARE_PROBABILITY = 0.0
-CAMERA_COLOR_CAST_PROBABILITY = 1.0
-CAMERA_COLOR_CAST_STRENGTH = 0.50
-CAMERA_COLOR_CAST_EVAL = True
+CAMERA_COLOR_CAST_PROBABILITY = 0.0
+CAMERA_COLOR_CAST_STRENGTH = 0.0
+CAMERA_COLOR_CAST_EVAL = False
 MOTION_BLUR_PROBABILITY = 0.0
 DEFOCUS_BLUR_PROBABILITY = 0.0
 RESOLUTION_DEGRADE_PROBABILITY = 0.0
@@ -406,7 +406,7 @@ class DeterministicAugmentedImageFolder(Dataset[tuple[torch.Tensor, int]]):
         self.camera_color_cast_eval = bool(camera_color_cast_eval)
         self.apply_augmentation = apply_augmentation
         # Train-time views may use deterministic-seeded random crop/flip augmentation.
-        # Validation/test stay deterministic apart from the fixed tint.
+        # Validation/test stay deterministic with no color cast.
         self.stochastic_augmentation = bool(apply_augmentation)
         self.dataset_root = dataset_root
         self.enable_runtime_bad_sample_cleanup = enable_runtime_bad_sample_cleanup
@@ -828,21 +828,9 @@ def apply_camera_color_cast(
     probability: float,
     strength: float,
 ) -> torch.Tensor:
-    """Apply the repo-wide fixed Raspberry Pi pink tint."""
-    _ = rng, gaussian_sigmas, probability
-    strength = max(0.0, float(strength))
-    if strength <= 0.0:
-        return tensor
-
-    red_gain = 1.0 + 0.70 * strength
-    green_gain = 1.0 - 0.35 * strength
-    blue_gain = 1.0 + 0.62 * strength
-    gains = torch.tensor([red_gain, green_gain, blue_gain], dtype=tensor.dtype, device=tensor.device).view(3, 1, 1)
-    tensor = tensor * gains
-
-    wash_opacity = 0.16 * strength
-    wash_color = torch.tensor([1.0, 0.72, 0.98], dtype=tensor.dtype, device=tensor.device).view(3, 1, 1)
-    return tensor * (1.0 - wash_opacity) + wash_color * wash_opacity
+    """Legacy compatibility hook; the pink tint is disabled."""
+    _ = rng, gaussian_sigmas, probability, strength
+    return tensor
 
 
 def resize_with_letterbox(image: Image.Image, image_size: int, *, fill: tuple[int, int, int] = (0, 0, 0)) -> Image.Image:
@@ -1469,7 +1457,7 @@ def build_datasets(
             args.camera_color_cast_probability,
             args.camera_color_cast_strength,
             args.camera_color_cast_eval,
-            apply_augmentation=False,  # deterministic eval path; only fixed tint is applied
+            apply_augmentation=False,  # deterministic eval path; no tint is applied
             class_mapping=class_mapping,
             dataset_root=root,
             enable_runtime_bad_sample_cleanup=args.runtime_bad_sample_cleanup,
@@ -1655,7 +1643,7 @@ def build_auto_split_datasets(
         args.camera_color_cast_probability,
         args.camera_color_cast_strength,
         args.camera_color_cast_eval,
-        apply_augmentation=False,  # deterministic eval path; only fixed tint is applied
+            apply_augmentation=False,  # deterministic eval path; no tint is applied
         base_dataset=base_dataset,
         samples=test_samples,
         dataset_root=root,
@@ -4320,36 +4308,34 @@ def build_parser() -> argparse.ArgumentParser:
         "--augment-repeats",
         type=int,
         default=1,
-        help="Legacy compatibility knob retained for parser stability. Fixed-tint preprocessing remains deterministic.",
+        help="Legacy compatibility knob retained for parser stability. Pink tint is disabled.",
     )
     parser.add_argument(
         "--augment-gaussian-sigmas",
         type=float,
         default=1.0,
-        help="Legacy compatibility knob retained for parser stability. Fixed-tint preprocessing remains deterministic.",
+        help="Legacy compatibility knob retained for parser stability. Pink tint is disabled.",
     )
     parser.add_argument(
         "--camera-color-cast-probability",
         type=float,
         default=CAMERA_COLOR_CAST_PROBABILITY,
         help=(
-            "Fixed Raspberry Pi style magenta/pink white-balance cast applied to every image. "
-            "No stochastic augmentations remain."
+            "Legacy compatibility knob retained for parser stability. Pink tint is disabled."
         ),
     )
     parser.add_argument(
         "--camera-color-cast-strength",
         type=float,
         default=CAMERA_COLOR_CAST_STRENGTH,
-        help="Strength of the fixed magenta/pink camera color-cast applied to every image. Default is 0.50.",
+        help="Legacy compatibility knob retained for parser stability. Pink tint is disabled.",
     )
     parser.add_argument(
         "--camera-color-cast-eval",
         action=argparse.BooleanOptionalAction,
         default=CAMERA_COLOR_CAST_EVAL,
         help=(
-            "Render validation/test Dataset_Final samples through the same fixed Pi-camera "
-            "magenta/pink cast used for training. External holdout images use the same fixed cast."
+            "Legacy compatibility knob retained for parser stability. Pink tint is disabled."
         ),
     )
     # SupCon and CE both respect the same permanent frozen-core boundary by default.

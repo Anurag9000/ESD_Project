@@ -45,9 +45,9 @@ SupCon logs report contrastive diagnostics only: same-image view cosine, same-cl
 | `--phase0-encoder-checkpoint` | `""` | Optional Phase 0 masked-image-modeling encoder checkpoint to seed the backbone before SupCon/CE starts. |
 | `--augment-repeats` | `1` | Deterministic repeat factor per source image. Train-time views use seeded random aspect-preserving crops plus flips; val/test stay deterministic. |
 | `--augment-gaussian-sigmas` | `1.0` | Legacy compatibility knob retained for parser compatibility only. It no longer drives any random augmentation. |
-| `--camera-color-cast-probability` | `1.0` | Fixed Pi-camera style magenta/pink white-balance cast applied to every image in the pipeline. |
-| `--camera-color-cast-strength` | `0.50` | Strength of the fixed magenta/pink cast applied to every image. |
-| `--camera-color-cast-eval` / `--no-camera-color-cast-eval` | `true` | Kept for compatibility. The fixed magenta cast is always applied after preprocessing; train-time views also use seeded random crop + flip augmentation. |
+| `--camera-color-cast-probability` | `0.0` | Legacy compatibility knob. Pink tint is disabled. |
+| `--camera-color-cast-strength` | `0.0` | Legacy compatibility knob. Pink tint is disabled. |
+| `--camera-color-cast-eval` / `--no-camera-color-cast-eval` | `false` | Kept for compatibility. Pink tint is disabled. |
 | `--frozen-core-backbone-modules` | `40` | Number of earliest backbone leaf modules kept frozen in every SupCon, CE, and recursive phase. Default freezes the stem/core 40 modules. |
 | `--supcon-unfreeze-backbone-modules` | `None` | Optional extra cap on how many tail modules SupCon may unfreeze. When unset, SupCon may train only the tail left after the frozen 40-module core. |
 | `--ce-max-unfreeze-modules` | `None` | Optional extra cap on how many tail modules CE may unfreeze, including the `full_model` path. When unset, CE may train only the tail left after the frozen 40-module core. |
@@ -94,8 +94,8 @@ SupCon logs report contrastive diagnostics only: same-image view cosine, same-cl
 | `--image-size` | `224` | Input resolution for masking and reconstruction. |
 | `--augment-repeats` | `1` | Passed through to the repo dataset builder. The train split uses seeded random crop + flip views; val/test stay deterministic. Phase 0 uses the same crop/flip policy now. |
 | `--augment-gaussian-sigmas` | `1.0` | Legacy compatibility knob retained for parser compatibility only. |
-| `--camera-color-cast-probability` | `1.0` | Fixed Pi-camera color cast applied to every Phase 0 image. |
-| `--camera-color-cast-strength` | `0.50` | Strength of the fixed Phase 0 magenta/pink cast. |
+| `--camera-color-cast-probability` | `0.0` | Legacy compatibility knob. Pink tint is disabled. |
+| `--camera-color-cast-strength` | `0.0` | Legacy compatibility knob. Pink tint is disabled. |
 | `--camera-color-cast-eval` / `--no-camera-color-cast-eval` | `true` | Compatibility flag; the fixed cast is always applied, while train-time views and Phase 0 also use seeded random crop + flip augmentation. |
 | `--class-mapping` | `""` | Optional JSON merge map passed to the repo dataset builder. |
 | `--auto-split-ratios` | `0.9,0.05,0.05` | Auto-split ratios when the dataset root has no explicit train/val/test layout. |
