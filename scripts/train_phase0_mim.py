@@ -603,6 +603,104 @@ def _phase0_masked_psnr(predictions: torch.Tensor, targets: torch.Tensor, pixel_
     return torch.tensor(_phase0_psnr_from_mse(_phase0_masked_mse(predictions, targets, pixel_mask)), device=predictions.device)
 
 
+def _phase0_format_float(value: float | None, *, precision: int = 4, scientific: bool = False) -> str:
+    if value is None:
+        return "n/a"
+    if not math.isfinite(float(value)):
+        return str(float(value))
+    return f"{float(value):.{precision}{'e' if scientific else 'f'}}"
+
+
+def _phase0_format_step_block(
+    *,
+    epoch: int,
+    step: int,
+    loss: float,
+    lr: float,
+    grad_norm: float | None,
+    pred_mean: float,
+    pred_std: float,
+    target_mean: float,
+    target_std: float,
+    mask_ratio_actual: float,
+    amp_scale: float,
+    skipped_optimizer_step: bool,
+    step_time_sec: float,
+    gpu_memory_allocated: float,
+    masked_mse: float,
+    masked_mae: float,
+    masked_psnr: float,
+    full_mse: float,
+    full_psnr: float,
+    pred_norm_mean: float | None = None,
+    pred_norm_std: float | None = None,
+    target_norm_mean: float | None = None,
+    target_norm_std: float | None = None,
+    pred_rgb_after_unnorm_std: float | None = None,
+    masked_psnr_after_unnorm: float | None = None,
+) -> str:
+    lines = [
+        f"[phase0][step {step} | epoch {epoch}]",
+        f"  loss={loss:.4f} lr={lr:.2e} grad_norm={_phase0_format_float(grad_norm, precision=4)}",
+        f"  pred_mean={pred_mean:.4f} pred_std={pred_std:.4f} target_mean={target_mean:.4f} target_std={target_std:.4f}",
+        f"  mask_ratio_actual={mask_ratio_actual:.4f} amp_scale={amp_scale:.2e} skipped_optimizer_step={'yes' if skipped_optimizer_step else 'no'}",
+        f"  step_time_sec={step_time_sec:.1f} gpu_memory_allocated={gpu_memory_allocated / (1024.0 ** 2):.0f}MiB",
+        f"  masked_mse={masked_mse:.4f} masked_mae={masked_mae:.4f} masked_psnr={masked_psnr:.2f} full_mse={full_mse:.4f} full_psnr={full_psnr:.2f}",
+    ]
+    if pred_norm_mean is not None or pred_norm_std is not None or target_norm_mean is not None or target_norm_std is not None or pred_rgb_after_unnorm_std is not None or masked_psnr_after_unnorm is not None:
+        lines.append(
+            "  patchnorm: "
+            f"pred_norm_mean={_phase0_format_float(pred_norm_mean)} "
+            f"pred_norm_std={_phase0_format_float(pred_norm_std)} "
+            f"target_norm_mean={_phase0_format_float(target_norm_mean)} "
+            f"target_norm_std={_phase0_format_float(target_norm_std)} "
+            f"pred_rgb_after_unnorm_std={_phase0_format_float(pred_rgb_after_unnorm_std)} "
+            f"masked_psnr_after_unnorm={_phase0_format_float(masked_psnr_after_unnorm, precision=2)}"
+        )
+    return "\n".join(lines)
+
+
+def _phase0_format_epoch_block(
+    *,
+    epoch: int,
+    train_loss_mean: float,
+    val_loss_mean: float | None,
+    masked_mse: float,
+    masked_mae: float,
+    masked_psnr: float,
+    full_mse: float,
+    full_psnr: float,
+    pred_std_mean: float,
+    grad_norm_mean: float,
+    lr_last: float,
+    epoch_time_sec: float,
+    pred_norm_mean: float | None = None,
+    pred_norm_std: float | None = None,
+    target_norm_mean: float | None = None,
+    target_norm_std: float | None = None,
+    pred_rgb_after_unnorm_std: float | None = None,
+    masked_psnr_after_unnorm: float | None = None,
+) -> str:
+    lines = [
+        f"[phase0][epoch {epoch}]",
+        f"  train_loss_mean={train_loss_mean:.4f} val_loss_mean={_phase0_format_float(val_loss_mean)}",
+        f"  masked_mse={masked_mse:.4f} masked_mae={masked_mae:.4f} masked_psnr={masked_psnr:.2f}",
+        f"  full_mse={full_mse:.4f} full_psnr={full_psnr:.2f}",
+        f"  pred_std_mean={pred_std_mean:.4f} grad_norm_mean={grad_norm_mean:.4f} lr_last={lr_last:.2e} epoch_time_sec={epoch_time_sec:.1f}",
+    ]
+    if pred_norm_mean is not None or pred_norm_std is not None or target_norm_mean is not None or target_norm_std is not None or pred_rgb_after_unnorm_std is not None or masked_psnr_after_unnorm is not None:
+        lines.append(
+            "  patchnorm: "
+            f"pred_norm_mean={_phase0_format_float(pred_norm_mean)} "
+            f"pred_norm_std={_phase0_format_float(pred_norm_std)} "
+            f"target_norm_mean={_phase0_format_float(target_norm_mean)} "
+            f"target_norm_std={_phase0_format_float(target_norm_std)} "
+            f"pred_rgb_after_unnorm_std={_phase0_format_float(pred_rgb_after_unnorm_std)} "
+            f"masked_psnr_after_unnorm={_phase0_format_float(masked_psnr_after_unnorm, precision=2)}"
+        )
+    return "\n".join(lines)
+
+
 def patchify_phase0_images(images: torch.Tensor, patch_size: int) -> torch.Tensor:
     if images.ndim != 4:
         raise ValueError(f"Expected 4D image tensors, got shape {tuple(images.shape)}")
@@ -1605,26 +1703,6 @@ def main() -> int:
                 args=args,
             )
 
-            progress.set_postfix(
-                build_progress_postfix(
-                    global_step if global_step > 0 else step_index,
-                    None,
-                    epoch=epoch + 1,
-                    loss=step_loss,
-                    lr=current_lr,
-                    grad_norm=latest_grad_norm,
-                    pred_mean=prediction_mean,
-                    pred_std=prediction_std,
-                    target_mean=target_mean,
-                    target_std=target_std,
-                    mask_ratio_actual=masked_ratio_actual,
-                    amp_scale=latest_amp_scale,
-                    skipped_optimizer_step=latest_skipped_optimizer_step,
-                    step_time_sec=latest_step_time_sec,
-                    gpu_memory_allocated=latest_gpu_memory_allocated,
-                )
-            )
-
             if step_index % args.grad_accum_steps == 0 or step_index == len(loader):
                 scaler.unscale_(optimizer)
                 grad_norm = float(nn.utils.clip_grad_norm_(model.parameters(), max_norm=float(args.grad_clip_norm)))
@@ -1741,25 +1819,35 @@ def main() -> int:
                         "gpu_memory_allocated": latest_gpu_memory_allocated,
                     },
                 )
-
-                step_postfix = build_progress_postfix(
-                    global_step,
-                    None,
-                    epoch=epoch + 1,
-                    loss=effective_batch_loss,
-                    lr=current_lr,
-                    grad_norm=grad_norm,
-                    pred_mean=prediction_mean,
-                    pred_std=prediction_std,
-                    target_mean=target_mean,
-                    target_std=target_std,
-                    mask_ratio_actual=masked_ratio_actual,
-                    amp_scale=latest_amp_scale,
-                    skipped_optimizer_step=latest_skipped_optimizer_step,
-                    step_time_sec=latest_step_time_sec,
-                    gpu_memory_allocated=latest_gpu_memory_allocated,
+                tqdm.write(
+                    _phase0_format_step_block(
+                        epoch=epoch + 1,
+                        step=global_step,
+                        loss=effective_batch_loss,
+                        lr=current_lr,
+                        grad_norm=grad_norm,
+                        pred_mean=prediction_mean,
+                        pred_std=prediction_std,
+                        target_mean=target_mean,
+                        target_std=target_std,
+                        mask_ratio_actual=masked_ratio_actual,
+                        amp_scale=latest_amp_scale,
+                        skipped_optimizer_step=latest_skipped_optimizer_step,
+                        step_time_sec=latest_step_time_sec,
+                        gpu_memory_allocated=latest_gpu_memory_allocated,
+                        masked_mse=monitoring_metrics["masked_mse"],
+                        masked_mae=monitoring_metrics["masked_mae"],
+                        masked_psnr=monitoring_metrics["masked_psnr"],
+                        full_mse=monitoring_metrics["full_mse"],
+                        full_psnr=monitoring_metrics["full_psnr"],
+                        pred_norm_mean=monitoring_metrics.get("pred_norm_mean"),
+                        pred_norm_std=monitoring_metrics.get("pred_norm_std"),
+                        target_norm_mean=monitoring_metrics.get("target_norm_mean"),
+                        target_norm_std=monitoring_metrics.get("target_norm_std"),
+                        pred_rgb_after_unnorm_std=monitoring_metrics.get("pred_rgb_after_unnorm_std"),
+                        masked_psnr_after_unnorm=monitoring_metrics.get("masked_psnr_after_unnorm"),
+                    )
                 )
-                progress.set_postfix(step_postfix)
 
                 if train_loss_window_batch_count >= args.train_loss_window:
                     window_best_loss = train_loss_window_best_loss
@@ -1894,32 +1982,6 @@ def main() -> int:
                 if args.max_steps > 0 and global_step >= args.max_steps:
                     break
 
-            epoch_elapsed = max(time.time() - epoch_started_at, 1e-8)
-            progress.set_postfix(
-                build_progress_postfix(
-                    step_index,
-                    progress_total,
-                    micro_loss=step_loss,
-                    eff_loss=latest_effective_batch_loss,
-                    epoch_loss=epoch_loss_sum / max(1, epoch_sample_count),
-                    best=best_loss,
-                    window_best=train_loss_window_best_loss,
-                    grad_norm=latest_grad_norm,
-                    lr=current_lr,
-                    samples=epoch_sample_count,
-                    throughput=epoch_sample_count / epoch_elapsed,
-                    batch_window=train_loss_window_batch_count,
-                    plateaus=loss_plateau_windows_without_improvement,
-                    mb=f"{step_index}/{len(loader)}",
-                    mask_ratio=float(args.mask_ratio),
-                    mask_ratio_actual=masked_ratio_actual,
-                    batch_size=int(args.batch_size),
-                    eff_bs=int(args.batch_size * args.grad_accum_steps),
-                    pred_std=prediction_std,
-                    tgt_std=target_std,
-                )
-            )
-
         epoch_loss = epoch_loss_sum / max(1, epoch_sample_count)
         epoch_elapsed = max(time.time() - epoch_started_at, 1e-8)
         epoch_throughput = epoch_sample_count / epoch_elapsed
@@ -1968,30 +2030,28 @@ def main() -> int:
                 "effective_batch_size": int(args.batch_size * args.grad_accum_steps),
             },
         )
-        epoch_summary_message = (
-            f"[phase0][epoch {epoch + 1}] "
-            f"train_loss_mean={epoch_loss:.4f} "
-            f"val_loss_mean=n/a "
-            f"masked_mse={epoch_masked_mse:.4f} "
-            f"masked_mae={epoch_masked_mae:.4f} "
-            f"masked_psnr={epoch_masked_psnr:.2f} "
-            f"full_mse={epoch_full_mse:.4f} "
-            f"full_psnr={epoch_full_psnr:.2f} "
-            f"pred_std_mean={epoch_pred_std_mean:.4f} "
-            f"grad_norm_mean={epoch_grad_norm_mean:.4f} "
-            f"lr_last={epoch_lr_last:.2e} "
-            f"epoch_time_sec={epoch_elapsed:.1f}"
-        )
-        if args.loss_mode == PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE:
-            epoch_summary_message += (
-                f" pred_norm_mean={epoch_pred_norm_mean:.4f}"
-                f" pred_norm_std={epoch_pred_norm_std:.4f}"
-                f" target_norm_mean={epoch_target_norm_mean:.4f}"
-                f" target_norm_std={epoch_target_norm_std:.4f}"
-                f" pred_rgb_after_unnorm_std={epoch_pred_rgb_after_unnorm_std:.4f}"
-                f" masked_psnr_after_unnorm={epoch_masked_psnr_after_unnorm:.2f}"
+        tqdm.write(
+            _phase0_format_epoch_block(
+                epoch=epoch + 1,
+                train_loss_mean=epoch_loss,
+                val_loss_mean=None,
+                masked_mse=epoch_masked_mse,
+                masked_mae=epoch_masked_mae,
+                masked_psnr=epoch_masked_psnr,
+                full_mse=epoch_full_mse,
+                full_psnr=epoch_full_psnr,
+                pred_std_mean=epoch_pred_std_mean,
+                grad_norm_mean=epoch_grad_norm_mean,
+                lr_last=epoch_lr_last,
+                epoch_time_sec=epoch_elapsed,
+                pred_norm_mean=epoch_pred_norm_mean if args.loss_mode == PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE else None,
+                pred_norm_std=epoch_pred_norm_std if args.loss_mode == PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE else None,
+                target_norm_mean=epoch_target_norm_mean if args.loss_mode == PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE else None,
+                target_norm_std=epoch_target_norm_std if args.loss_mode == PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE else None,
+                pred_rgb_after_unnorm_std=epoch_pred_rgb_after_unnorm_std if args.loss_mode == PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE else None,
+                masked_psnr_after_unnorm=epoch_masked_psnr_after_unnorm if args.loss_mode == PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE else None,
             )
-        tqdm.write(epoch_summary_message)
+        )
         if args.max_steps > 0 and global_step >= args.max_steps:
             save_phase0_checkpoint(
                 last_checkpoint,
