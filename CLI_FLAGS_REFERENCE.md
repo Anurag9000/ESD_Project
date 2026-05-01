@@ -89,7 +89,7 @@ SupCon logs report contrastive diagnostics only: same-image view cosine, same-cl
 | `--dataset-root` | `Dataset_Final` | Dataset root used to build the clean train split. |
 | `--output-dir` | `Results/phase0_mim` | Phase 0 checkpoint output root. |
 | `--log-file` | `logs/phase0_mim.log.jsonl` | Structured Phase 0 JSONL log. |
-| `--backbone` | `atto` | Backbone selection used for the encoder. Any timm backbone string is accepted. Phase 0 uses pure `convnextv2_femto.fcmae`; direct Phase 1+ starts use `convnextv2_atto.fcmae_ft_in1k` by default. |
+| `--backbone` | `atto` | Backbone selection used for the encoder. Any timm backbone string is accepted. Phase 0 uses the pure `.fcmae` variant for the chosen backbone when `--weights default` is set; direct Phase 1+ starts use the corresponding `.fcmae_ft_in1k` pretrained variant by default. |
 | `--weights` | `default` | For Phase 0, `default` means use the pure `.fcmae` backbone weights; `none` means scratch init. |
 | `--image-size` | `224` | Input resolution for masking and reconstruction. |
 | `--augment-repeats` | `1` | Passed through to the repo dataset builder. The train split uses seeded random crop + flip views; val/test stay deterministic. Phase 0 uses the same crop/flip policy now. |
@@ -100,16 +100,24 @@ SupCon logs report contrastive diagnostics only: same-image view cosine, same-cl
 | `--class-mapping` | `""` | Optional JSON merge map passed to the repo dataset builder. |
 | `--auto-split-ratios` | `0.9,0.05,0.05` | Auto-split ratios when the dataset root has no explicit train/val/test layout. |
 | `--runtime-bad-sample-cleanup` | `false` | Mirror the main trainer's runtime bad-sample cleanup behavior. |
-| `--batch-size` | `128` | Physical batch size for Phase 0 masking reconstruction. Uses the same class-balanced sampler as the supervised stages. Combined with `--grad-accum-steps 2` this gives an effective batch size of 256. |
+| `--batch-size` | `512` | Physical batch size for Phase 0 masking reconstruction. Uses the same class-balanced sampler as the supervised stages. Combined with `--grad-accum-steps 2` this gives an effective batch size of 1024. |
 | `--num-workers` | `2` | DataLoader worker count. |
 | `--prefetch-factor` | `1` | Prefetch depth per worker. |
 | `--epochs` | `0` | Phase 0 epoch cap. `0` means run until early stopping or max-steps termination. |
-| `--grad-accum-steps` | `2` | Gradient accumulation factor for Phase 0. The default effective batch size is 256. |
+| `--grad-accum-steps` | `2` | Gradient accumulation factor for Phase 0. The default effective batch size is 1024. |
 | `--mask-ratio` | `0.6` | Fraction of patches masked before reconstruction. |
 | `--patch-size` | `32` | Patch size used by the spatial mask generator. |
 | `--decoder-dim` | `512` | Hidden width of the reconstruction decoder. Phase 0 currently uses a single decoder block again. |
 | `--grad-clip-norm` | `1.0` | Global norm cap applied after `backward()` and before the Phase 0 optimizer step. |
+| `--loss-mode` | `patch_normalized_mse` | Phase 0 reconstruction objective. `raw_mse` uses masked raw pixel MSE; `patch_normalized_mse` uses masked patch-normalized MSE. On resume, the saved checkpoint's mode is auto-detected and takes precedence unless you intentionally start a new run. |
 | `--learning-rate` | `1.5e-4` | AdamW learning rate for Phase 0. |
+| `--lr-scale-base-batch-size` | `256` | Reference effective batch size used for linear LR scaling. Phase 0 computes `scaled_lr = base_lr * effective_batch_size / lr_scale_base_batch_size`. |
+| `--warmup-epochs` | `10` | Linear warmup length for Phase 0, measured in optimizer-step epochs. |
+| `--warmup-steps` | `0` | Explicit linear warmup length in optimizer steps. Overrides `--warmup-epochs` when set > 0. |
+| `--scheduler-mode` | `warmup_constant` | Phase 0 learning-rate schedule after warmup. Use `warmup_cosine` only when you also provide a real `--total-steps` horizon. |
+| `--total-steps` | `0` | Total optimizer steps for the Phase 0 cosine horizon. Required only for `--scheduler-mode warmup_cosine`. |
+| `--adamw-beta1` | `0.9` | AdamW beta1 for Phase 0. |
+| `--adamw-beta2` | `0.95` | AdamW beta2 for Phase 0. |
 | `--weight-decay` | `0.05` | AdamW weight decay for Phase 0. |
 | `--seed` | `42` | RNG seed. |
 | `--train-loss-window` | `5000` | Number of effective optimizer batches in one Phase 0 plateau window. With defaults, this is `5000 x 256` train images processed. |
@@ -254,7 +262,10 @@ These are not `argparse` flags, but they control the shell wrappers and the acti
 - `run_training.sh` supports optional Phase 0 MIM pretraining via `--phase0-mim` plus `--phase0-mim-*` controls; when enabled it exports `phase0_mim/phase0_encoder_final.pth` and passes it into the progressive trainer via `--phase0-encoder-checkpoint`.
 - `run_training.sh` forwards `--phase0-mim-grad-clip-norm` into Phase 0. The default is `1.0`, matching the standalone Phase 0 launcher.
 - `--phase0-mim-train-loss-window` controls the Phase 0 early-stopping window in effective optimizer batches. The default is `5000`.
-- Phase 0 uses the same balanced class sampler as SupCon and CE. It defaults to `batch-size 128` with `grad-accum-steps 2`, giving the same effective batch size of 256 without changing the rest of the pipeline defaults.
+- `--phase0-mim-loss-mode raw_mse|patch_normalized_mse` selects the Phase 0 reconstruction objective when running through `run_training.sh`. The standalone phase-0 launcher exposes the same `--loss-mode` flag directly. On resume, both paths auto-detect the saved checkpoint's loss mode and continue with that mode even if the CLI flag is omitted.
+- `run_training.sh` now forwards `--phase0-mim-lr-scale-base-batch-size`, `--phase0-mim-warmup-epochs`, and `--phase0-mim-warmup-steps` into Phase 0 so the LR scaling and warmup recipe stays available from the wrapper.
+- `run_training.sh` also forwards `--phase0-mim-scheduler-mode`, `--phase0-mim-total-steps`, `--phase0-mim-adamw-beta1`, and `--phase0-mim-adamw-beta2` so the Phase 0 schedule can stay warmup-only by default or use a real cosine horizon when explicitly requested.
+- Phase 0 uses the same balanced class sampler as SupCon and CE. It defaults to `batch-size 512` with `grad-accum-steps 2`, giving the same effective batch size of 1024 without changing the rest of the pipeline defaults.
 - The default train split uses only the logical 3-class taxonomy and still excludes plastic.
 - Phase 0 reconstruction previews are written to `Results/<run>/phase0_mim/reconstruction_previews/` by default. The standalone renderer `scripts/visualize_phase0_reconstruction.py` can regenerate a preview from any saved `best.pt` or `last.pt`.
 - Re-running the exact same `run_training.sh` command is the resume path. The wrapper skips completed Phase 0/progressive stages and resumes the incomplete stage from that stage's own `step_last.pt` first, then `last.pt`.

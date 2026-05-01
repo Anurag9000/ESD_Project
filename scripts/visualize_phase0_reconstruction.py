@@ -57,6 +57,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--camera-color-cast-probability", type=float, default=1.0)
     parser.add_argument("--camera-color-cast-strength", type=float, default=0.50)
     parser.add_argument("--camera-color-cast-eval", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--loss-mode",
+        choices=("auto", "raw_mse", "patch_normalized_mse"),
+        default="auto",
+        help="How to render the checkpoint preview. Auto reads the saved checkpoint args.",
+    )
     return parser
 
 
@@ -92,6 +98,10 @@ def main() -> int:
     state_dict = payload.get("model_state_dict") if isinstance(payload, dict) and "model_state_dict" in payload else payload
     epoch = int(payload.get("epoch", 0)) if isinstance(payload, dict) else 0
     global_step = int(payload.get("step", 0)) if isinstance(payload, dict) else 0
+    checkpoint_args = payload.get("args", {}) if isinstance(payload, dict) else {}
+    render_loss_mode = args.loss_mode
+    if render_loss_mode == "auto":
+        render_loss_mode = str(checkpoint_args.get("loss_mode", "patch_normalized_mse"))
     model.load_state_dict(state_dict)
     model.eval()
 
@@ -116,6 +126,7 @@ def main() -> int:
         pixel_mask=pixel_mask,
         reconstructed=reconstructed,
         patch_size=args.patch_size,
+        loss_mode=render_loss_mode,
         epoch=epoch,
         global_step=global_step,
         sample_count=args.sample_count,

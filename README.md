@@ -54,18 +54,38 @@ source .venv/bin/activate
 
 # Launches the full staged lifecycle automatically.
 # Defaults now include:
-# - Phase 0 MIM trains the full backbone with the same balanced class sampler and an effective 256 batch size via 128-image physical batches plus 2-step accumulation, then SupCon/CE re-freeze the earliest 40 leaf modules
-# - Phase 0 seeds from pure `convnextv2_femto.fcmae`; direct SupCon/CE/recursive starts seed from `convnextv2_atto.fcmae_ft_in1k`
+# - Phase 0 MIM trains the full backbone with the same balanced class sampler and an effective 1024 batch size via 512-image physical batches plus 2-step accumulation, then SupCon/CE re-freeze the earliest 40 leaf modules
+# - Phase 0 seeds from the pure `.fcmae` variant of the selected backbone; direct SupCon/CE/recursive starts seed from the matching `.fcmae_ft_in1k` pretrained variant by default
 # - Train split SupCon/CE views and Phase 0 MIM use deterministic-seeded random aspect-preserving crops plus H/V flips; val/test remain deterministic letterbox with no tint
 # - SupCon logs same-image view cosine, same-class positive cosine, different-class negative cosine, and positive-minus-negative cosine margin instead of classifier accuracy
-# - Phase 0 MIM uses patch-normalized reconstruction with `1e-2` epsilon and clips gradients at norm `1.0`
+# - Phase 0 MIM now uses effective-batch LR scaling against a 256 reference batch and linear warmup by default; it stays warmup-only unless you explicitly provide a fixed horizon for cosine decay, and it still defaults to patch-normalized reconstruction with `1e-2` epsilon and gradient clipping at norm `1.0`, but you can switch to raw masked pixel MSE with `--loss-mode raw_mse` or `--phase0-mim-loss-mode raw_mse` via `run_training.sh`; resume auto-detects the saved checkpoint's mode
 # - Phase 0 decoder is back to a single reconstruction block
 # - validation triggered by train-step patience
 # - patience 3 across SupCon, CE head, CE stages, and the default recursive val_loss stage
 # - recursive acceptance threshold 0.0 for the default val_loss recursive pass
 # - val_raw_acc recursive refinement is opt-in only via ENABLE_RAWACC_REFINEMENT=1
 # - automatic same-command resume from the incomplete phase's own step_last.pt or last.pt
-./run_training.sh --phase0-mim --backbone femto --num-workers 2 --prefetch-factor 1
+./run_training.sh --phase0-mim --backbone atto --num-workers 2 --prefetch-factor 1
+```
+
+### Phase 0 Tiny Overfit Sanity Check
+```bash
+./.venv/bin/python scripts/train_phase0_mim.py \
+  --dataset-root Dataset_Final \
+  --output-dir Results/phase0_tiny_overfit \
+  --log-file logs/phase0_tiny_overfit.log.jsonl \
+  --backbone atto \
+  --weights default \
+  --loss-mode raw_mse \
+  --batch-size 8 \
+  --grad-accum-steps 1 \
+  --max-steps 2000 \
+  --train-loss-window 32 \
+  --reconstruction-preview-interval 1 \
+  --reconstruction-preview-count 4 \
+  --warmup-epochs 2 \
+  --scheduler-mode warmup_constant \
+  --learning-rate 1.5e-4
 ```
 
 ### Resume After Interruption (Exact Same Command)
@@ -75,7 +95,7 @@ source .venv/bin/activate
 
 # Same command as fresh launch. Completed phases are skipped; the incomplete
 # phase resumes from its own step_last.pt or last.pt.
-./run_training.sh --phase0-mim --backbone femto --num-workers 2 --prefetch-factor 1
+./run_training.sh --phase0-mim --backbone atto --num-workers 2 --prefetch-factor 1
 ```
 
 ### End-of-Run Test Report

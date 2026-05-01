@@ -22,6 +22,14 @@ from tqdm import tqdm
 PHASE0_EARLY_STOPPING_MODE = "effective_batch_window_best_v3"
 PHASE0_PATCH_NORMALIZATION_EPS = 1e-2
 PHASE0_GRAD_CLIP_NORM = 1.0
+PHASE0_LOSS_MODE_RAW_MSE = "raw_mse"
+PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE = "patch_normalized_mse"
+PHASE0_LR_SCALE_BASE_BATCH_SIZE = 256
+PHASE0_WARMUP_EPOCHS = 10
+PHASE0_SCHEDULER_MODE_WARMUP_CONSTANT = "warmup_constant"
+PHASE0_SCHEDULER_MODE_WARMUP_COSINE = "warmup_cosine"
+PHASE0_ADAMW_BETA1 = 0.9
+PHASE0_ADAMW_BETA2 = 0.95
 
 try:
     from metric_learning_pipeline import (
@@ -125,6 +133,31 @@ class SpatialMaskGenerator:
         return pixel_mask, mask_2d
 
 
+def compute_raw_mse_loss(
+    predictions: torch.Tensor,
+    targets: torch.Tensor,
+    pixel_mask: torch.Tensor,
+) -> torch.Tensor:
+    if predictions.shape != targets.shape:
+        raise ValueError(f"Prediction/target shape mismatch: {tuple(predictions.shape)} vs {tuple(targets.shape)}")
+    if predictions.ndim != 4:
+        raise ValueError(f"Expected 4D image tensors, got shape {tuple(predictions.shape)}")
+    if pixel_mask.ndim != 4:
+        raise ValueError(f"Expected 4D mask tensor, got shape {tuple(pixel_mask.shape)}")
+    if pixel_mask.shape[0] != predictions.shape[0] or pixel_mask.shape[2:] != predictions.shape[2:]:
+        raise ValueError(f"Mask shape mismatch: {tuple(pixel_mask.shape)} vs {tuple(predictions.shape)}")
+
+    if pixel_mask.shape[1] == 1 and predictions.shape[1] > 1:
+        pixel_mask = pixel_mask.expand(-1, predictions.shape[1], -1, -1)
+    elif pixel_mask.shape != predictions.shape:
+        raise ValueError(f"Mask channel mismatch: {tuple(pixel_mask.shape)} vs {tuple(predictions.shape)}")
+
+    loss = (predictions - targets).pow(2)
+    masked_loss = (loss * pixel_mask).sum()
+    normalizer = pixel_mask.sum() + 1e-8
+    return masked_loss / normalizer
+
+
 def compute_patch_normalized_mse_loss(
     predictions: torch.Tensor,
     targets: torch.Tensor,
@@ -137,6 +170,8 @@ def compute_patch_normalized_mse_loss(
         raise ValueError(f"Expected 4D image tensors, got shape {tuple(predictions.shape)}")
     if predictions.shape[2] % patch_size != 0 or predictions.shape[3] % patch_size != 0:
         raise ValueError("Image size must be divisible by patch_size for patch-normalized loss.")
+    if pixel_mask.shape != predictions.shape:
+        raise ValueError(f"Mask shape mismatch: {tuple(pixel_mask.shape)} vs {tuple(predictions.shape)}")
 
     preds = predictions.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size)
     targs = targets.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size)
@@ -150,6 +185,60 @@ def compute_patch_normalized_mse_loss(
     masked_loss = (loss * mask).sum()
     normalizer = mask.sum() * predictions.shape[1] + 1e-8
     return masked_loss / normalizer
+
+
+def compute_phase0_reconstruction_loss(
+    predictions: torch.Tensor,
+    targets: torch.Tensor,
+    pixel_mask: torch.Tensor,
+    patch_size: int,
+    loss_mode: str,
+) -> torch.Tensor:
+    if loss_mode == PHASE0_LOSS_MODE_RAW_MSE:
+        return compute_raw_mse_loss(predictions, targets, pixel_mask)
+    if loss_mode == PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE:
+        return compute_patch_normalized_mse_loss(predictions, targets, pixel_mask, patch_size)
+    raise ValueError(
+        f"Unknown Phase 0 loss mode: {loss_mode!r}. "
+        f"Expected {PHASE0_LOSS_MODE_RAW_MSE!r} or {PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE!r}."
+    )
+
+
+def phase0_tensor_is_finite(tensor: torch.Tensor) -> bool:
+    return bool(torch.isfinite(tensor).all().item())
+
+
+def phase0_scalar_is_finite(value: float) -> bool:
+    return math.isfinite(float(value))
+
+
+def get_distributed_world_size() -> int:
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        return int(torch.distributed.get_world_size())
+    return 1
+
+
+def resolve_phase0_loss_mode_from_checkpoint(
+    resume_checkpoint: dict[str, Any] | None,
+    fallback_loss_mode: str,
+) -> str:
+    if not resume_checkpoint:
+        return fallback_loss_mode
+    checkpoint_args = resume_checkpoint.get("args", {})
+    if isinstance(checkpoint_args, dict):
+        checkpoint_loss_mode = checkpoint_args.get("loss_mode")
+        if isinstance(checkpoint_loss_mode, str) and checkpoint_loss_mode in {
+            PHASE0_LOSS_MODE_RAW_MSE,
+            PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE,
+        }:
+            return checkpoint_loss_mode
+    checkpoint_loss_mode = resume_checkpoint.get("phase0_loss_mode")
+    if isinstance(checkpoint_loss_mode, str) and checkpoint_loss_mode in {
+        PHASE0_LOSS_MODE_RAW_MSE,
+        PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE,
+    }:
+        return checkpoint_loss_mode
+    return fallback_loss_mode
 
 
 class RepoSafeConvNeXtMIM(nn.Module):
@@ -222,6 +311,119 @@ class RepoSafeConvNeXtMIM(nn.Module):
         return decoded
 
 
+class Phase0WarmupScheduler:
+    def __init__(
+        self,
+        optimizer: torch.optim.Optimizer,
+        *,
+        warmup_steps: int,
+        total_steps: int,
+        schedule_mode: str,
+    ) -> None:
+        self.optimizer = optimizer
+        self.warmup_steps = max(0, int(warmup_steps))
+        self.total_steps = max(0, int(total_steps))
+        self.schedule_mode = str(schedule_mode)
+        if self.schedule_mode not in {PHASE0_SCHEDULER_MODE_WARMUP_CONSTANT, PHASE0_SCHEDULER_MODE_WARMUP_COSINE}:
+            raise ValueError(
+                f"Unknown Phase 0 scheduler mode: {self.schedule_mode!r}. "
+                f"Expected {PHASE0_SCHEDULER_MODE_WARMUP_CONSTANT!r} or {PHASE0_SCHEDULER_MODE_WARMUP_COSINE!r}."
+            )
+        if self.schedule_mode == PHASE0_SCHEDULER_MODE_WARMUP_COSINE and self.total_steps <= 0:
+            raise ValueError("--phase0-scheduler-mode warmup_cosine requires --phase0-total-steps > 0")
+        if self.schedule_mode == PHASE0_SCHEDULER_MODE_WARMUP_COSINE and self.total_steps <= self.warmup_steps:
+            raise ValueError("--phase0-total-steps must be greater than warmup steps for cosine scheduling")
+        self.base_lrs = [float(group["lr"]) for group in optimizer.param_groups]
+        self.step_index = 0
+
+    def _factor(self, step: int) -> float:
+        if self.warmup_steps <= 0:
+            warmup_factor = 1.0
+        elif step < self.warmup_steps:
+            warmup_factor = float(step + 1) / float(self.warmup_steps)
+        else:
+            warmup_factor = 1.0
+        if step < self.warmup_steps:
+            return warmup_factor
+        if self.schedule_mode == PHASE0_SCHEDULER_MODE_WARMUP_CONSTANT:
+            return 1.0
+        if self.schedule_mode == PHASE0_SCHEDULER_MODE_WARMUP_COSINE:
+            if self.total_steps <= self.warmup_steps:
+                return 1.0
+            decay_steps = max(1, self.total_steps - self.warmup_steps)
+            progress = min(max(step - self.warmup_steps, 0), decay_steps) / float(decay_steps)
+            return 0.5 * (1.0 + math.cos(math.pi * progress))
+        return 1.0
+
+    def apply_current_lrs(self) -> None:
+        factor = self._factor(self.step_index)
+        for group, base_lr in zip(self.optimizer.param_groups, self.base_lrs):
+            group["lr"] = base_lr * factor
+
+    def step(self) -> None:
+        self.step_index += 1
+        self.apply_current_lrs()
+
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "warmup_steps": self.warmup_steps,
+            "total_steps": self.total_steps,
+            "schedule_mode": self.schedule_mode,
+            "base_lrs": self.base_lrs,
+            "step_index": self.step_index,
+        }
+
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
+        self.warmup_steps = int(state_dict.get("warmup_steps", self.warmup_steps))
+        self.total_steps = int(state_dict.get("total_steps", self.total_steps))
+        self.schedule_mode = str(state_dict.get("schedule_mode", self.schedule_mode))
+        self.base_lrs = [float(value) for value in state_dict.get("base_lrs", self.base_lrs)]
+        self.step_index = int(state_dict.get("step_index", self.step_index))
+
+
+def set_phase0_scheduler_base_lrs(scheduler: Phase0WarmupScheduler, base_lrs: list[float]) -> None:
+    scheduler.base_lrs = [float(value) for value in base_lrs]
+    scheduler.apply_current_lrs()
+
+
+def compute_phase0_scaled_learning_rate(args: argparse.Namespace) -> tuple[float, int, int]:
+    world_size = get_distributed_world_size()
+    effective_batch_size = int(args.batch_size * args.grad_accum_steps * world_size)
+    reference_batch_size = int(args.lr_scale_base_batch_size)
+    if reference_batch_size < 1:
+        raise ValueError("--lr-scale-base-batch-size must be >= 1")
+    scaled_learning_rate = float(args.learning_rate) * float(effective_batch_size) / float(reference_batch_size)
+    return scaled_learning_rate, effective_batch_size, world_size
+
+
+def build_phase0_recipe_payload(
+    args: argparse.Namespace,
+    *,
+    scaled_learning_rate: float,
+    effective_batch_size_world: int,
+    world_size: int,
+    warmup_steps: int,
+) -> dict[str, Any]:
+    return {
+        "base_lr": float(args.learning_rate),
+        "scaled_lr": float(scaled_learning_rate),
+        "effective_batch_size": int(effective_batch_size_world),
+        "batch_size": int(args.batch_size),
+        "grad_accum_steps": int(args.grad_accum_steps),
+        "world_size": int(world_size),
+        "warmup_epochs": int(args.warmup_epochs),
+        "warmup_steps": int(warmup_steps),
+        "scheduler_mode": str(args.scheduler_mode),
+        "total_steps": int(args.total_steps),
+        "adamw_betas": [float(args.adamw_beta1), float(args.adamw_beta2)],
+        "weight_decay": float(args.weight_decay),
+        "loss_mode": str(args.loss_mode),
+        "mask_ratio": float(args.mask_ratio),
+        "mask_patch_size": int(args.patch_size),
+        "grad_clip_norm": float(args.grad_clip_norm),
+    }
+
+
 def resolve_phase0_backbone_model_name(backbone_name: str, weights_mode: str) -> tuple[str, bool, str]:
     spec = BACKBONE_REGISTRY.get(backbone_name)
     if weights_mode == "default":
@@ -236,7 +438,13 @@ def resolve_phase0_backbone_model_name(backbone_name: str, weights_mode: str) ->
     return backbone_name, False, "direct_scratch"
 
 
-def build_llrd_optimizer(model: RepoSafeConvNeXtMIM, base_lr: float, weight_decay: float) -> torch.optim.Optimizer:
+def build_llrd_optimizer(
+    model: RepoSafeConvNeXtMIM,
+    base_lr: float,
+    weight_decay: float,
+    *,
+    betas: tuple[float, float],
+) -> torch.optim.Optimizer:
     groups: list[dict[str, Any]] = []
 
     def add_group(parameters, lr: float) -> None:
@@ -261,7 +469,7 @@ def build_llrd_optimizer(model: RepoSafeConvNeXtMIM, base_lr: float, weight_deca
         stage_lr = base_lr * (decay_rate ** offset)
         add_group(module.parameters(recurse=False), stage_lr)
 
-    return torch.optim.AdamW(groups, betas=(0.9, 0.999), eps=1e-8, foreach=False)
+    return torch.optim.AdamW(groups, betas=betas, eps=1e-8, foreach=False)
 
 
 def save_phase0_checkpoint(
@@ -270,6 +478,7 @@ def save_phase0_checkpoint(
     model: RepoSafeConvNeXtMIM,
     optimizer: torch.optim.Optimizer,
     scaler: torch.cuda.amp.GradScaler,
+    scheduler: Phase0WarmupScheduler | None,
     epoch: int,
     epoch_batch_index: int,
     epoch_complete: bool,
@@ -286,10 +495,12 @@ def save_phase0_checkpoint(
         "encoder_state_dict": model.encoder.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "scaler_state_dict": scaler.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
         "epoch": int(epoch),
         "epoch_batch_index": int(epoch_batch_index),
         "epoch_complete": bool(epoch_complete),
         "step": int(step),
+        "optimizer_step": int(step),
         "best_loss": float(best_loss),
         "best_train_effective_batch_loss": float(best_loss),
         "phase0_early_stopping_mode": PHASE0_EARLY_STOPPING_MODE,
@@ -308,18 +519,14 @@ def _denormalize_phase0_images(images: torch.Tensor) -> torch.Tensor:
     return torch.clamp(images * std + mean, 0.0, 1.0)
 
 
-def _render_patch_normalized_phase0_preview(
+def _render_phase0_preview(
     originals: torch.Tensor,
     pixel_mask: torch.Tensor,
     reconstructed: torch.Tensor,
     patch_size: int,
+    loss_mode: str,
 ) -> torch.Tensor:
-    """Map patch-normalized predictions back to a human-readable RGB preview.
-
-    The decoder predicts patch-normalized tensors, so we recover an approximate
-    image by using the original image's patch mean and variance as the local
-    affine transform, then keep the visible patches from the original image.
-    """
+    """Map Phase 0 predictions back to a human-readable RGB preview."""
     if originals.shape != reconstructed.shape:
         raise ValueError(f"Preview shape mismatch: {tuple(originals.shape)} vs {tuple(reconstructed.shape)}")
     if originals.ndim != 4:
@@ -328,18 +535,28 @@ def _render_patch_normalized_phase0_preview(
         raise ValueError("Image size must be divisible by patch_size for preview rendering.")
 
     batch_size, channels, height, width = originals.shape
+    mask = pixel_mask
 
-    orig_patches = originals.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size)
-    pred_patches = reconstructed.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size)
-    mask_patches = pixel_mask.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size)
+    if loss_mode == PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE:
+        orig_patches = originals.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size)
+        pred_patches = reconstructed.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size)
+        mask_patches = mask.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size)
 
-    patch_mean = orig_patches.mean(dim=(4, 5), keepdim=True)
-    patch_var = orig_patches.var(dim=(4, 5), unbiased=False, keepdim=True)
+        patch_mean = orig_patches.mean(dim=(4, 5), keepdim=True)
+        patch_var = orig_patches.var(dim=(4, 5), unbiased=False, keepdim=True)
 
-    unnormalized_pred_patches = pred_patches * torch.sqrt(patch_var + PHASE0_PATCH_NORMALIZATION_EPS) + patch_mean
-    blended_patches = orig_patches * (1.0 - mask_patches) + unnormalized_pred_patches * mask_patches
-    blended = blended_patches.permute(0, 1, 2, 4, 3, 5).contiguous().view(batch_size, channels, height, width)
-    return _denormalize_phase0_images(blended)
+        unnormalized_pred_patches = pred_patches * torch.sqrt(patch_var + PHASE0_PATCH_NORMALIZATION_EPS) + patch_mean
+        blended_patches = orig_patches * (1.0 - mask_patches) + unnormalized_pred_patches * mask_patches
+        blended = blended_patches.permute(0, 1, 2, 4, 3, 5).contiguous().view(batch_size, channels, height, width)
+        return _denormalize_phase0_images(blended)
+
+    if loss_mode == PHASE0_LOSS_MODE_RAW_MSE:
+        return _denormalize_phase0_images(reconstructed)
+
+    raise ValueError(
+        f"Unknown Phase 0 loss mode for preview rendering: {loss_mode!r}. "
+        f"Expected {PHASE0_LOSS_MODE_RAW_MSE!r} or {PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE!r}."
+    )
 
 
 def _tensor_batch_to_grid_image(images: torch.Tensor, nrow: int) -> Image.Image:
@@ -355,6 +572,7 @@ def save_phase0_reconstruction_preview(
     pixel_mask: torch.Tensor,
     reconstructed: torch.Tensor,
     patch_size: int,
+    loss_mode: str,
     epoch: int,
     global_step: int,
     sample_count: int,
@@ -363,11 +581,12 @@ def save_phase0_reconstruction_preview(
     sample_count = max(1, min(int(sample_count), int(originals.shape[0])))
     originals_vis = _denormalize_phase0_images(originals[:sample_count].detach())
     masked_vis = _denormalize_phase0_images((originals[:sample_count] * (1.0 - pixel_mask[:sample_count])).detach())
-    reconstructed_vis = _render_patch_normalized_phase0_preview(
+    reconstructed_vis = _render_phase0_preview(
         originals[:sample_count].detach(),
         pixel_mask[:sample_count].detach(),
         reconstructed[:sample_count].detach(),
         patch_size=int(patch_size),
+        loss_mode=loss_mode,
     )
 
     grid_original = _tensor_batch_to_grid_image(originals_vis, nrow=sample_count)
@@ -513,7 +732,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Mirror the main trainer's runtime bad-sample cleanup flag for dataset construction.",
     )
-    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--prefetch-factor", type=int, default=1)
     parser.add_argument(
@@ -532,8 +751,53 @@ def build_parser() -> argparse.ArgumentParser:
         default=PHASE0_GRAD_CLIP_NORM,
         help="Clip Phase 0 gradients to this global norm before the optimizer step. Default is 1.0.",
     )
+    parser.add_argument(
+        "--loss-mode",
+        choices=(PHASE0_LOSS_MODE_RAW_MSE, PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE),
+        default=PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE,
+        help=(
+            "Phase 0 reconstruction objective. "
+            f"{PHASE0_LOSS_MODE_RAW_MSE} uses masked raw pixel MSE; "
+            f"{PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE} uses masked patch-normalized MSE."
+        ),
+    )
     parser.add_argument("--learning-rate", type=float, default=1.5e-4)
+    parser.add_argument(
+        "--lr-scale-base-batch-size",
+        type=int,
+        default=PHASE0_LR_SCALE_BASE_BATCH_SIZE,
+        help="Reference effective batch size used to linearly scale Phase 0 learning rate.",
+    )
+    parser.add_argument(
+        "--warmup-epochs",
+        type=int,
+        default=PHASE0_WARMUP_EPOCHS,
+        help="Linear warmup epochs for Phase 0 learning rate.",
+    )
+    parser.add_argument(
+        "--warmup-steps",
+        type=int,
+        default=0,
+        help="Optional explicit linear warmup steps for Phase 0. Overrides --warmup-epochs if > 0.",
+    )
+    parser.add_argument(
+        "--scheduler-mode",
+        choices=(PHASE0_SCHEDULER_MODE_WARMUP_CONSTANT, PHASE0_SCHEDULER_MODE_WARMUP_COSINE),
+        default=PHASE0_SCHEDULER_MODE_WARMUP_CONSTANT,
+        help=(
+            "Phase 0 learning-rate schedule after warmup. Use warmup_constant unless you provide "
+            "--total-steps for a real cosine horizon."
+        ),
+    )
+    parser.add_argument(
+        "--total-steps",
+        type=int,
+        default=0,
+        help="Required when --scheduler-mode warmup_cosine is selected. Total optimizer steps for the cosine horizon.",
+    )
     parser.add_argument("--weight-decay", type=float, default=0.05)
+    parser.add_argument("--adamw-beta1", type=float, default=PHASE0_ADAMW_BETA1)
+    parser.add_argument("--adamw-beta2", type=float, default=PHASE0_ADAMW_BETA2)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-steps", type=int, default=0)
     parser.add_argument(
@@ -541,8 +805,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=5000,
         help=(
-            "Phase 0 plateau window in optimizer-step batches. With batch-size 128 and "
-            "grad-accum-steps 2, one window is 5000 effective batches of 256 images."
+            "Phase 0 plateau window in optimizer-step batches. The effective image count per window is "
+            "train_loss_window x batch_size x grad_accum_steps (and x world_size if distributed)."
         ),
     )
     parser.add_argument(
@@ -605,6 +869,18 @@ def main() -> int:
         raise ValueError("--patch-size must be >= 1")
     if args.grad_clip_norm <= 0:
         raise ValueError("--grad-clip-norm must be > 0")
+    if args.lr_scale_base_batch_size < 1:
+        raise ValueError("--lr-scale-base-batch-size must be >= 1")
+    if args.warmup_epochs < 0:
+        raise ValueError("--warmup-epochs must be >= 0")
+    if args.warmup_steps < 0:
+        raise ValueError("--warmup-steps must be >= 0")
+    if args.total_steps < 0:
+        raise ValueError("--total-steps must be >= 0")
+    if args.scheduler_mode == PHASE0_SCHEDULER_MODE_WARMUP_COSINE and args.total_steps <= 0:
+        raise ValueError("--scheduler-mode warmup_cosine requires --total-steps > 0")
+    if not (0.0 < args.adamw_beta1 < 1.0) or not (0.0 < args.adamw_beta2 < 1.0):
+        raise ValueError("--adamw-beta1 and --adamw-beta2 must be in (0, 1)")
     if args.image_size % args.patch_size != 0:
         raise ValueError("--image-size must be divisible by --patch-size")
 
@@ -628,17 +904,19 @@ def main() -> int:
     else:
         resume_warning = None
 
-    log_json_event(
-        log_path,
-        {
-            "event": "phase0_run_started",
-            "output_dir": str(output_dir),
-            "log_file": str(log_path),
-            "resume_path": str(resume_path),
-            "phase0_source": None,
-            "args": vars(args),
-        },
-    )
+    if resume_checkpoint is not None:
+        resolved_loss_mode = resolve_phase0_loss_mode_from_checkpoint(resume_checkpoint, args.loss_mode)
+        if resolved_loss_mode != args.loss_mode:
+            log_json_event(
+                log_path,
+                {
+                    "event": "phase0_loss_mode_resolved_from_checkpoint",
+                    "requested_loss_mode": args.loss_mode,
+                    "resolved_loss_mode": resolved_loss_mode,
+                    "resume_checkpoint": str(resume_path),
+                },
+            )
+        args.loss_mode = resolved_loss_mode
 
     train_dataset, _, _, _, _ = build_datasets(args)
     phase0_dataset = Phase0WasteDataset(list(train_dataset.samples), list(train_dataset.classes), args.image_size, args.seed)
@@ -656,6 +934,14 @@ def main() -> int:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = RepoSafeConvNeXtMIM(args.backbone, args.weights, input_res=args.image_size, decoder_dim=args.decoder_dim).to(device)
+    scaled_learning_rate, effective_batch_size_world, world_size = compute_phase0_scaled_learning_rate(args)
+    phase0_recipe = build_phase0_recipe_payload(
+        args,
+        scaled_learning_rate=scaled_learning_rate,
+        effective_batch_size_world=effective_batch_size_world,
+        world_size=world_size,
+        warmup_steps=int(args.warmup_steps) if args.warmup_steps > 0 else int(args.warmup_epochs * max(1, math.ceil(len(loader) / max(1, args.grad_accum_steps)))),
+    )
     log_json_event(
         log_path,
         {
@@ -668,12 +954,24 @@ def main() -> int:
             "sampler": "balanced_class_epoch_sampler",
             "batch_size": int(args.batch_size),
             "effective_batch_size": int(args.batch_size * args.grad_accum_steps),
+            "effective_batch_size_world": int(effective_batch_size_world),
+            "world_size": int(world_size),
             "train_loss_window_effective_batches": int(args.train_loss_window),
             "early_stopping_patience": int(args.early_stopping_patience),
             "mask_ratio": float(args.mask_ratio),
             "patch_size": int(args.patch_size),
             "image_size": int(args.image_size),
             "decoder_dim": int(args.decoder_dim),
+            "phase0_loss_mode": str(args.loss_mode),
+            "phase0_base_learning_rate": float(args.learning_rate),
+            "phase0_scaled_learning_rate": float(scaled_learning_rate),
+            "phase0_lr_scale_base_batch_size": int(args.lr_scale_base_batch_size),
+            "phase0_warmup_epochs": int(args.warmup_epochs),
+            "phase0_warmup_steps": int(args.warmup_steps),
+            "phase0_scheduler_mode": str(args.scheduler_mode),
+            "phase0_total_steps": int(args.total_steps),
+            "phase0_adamw_betas": [float(args.adamw_beta1), float(args.adamw_beta2)],
+            "phase0_recipe": phase0_recipe,
             "camera_color_cast_probability": float(args.camera_color_cast_probability),
             "camera_color_cast_strength": float(args.camera_color_cast_strength),
             "camera_color_cast_eval": bool(args.camera_color_cast_eval),
@@ -686,8 +984,40 @@ def main() -> int:
         except TypeError:
             model.encoder.set_grad_checkpointing(enable=True)
 
-    optimizer = build_llrd_optimizer(model, args.learning_rate, args.weight_decay)
+    optimizer = build_llrd_optimizer(
+        model,
+        scaled_learning_rate,
+        args.weight_decay,
+        betas=(float(args.adamw_beta1), float(args.adamw_beta2)),
+    )
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
+    optimizer_steps_per_epoch = max(1, math.ceil(len(loader) / max(1, args.grad_accum_steps)))
+    warmup_steps = int(args.warmup_steps) if args.warmup_steps > 0 else int(args.warmup_epochs * optimizer_steps_per_epoch)
+    scheduler = Phase0WarmupScheduler(
+        optimizer,
+        warmup_steps=warmup_steps,
+        total_steps=int(args.total_steps),
+        schedule_mode=str(args.scheduler_mode),
+    )
+    log_json_event(
+        log_path,
+        {
+            "event": "phase0_run_started",
+            "output_dir": str(output_dir),
+            "log_file": str(log_path),
+            "resume_path": str(resume_path),
+            "phase0_source": None,
+            "phase0_loss_mode": args.loss_mode,
+            "phase0_recipe": build_phase0_recipe_payload(
+                args,
+                scaled_learning_rate=scaled_learning_rate,
+                effective_batch_size_world=effective_batch_size_world,
+                world_size=world_size,
+                warmup_steps=warmup_steps,
+            ),
+            "args": vars(args),
+        },
+    )
 
     start_epoch = 0
     global_step = 0
@@ -742,6 +1072,12 @@ def main() -> int:
                     "new_mode": PHASE0_EARLY_STOPPING_MODE,
                 },
             )
+        scheduler_state = resume_checkpoint.get("scheduler_state_dict")
+        if isinstance(scheduler_state, dict) and scheduler_state:
+            scheduler.load_state_dict(scheduler_state)
+        else:
+            scheduler.step_index = global_step
+        scheduler.apply_current_lrs()
         log_json_event(
             log_path,
             {
@@ -756,8 +1092,18 @@ def main() -> int:
                 "train_loss_window_batch_count": train_loss_window_batch_count,
                 "train_loss_window_best_loss": train_loss_window_best_loss,
                 "loss_plateau_windows_without_improvement": loss_plateau_windows_without_improvement,
+                "phase0_base_learning_rate": float(args.learning_rate),
+                "phase0_scaled_learning_rate": float(scaled_learning_rate),
+                "phase0_lr_scale_base_batch_size": int(args.lr_scale_base_batch_size),
+                "phase0_warmup_epochs": int(args.warmup_epochs),
+                "phase0_warmup_steps": int(warmup_steps),
+                "phase0_scheduler_mode": str(args.scheduler_mode),
+                "phase0_total_steps": int(args.total_steps),
+                "phase0_adamw_betas": [float(args.adamw_beta1), float(args.adamw_beta2)],
             },
         )
+    else:
+        scheduler.apply_current_lrs()
 
     mask_generator = SpatialMaskGenerator(args.image_size, args.patch_size, args.mask_ratio)
     last_checkpoint = output_dir / "last.pt"
@@ -824,18 +1170,70 @@ def main() -> int:
                 raise ValueError(f"Unexpected Phase 0 batch structure with {len(batch)} items.")
             images = images.to(device, non_blocking=True)
             pixel_mask, _ = mask_generator(images.shape[0], device)
+            non_finite_reason = ""
+
+            if not phase0_tensor_is_finite(images):
+                non_finite_reason = "non_finite_input_images"
+            elif not phase0_tensor_is_finite(pixel_mask):
+                non_finite_reason = "non_finite_pixel_mask"
 
             with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
                 reconstructed = model(images, pixel_mask)
-                loss = compute_patch_normalized_mse_loss(
+                if not non_finite_reason and not phase0_tensor_is_finite(reconstructed):
+                    non_finite_reason = "non_finite_reconstruction"
+                loss = compute_phase0_reconstruction_loss(
                     reconstructed,
                     images,
                     pixel_mask,
                     patch_size=args.patch_size,
+                    loss_mode=args.loss_mode,
                 )
+                if not non_finite_reason and not phase0_tensor_is_finite(loss):
+                    non_finite_reason = "non_finite_loss"
                 loss = loss / args.grad_accum_steps
 
+            if non_finite_reason:
+                save_phase0_checkpoint(
+                    output_dir / "step_last.pt",
+                    model=model,
+                    optimizer=optimizer,
+                    scaler=scaler,
+                    scheduler=scheduler,
+                    epoch=epoch,
+                    epoch_batch_index=epoch_batch_index,
+                    epoch_complete=False,
+                    step=global_step,
+                    best_loss=best_loss,
+                    train_loss_window_best_loss=train_loss_window_best_loss,
+                    train_loss_window_batch_count=train_loss_window_batch_count,
+                    loss_plateau_windows_without_improvement=loss_plateau_windows_without_improvement,
+                    args=args,
+                )
+                log_json_event(
+                    log_path,
+                    {
+                        "event": "phase0_non_finite_guard_triggered",
+                        "epoch": epoch + 1,
+                        "global_step": global_step,
+                        "microbatch_index": step_index,
+                        "reason": non_finite_reason,
+                        "loss_mode": args.loss_mode,
+                        "mask_ratio": float(args.mask_ratio),
+                        "patch_size": int(args.patch_size),
+                    },
+                )
+                stop_training = True
+                break
+
             step_loss = float(loss.detach().item()) * args.grad_accum_steps
+            pred_stats = reconstructed.detach().float()
+            target_stats = images.detach().float()
+            pixel_mask_stats = pixel_mask.detach().float()
+            prediction_mean = float(pred_stats.mean().item())
+            prediction_std = float(pred_stats.std(unbiased=False).item())
+            target_mean = float(target_stats.mean().item())
+            target_std = float(target_stats.std(unbiased=False).item())
+            masked_ratio_actual = float(pixel_mask_stats[:, :1].mean().item())
             scaler.scale(loss).backward()
             batch_size = int(images.shape[0])
             epoch_batch_index = epoch_batch_offset + step_index
@@ -865,16 +1263,55 @@ def main() -> int:
                 best_loss=best_loss,
                 loss_plateau_windows_without_improvement=loss_plateau_windows_without_improvement,
                 optimizer_lr=current_lr,
+                prediction_mean=prediction_mean,
+                prediction_std=prediction_std,
+                target_mean=target_mean,
+                target_std=target_std,
+                masked_ratio_actual=masked_ratio_actual,
                 args=args,
             )
 
             if step_index % args.grad_accum_steps == 0 or step_index == len(loader):
                 scaler.unscale_(optimizer)
                 grad_norm = float(nn.utils.clip_grad_norm_(model.parameters(), max_norm=float(args.grad_clip_norm)))
+                if not phase0_scalar_is_finite(grad_norm):
+                    save_phase0_checkpoint(
+                        output_dir / "step_last.pt",
+                        model=model,
+                        optimizer=optimizer,
+                        scaler=scaler,
+                        scheduler=scheduler,
+                        epoch=epoch,
+                        epoch_batch_index=epoch_batch_index,
+                        epoch_complete=False,
+                        step=global_step,
+                        best_loss=best_loss,
+                        train_loss_window_best_loss=train_loss_window_best_loss,
+                        train_loss_window_batch_count=train_loss_window_batch_count,
+                        loss_plateau_windows_without_improvement=loss_plateau_windows_without_improvement,
+                        args=args,
+                    )
+                    log_json_event(
+                        log_path,
+                        {
+                            "event": "phase0_non_finite_guard_triggered",
+                            "epoch": epoch + 1,
+                            "global_step": global_step,
+                            "microbatch_index": step_index,
+                            "reason": "non_finite_grad_norm",
+                            "grad_clip_norm": float(args.grad_clip_norm),
+                            "mask_ratio": float(args.mask_ratio),
+                            "patch_size": int(args.patch_size),
+                        },
+                    )
+                    stop_training = True
+                    break
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad(set_to_none=True)
                 global_step += 1
+                # Advance the schedule once per optimizer step, not per microbatch.
+                scheduler.step()
                 completed_microbatches = effective_batch_microbatch_count
                 effective_batch_loss = effective_batch_loss_sum / max(1, completed_microbatches)
                 latest_effective_batch_loss = effective_batch_loss
@@ -899,6 +1336,12 @@ def main() -> int:
                     best_loss=best_loss,
                     loss_plateau_windows_without_improvement=loss_plateau_windows_without_improvement,
                     optimizer_lr=current_lr,
+                    grad_norm=grad_norm,
+                    prediction_mean=prediction_mean,
+                    prediction_std=prediction_std,
+                    target_mean=target_mean,
+                    target_std=target_std,
+                    masked_ratio_actual=masked_ratio_actual,
                     args=args,
                 )
                 log_json_event(
@@ -910,6 +1353,12 @@ def main() -> int:
                         "grad_norm": grad_norm,
                         "grad_clip_norm": float(args.grad_clip_norm),
                         "microbatches_in_effective_batch": completed_microbatches,
+                        "prediction_mean": prediction_mean,
+                        "prediction_std": prediction_std,
+                        "target_mean": target_mean,
+                        "target_std": target_std,
+                        "masked_ratio_actual": masked_ratio_actual,
+                        "mask_patch_size": int(args.patch_size),
                     },
                 )
 
@@ -924,6 +1373,7 @@ def main() -> int:
                             model=model,
                             optimizer=optimizer,
                             scaler=scaler,
+                            scheduler=scheduler,
                             epoch=epoch,
                             epoch_batch_index=epoch_batch_index,
                             epoch_complete=False,
@@ -967,6 +1417,7 @@ def main() -> int:
                             model=model,
                             optimizer=optimizer,
                             scaler=scaler,
+                            scheduler=scheduler,
                             epoch=epoch,
                             epoch_batch_index=epoch_batch_index,
                             epoch_complete=False,
@@ -1000,6 +1451,7 @@ def main() -> int:
                     model=model,
                     optimizer=optimizer,
                     scaler=scaler,
+                    scheduler=scheduler,
                     epoch=epoch,
                     epoch_batch_index=epoch_batch_index,
                     epoch_complete=False,
@@ -1031,6 +1483,13 @@ def main() -> int:
                         "epoch_loss_sum": epoch_loss_sum,
                         "epoch_sample_count": epoch_sample_count,
                         "epoch_batch_index": epoch_batch_index,
+                        "prediction_mean": prediction_mean,
+                        "prediction_std": prediction_std,
+                        "target_mean": target_mean,
+                        "target_std": target_std,
+                        "masked_ratio_actual": masked_ratio_actual,
+                        "grad_norm": grad_norm,
+                        "mask_patch_size": int(args.patch_size),
                     },
                 )
                 if args.max_steps > 0 and global_step >= args.max_steps:
@@ -1054,8 +1513,11 @@ def main() -> int:
                     plateaus=loss_plateau_windows_without_improvement,
                     mb=f"{step_index}/{len(loader)}",
                     mask_ratio=float(args.mask_ratio),
+                    mask_ratio_actual=masked_ratio_actual,
                     batch_size=int(args.batch_size),
                     eff_bs=int(args.batch_size * args.grad_accum_steps),
+                    pred_std=prediction_std,
+                    tgt_std=target_std,
                 )
             )
 
@@ -1090,6 +1552,7 @@ def main() -> int:
                 model=model,
                 optimizer=optimizer,
                 scaler=scaler,
+                scheduler=scheduler,
                 epoch=epoch,
                 epoch_batch_index=last_completed_epoch_batch_index,
                 epoch_complete=False,
@@ -1115,6 +1578,7 @@ def main() -> int:
             model=model,
             optimizer=optimizer,
             scaler=scaler,
+            scheduler=scheduler,
             epoch=epoch,
             epoch_batch_index=epoch_batch_offset + len(loader),
             epoch_complete=True,
@@ -1156,6 +1620,7 @@ def main() -> int:
                 pixel_mask=last_preview_pixel_mask,
                 reconstructed=last_preview_reconstructed,
                 patch_size=args.patch_size,
+                loss_mode=args.loss_mode,
                 epoch=epoch + 1,
                 global_step=global_step,
                 sample_count=args.reconstruction_preview_count,

@@ -56,19 +56,27 @@ PROGRESSIVE_OUTPUT_DIR="$RUN_ROOT/progressive"
 PROGRESSIVE_LOG_FILE="$LOG_ROOT/progressive.log.jsonl"
 DATASET_ROOT="${DATASET_ROOT:-Dataset_Final}"
 IMAGE_SIZE="${IMAGE_SIZE:-224}"
-BATCH_SIZE="${BATCH_SIZE:-320}"
+BATCH_SIZE="${BATCH_SIZE:-512}"
 NUM_WORKERS="${NUM_WORKERS:-2}"
 PREFETCH_FACTOR="${PREFETCH_FACTOR:-1}"
 SEED="${SEED:-42}"
 ENABLE_PHASE0_MIM=0
 PHASE0_MIM_EPOCHS="${PHASE0_MIM_EPOCHS:-0}"
-PHASE0_MIM_BATCH_SIZE="${PHASE0_MIM_BATCH_SIZE:-128}"
+PHASE0_MIM_BATCH_SIZE="${PHASE0_MIM_BATCH_SIZE:-512}"
 PHASE0_MIM_ACCUM_STEPS="${PHASE0_MIM_ACCUM_STEPS:-2}"
 PHASE0_MIM_MASK_RATIO="${PHASE0_MIM_MASK_RATIO:-0.6}"
 PHASE0_MIM_PATCH_SIZE="${PHASE0_MIM_PATCH_SIZE:-32}"
 PHASE0_MIM_DECODER_DIM="${PHASE0_MIM_DECODER_DIM:-512}"
 PHASE0_MIM_GRAD_CLIP_NORM="${PHASE0_MIM_GRAD_CLIP_NORM:-1.0}"
+PHASE0_MIM_LOSS_MODE="${PHASE0_MIM_LOSS_MODE:-patch_normalized_mse}"
 PHASE0_MIM_LR="${PHASE0_MIM_LR:-1.5e-4}"
+PHASE0_MIM_LR_SCALE_BASE_BATCH_SIZE="${PHASE0_MIM_LR_SCALE_BASE_BATCH_SIZE:-256}"
+PHASE0_MIM_WARMUP_EPOCHS="${PHASE0_MIM_WARMUP_EPOCHS:-10}"
+PHASE0_MIM_WARMUP_STEPS="${PHASE0_MIM_WARMUP_STEPS:-0}"
+PHASE0_MIM_SCHEDULER_MODE="${PHASE0_MIM_SCHEDULER_MODE:-warmup_constant}"
+PHASE0_MIM_TOTAL_STEPS="${PHASE0_MIM_TOTAL_STEPS:-0}"
+PHASE0_MIM_ADAMW_BETA1="${PHASE0_MIM_ADAMW_BETA1:-0.9}"
+PHASE0_MIM_ADAMW_BETA2="${PHASE0_MIM_ADAMW_BETA2:-0.95}"
 PHASE0_MIM_WEIGHT_DECAY="${PHASE0_MIM_WEIGHT_DECAY:-0.05}"
 PHASE0_MIM_TRAIN_LOSS_WINDOW="${PHASE0_MIM_TRAIN_LOSS_WINDOW:-5000}"
 
@@ -90,7 +98,7 @@ for ARG in "$@"; do
     --phase0-mim)
       ENABLE_PHASE0_MIM=1
       ;;
-    --phase0-mim-epochs|--phase0-mim-batch-size|--phase0-mim-accum-steps|--phase0-mim-mask-ratio|--phase0-mim-patch-size|--phase0-mim-decoder-dim|--phase0-mim-grad-clip-norm|--phase0-mim-learning-rate|--phase0-mim-weight-decay|--phase0-mim-train-loss-window)
+    --phase0-mim-epochs|--phase0-mim-batch-size|--phase0-mim-accum-steps|--phase0-mim-mask-ratio|--phase0-mim-patch-size|--phase0-mim-decoder-dim|--phase0-mim-grad-clip-norm|--phase0-mim-loss-mode|--phase0-mim-learning-rate|--phase0-mim-lr-scale-base-batch-size|--phase0-mim-warmup-epochs|--phase0-mim-warmup-steps|--phase0-mim-scheduler-mode|--phase0-mim-total-steps|--phase0-mim-adamw-beta1|--phase0-mim-adamw-beta2|--phase0-mim-weight-decay|--phase0-mim-train-loss-window)
       case "$ARG" in
         --phase0-mim-epochs) NEXT_PHASE0_VAR=PHASE0_MIM_EPOCHS ;;
         --phase0-mim-batch-size) NEXT_PHASE0_VAR=PHASE0_MIM_BATCH_SIZE ;;
@@ -99,7 +107,15 @@ for ARG in "$@"; do
         --phase0-mim-patch-size) NEXT_PHASE0_VAR=PHASE0_MIM_PATCH_SIZE ;;
         --phase0-mim-decoder-dim) NEXT_PHASE0_VAR=PHASE0_MIM_DECODER_DIM ;;
         --phase0-mim-grad-clip-norm) NEXT_PHASE0_VAR=PHASE0_MIM_GRAD_CLIP_NORM ;;
+        --phase0-mim-loss-mode) NEXT_PHASE0_VAR=PHASE0_MIM_LOSS_MODE ;;
         --phase0-mim-learning-rate) NEXT_PHASE0_VAR=PHASE0_MIM_LR ;;
+        --phase0-mim-lr-scale-base-batch-size) NEXT_PHASE0_VAR=PHASE0_MIM_LR_SCALE_BASE_BATCH_SIZE ;;
+        --phase0-mim-warmup-epochs) NEXT_PHASE0_VAR=PHASE0_MIM_WARMUP_EPOCHS ;;
+        --phase0-mim-warmup-steps) NEXT_PHASE0_VAR=PHASE0_MIM_WARMUP_STEPS ;;
+        --phase0-mim-scheduler-mode) NEXT_PHASE0_VAR=PHASE0_MIM_SCHEDULER_MODE ;;
+        --phase0-mim-total-steps) NEXT_PHASE0_VAR=PHASE0_MIM_TOTAL_STEPS ;;
+        --phase0-mim-adamw-beta1) NEXT_PHASE0_VAR=PHASE0_MIM_ADAMW_BETA1 ;;
+        --phase0-mim-adamw-beta2) NEXT_PHASE0_VAR=PHASE0_MIM_ADAMW_BETA2 ;;
         --phase0-mim-weight-decay) NEXT_PHASE0_VAR=PHASE0_MIM_WEIGHT_DECAY ;;
         --phase0-mim-train-loss-window) NEXT_PHASE0_VAR=PHASE0_MIM_TRAIN_LOSS_WINDOW ;;
       esac
@@ -155,7 +171,7 @@ if [[ "$ENABLE_PHASE0_MIM" -eq 1 ]]; then
   PHASE0_COMPLETE_MARKER="$PHASE0_OUTPUT_DIR/.phase0_complete"
   PHASE0_ARGS=()
   PHASE0_ENCODER_CHECKPOINT="$PHASE0_OUTPUT_DIR/phase0_encoder_final.pth"
-  if [[ -f "$PHASE0_ENCODER_CHECKPOINT" ]]; then
+      if [[ -f "$PHASE0_ENCODER_CHECKPOINT" ]]; then
     echo "[wrapper] phase 0 MIM already complete; using $PHASE0_ENCODER_CHECKPOINT"
     touch "$PHASE0_COMPLETE_MARKER"
   else
@@ -176,7 +192,15 @@ if [[ "$ENABLE_PHASE0_MIM" -eq 1 ]]; then
       --patch-size "$PHASE0_MIM_PATCH_SIZE" \
       --decoder-dim "$PHASE0_MIM_DECODER_DIM" \
       --grad-clip-norm "$PHASE0_MIM_GRAD_CLIP_NORM" \
+      --loss-mode "$PHASE0_MIM_LOSS_MODE" \
       --learning-rate "$PHASE0_MIM_LR" \
+      --lr-scale-base-batch-size "$PHASE0_MIM_LR_SCALE_BASE_BATCH_SIZE" \
+      --warmup-epochs "$PHASE0_MIM_WARMUP_EPOCHS" \
+      --warmup-steps "$PHASE0_MIM_WARMUP_STEPS" \
+      --scheduler-mode "$PHASE0_MIM_SCHEDULER_MODE" \
+      --total-steps "$PHASE0_MIM_TOTAL_STEPS" \
+      --adamw-beta1 "$PHASE0_MIM_ADAMW_BETA1" \
+      --adamw-beta2 "$PHASE0_MIM_ADAMW_BETA2" \
       --weight-decay "$PHASE0_MIM_WEIGHT_DECAY" \
       --train-loss-window "$PHASE0_MIM_TRAIN_LOSS_WINDOW" \
       --seed "$SEED"
