@@ -7,8 +7,12 @@ import torch
 from scripts.train_phase0_mim import (
     PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE,
     _render_phase0_preview,
+    _render_phase0_preview_pair,
     phase0_scalar_is_finite,
     phase0_tensor_is_finite,
+    patchify_phase0_images,
+    patchify_phase0_masks,
+    unpatchify_phase0_images,
 )
 
 
@@ -40,6 +44,46 @@ class Phase0PreviewTests(unittest.TestCase):
         self.assertTrue(torch.isfinite(preview).all())
         self.assertGreater(float(preview.mean().item()), 0.0)
         self.assertLessEqual(float(preview.max().item()), 1.0)
+
+    def test_patchify_roundtrip_and_mask_patchification(self) -> None:
+        images = torch.arange(3 * 4 * 4, dtype=torch.float32).view(1, 3, 4, 4)
+        patches = patchify_phase0_images(images, 2)
+        restored = unpatchify_phase0_images(patches, 2, channels=3)
+        self.assertEqual(tuple(patches.shape), (1, 4, 12))
+        self.assertTrue(torch.allclose(images, restored))
+
+        mask = torch.zeros((1, 1, 4, 4), dtype=torch.float32)
+        mask[:, :, :2, :2] = 1.0
+        mask_patches = patchify_phase0_masks(mask, 2)
+        self.assertEqual(tuple(mask_patches.shape), (1, 4, 1))
+        self.assertTrue(torch.allclose(mask_patches.squeeze(-1), torch.tensor([[1.0, 0.0, 0.0, 0.0]])))
+
+    def test_preview_pair_returns_masked_fill_and_full_output(self) -> None:
+        originals = torch.tensor(
+            [
+                [
+                    [[0.1, 0.2, 0.3, 0.4], [0.1, 0.2, 0.3, 0.4], [0.5, 0.6, 0.7, 0.8], [0.5, 0.6, 0.7, 0.8]],
+                    [[0.2, 0.3, 0.4, 0.5], [0.2, 0.3, 0.4, 0.5], [0.6, 0.7, 0.8, 0.9], [0.6, 0.7, 0.8, 0.9]],
+                    [[0.3, 0.4, 0.5, 0.6], [0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0], [0.7, 0.8, 0.9, 1.0]],
+                ]
+            ],
+            dtype=torch.float32,
+        )
+        pixel_mask = torch.zeros((1, 1, 4, 4), dtype=torch.float32)
+        pixel_mask[:, :, :2, :2] = 1.0
+        reconstructed = torch.full_like(originals, 0.25)
+
+        masked_fill, full_output = _render_phase0_preview_pair(
+            originals=originals,
+            pixel_mask=pixel_mask,
+            reconstructed=reconstructed,
+            patch_size=2,
+            loss_mode=PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE,
+        )
+        self.assertEqual(tuple(masked_fill.shape), (1, 3, 4, 4))
+        self.assertEqual(tuple(full_output.shape), (1, 3, 4, 4))
+        self.assertTrue(torch.isfinite(masked_fill).all())
+        self.assertTrue(torch.isfinite(full_output).all())
 
     def test_finite_guards(self) -> None:
         self.assertTrue(phase0_tensor_is_finite(torch.ones(2, 3)))

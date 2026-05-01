@@ -120,7 +120,7 @@ def main() -> int:
     output_dir = Path(args.output_dir) if args.output_dir else checkpoint_path.parent / "reconstruction_previews"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{args.split}_checkpoint_preview.png"
-    save_phase0_reconstruction_preview(
+    full_output_path, masked_fill_path = save_phase0_reconstruction_preview(
         output_path,
         originals=images,
         pixel_mask=pixel_mask,
@@ -131,7 +131,8 @@ def main() -> int:
         global_step=global_step,
         sample_count=args.sample_count,
     )
-    print(output_path)
+    print(full_output_path)
+    print(masked_fill_path)
     return 0
 
 

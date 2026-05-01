@@ -2019,7 +2019,11 @@ def _progress_value_for_postfix(key: str, value: Any) -> str | None:
             return str(scalar)
         if key.endswith("_lr") or key in {"lr", "learning_rate", "optimizer_lr"}:
             return f"{scalar:.2e}"
-        if "elapsed" in key or key.endswith("_seconds"):
+        if key in {"amp_scale"}:
+            return f"{scalar:.2e}"
+        if "memory" in key:
+            return f"{scalar / (1024.0 ** 2):.0f}MiB"
+        if "elapsed" in key or key.endswith("_seconds") or key.endswith("_sec") or key == "step_time_sec":
             return f"{scalar:.1f}"
         if "samples_per_second" in key or key.endswith("_throughput"):
             return f"{scalar:.1f}"

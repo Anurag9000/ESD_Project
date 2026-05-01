@@ -170,20 +170,21 @@ def compute_patch_normalized_mse_loss(
         raise ValueError(f"Expected 4D image tensors, got shape {tuple(predictions.shape)}")
     if predictions.shape[2] % patch_size != 0 or predictions.shape[3] % patch_size != 0:
         raise ValueError("Image size must be divisible by patch_size for patch-normalized loss.")
-    if pixel_mask.shape != predictions.shape:
+    if pixel_mask.ndim != 4:
+        raise ValueError(f"Expected 4D mask tensor, got shape {tuple(pixel_mask.shape)}")
+    if pixel_mask.shape[0] != predictions.shape[0] or pixel_mask.shape[2:] != predictions.shape[2:]:
         raise ValueError(f"Mask shape mismatch: {tuple(pixel_mask.shape)} vs {tuple(predictions.shape)}")
+    preds = patchify_phase0_images(predictions, patch_size)
+    targs = patchify_phase0_images(targets, patch_size)
+    mask = patchify_phase0_masks(pixel_mask, patch_size)
 
-    preds = predictions.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size)
-    targs = targets.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size)
-    mask = pixel_mask.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size)
-
-    patch_mean = targs.mean(dim=(4, 5), keepdim=True)
-    patch_var = targs.var(dim=(4, 5), unbiased=False, keepdim=True)
+    patch_mean = targs.mean(dim=-1, keepdim=True)
+    patch_var = targs.var(dim=-1, unbiased=False, keepdim=True)
     targs = (targs - patch_mean) / torch.sqrt(patch_var + PHASE0_PATCH_NORMALIZATION_EPS)
 
-    loss = (preds - targs).pow(2)
+    loss = (preds - targs).pow(2).mean(dim=-1, keepdim=True)
     masked_loss = (loss * mask).sum()
-    normalizer = mask.sum() * predictions.shape[1] + 1e-8
+    normalizer = mask.sum() + 1e-8
     return masked_loss / normalizer
 
 
@@ -519,6 +520,229 @@ def _denormalize_phase0_images(images: torch.Tensor) -> torch.Tensor:
     return torch.clamp(images * std + mean, 0.0, 1.0)
 
 
+def _phase0_psnr_from_mse(mse_value: torch.Tensor | float) -> float:
+    mse_scalar = float(mse_value if isinstance(mse_value, float) else mse_value.detach().float().item())
+    if mse_scalar <= 0.0:
+        return float("inf")
+    return float(10.0 * math.log10(1.0 / mse_scalar))
+
+
+def _phase0_monitoring_metrics(
+    images: torch.Tensor,
+    reconstructed: torch.Tensor,
+    pixel_mask: torch.Tensor,
+    patch_size: int,
+    loss_mode: str,
+) -> dict[str, float]:
+    target_vis = _denormalize_phase0_images(images.detach().float())
+    if loss_mode == PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE:
+        pred_patches = patchify_phase0_images(reconstructed.detach().float(), patch_size)
+        target_patches = patchify_phase0_images(images.detach().float(), patch_size)
+        patch_mean = target_patches.mean(dim=-1, keepdim=True)
+        patch_var = target_patches.var(dim=-1, unbiased=False, keepdim=True)
+        patch_std = torch.sqrt(patch_var + PHASE0_PATCH_NORMALIZATION_EPS)
+
+        pred_norm = (pred_patches - patch_mean) / patch_std
+        target_norm = (target_patches - patch_mean) / patch_std
+        pred_rgb_after_unnorm = unpatchify_phase0_images(
+            pred_patches * patch_std + patch_mean,
+            patch_size,
+            channels=images.shape[1],
+        )
+        pred_vis = _denormalize_phase0_images(pred_rgb_after_unnorm)
+
+        return {
+            "pred_norm_mean": float(pred_norm.mean().item()),
+            "pred_norm_std": float(pred_norm.std(unbiased=False).item()),
+            "target_norm_mean": float(target_norm.mean().item()),
+            "target_norm_std": float(target_norm.std(unbiased=False).item()),
+            "pred_rgb_after_unnorm_std": float(pred_vis.std(unbiased=False).item()),
+            "masked_psnr_after_unnorm": float(
+                _phase0_masked_psnr(pred_vis, target_vis, pixel_mask)
+            ),
+            "masked_mse": float(_phase0_masked_mse(pred_vis, target_vis, pixel_mask)),
+            "masked_mae": float(_phase0_masked_mae(pred_vis, target_vis, pixel_mask)),
+            "masked_psnr": float(_phase0_masked_psnr(pred_vis, target_vis, pixel_mask)),
+            "full_mse": float(_phase0_full_mse(pred_vis, target_vis)),
+            "full_psnr": float(_phase0_full_psnr(pred_vis, target_vis)),
+        }
+
+    pred_vis = _denormalize_phase0_images(reconstructed.detach().float())
+    return {
+        "masked_mse": float(_phase0_masked_mse(pred_vis, target_vis, pixel_mask)),
+        "masked_mae": float(_phase0_masked_mae(pred_vis, target_vis, pixel_mask)),
+        "masked_psnr": float(_phase0_masked_psnr(pred_vis, target_vis, pixel_mask)),
+        "full_mse": float(_phase0_full_mse(pred_vis, target_vis)),
+        "full_psnr": float(_phase0_full_psnr(pred_vis, target_vis)),
+    }
+
+
+def _phase0_masked_mse(predictions: torch.Tensor, targets: torch.Tensor, pixel_mask: torch.Tensor) -> torch.Tensor:
+    mask = pixel_mask.float()
+    if mask.shape[1] == 1 and predictions.shape[1] > 1:
+        mask = mask.expand(-1, predictions.shape[1], -1, -1)
+    return ((predictions - targets).pow(2) * mask).sum() / (mask.sum() + 1e-8)
+
+
+def _phase0_masked_mae(predictions: torch.Tensor, targets: torch.Tensor, pixel_mask: torch.Tensor) -> torch.Tensor:
+    mask = pixel_mask.float()
+    if mask.shape[1] == 1 and predictions.shape[1] > 1:
+        mask = mask.expand(-1, predictions.shape[1], -1, -1)
+    return ((predictions - targets).abs() * mask).sum() / (mask.sum() + 1e-8)
+
+
+def _phase0_full_mse(predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    return (predictions - targets).pow(2).mean()
+
+
+def _phase0_full_psnr(predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    return torch.tensor(_phase0_psnr_from_mse(_phase0_full_mse(predictions, targets)), device=predictions.device)
+
+
+def _phase0_masked_psnr(predictions: torch.Tensor, targets: torch.Tensor, pixel_mask: torch.Tensor) -> torch.Tensor:
+    return torch.tensor(_phase0_psnr_from_mse(_phase0_masked_mse(predictions, targets, pixel_mask)), device=predictions.device)
+
+
+def patchify_phase0_images(images: torch.Tensor, patch_size: int) -> torch.Tensor:
+    if images.ndim != 4:
+        raise ValueError(f"Expected 4D image tensors, got shape {tuple(images.shape)}")
+    if images.shape[2] % patch_size != 0 or images.shape[3] % patch_size != 0:
+        raise ValueError("Image size must be divisible by patch_size for patchifying.")
+    batch_size, channels, height, width = images.shape
+    grid_h = height // patch_size
+    grid_w = width // patch_size
+    patches = images.reshape(batch_size, channels, grid_h, patch_size, grid_w, patch_size)
+    patches = patches.permute(0, 2, 4, 1, 3, 5).contiguous()
+    return patches.view(batch_size, grid_h * grid_w, channels * patch_size * patch_size)
+
+
+def unpatchify_phase0_images(patches: torch.Tensor, patch_size: int, channels: int = 3) -> torch.Tensor:
+    if patches.ndim != 3:
+        raise ValueError(f"Expected 3D patch tensors, got shape {tuple(patches.shape)}")
+    batch_size, num_patches, patch_dim = patches.shape
+    if channels < 1:
+        raise ValueError("channels must be >= 1")
+    if patch_dim != channels * patch_size * patch_size:
+        raise ValueError(
+            f"Patch dimension mismatch: expected {channels * patch_size * patch_size}, got {patch_dim}"
+        )
+    grid_size = int(math.isqrt(num_patches))
+    if grid_size * grid_size != num_patches:
+        raise ValueError(f"Number of patches must be a square, got {num_patches}")
+    images = patches.view(batch_size, grid_size, grid_size, channels, patch_size, patch_size)
+    images = images.permute(0, 3, 1, 4, 2, 5).contiguous()
+    return images.view(batch_size, channels, grid_size * patch_size, grid_size * patch_size)
+
+
+def patchify_phase0_masks(pixel_mask: torch.Tensor, patch_size: int) -> torch.Tensor:
+    if pixel_mask.ndim != 4:
+        raise ValueError(f"Expected 4D mask tensor, got shape {tuple(pixel_mask.shape)}")
+    if pixel_mask.shape[2] % patch_size != 0 or pixel_mask.shape[3] % patch_size != 0:
+        raise ValueError("Mask size must be divisible by patch_size for patchifying.")
+    mask = pixel_mask.float()
+    if mask.shape[1] != 1:
+        mask = mask.mean(dim=1, keepdim=True)
+    batch_size, _, height, width = mask.shape
+    grid_h = height // patch_size
+    grid_w = width // patch_size
+    patches = mask.reshape(batch_size, 1, grid_h, patch_size, grid_w, patch_size)
+    patches = patches.permute(0, 2, 4, 1, 3, 5).contiguous()
+    patches = patches.view(batch_size, grid_h * grid_w, patch_size * patch_size)
+    return patches.mean(dim=-1, keepdim=True)
+
+
+def _build_phase0_preview_canvas(
+    *,
+    title: str,
+    originals: torch.Tensor,
+    masked: torch.Tensor,
+    reconstructed: torch.Tensor,
+    epoch: int,
+    global_step: int,
+    sample_count: int,
+) -> Image.Image:
+    grid_original = _tensor_batch_to_grid_image(originals, nrow=sample_count)
+    grid_masked = _tensor_batch_to_grid_image(masked, nrow=sample_count)
+    grid_reconstructed = _tensor_batch_to_grid_image(reconstructed, nrow=sample_count)
+
+    label_height = 28
+    gap = 18
+    margin = 16
+    canvas_width = max(grid_original.width, grid_masked.width, grid_reconstructed.width) + margin * 2
+    canvas_height = margin * 2 + label_height * 3 + grid_original.height + grid_masked.height + grid_reconstructed.height + gap * 2
+    canvas = Image.new("RGB", (canvas_width, canvas_height), (20, 20, 20))
+    draw = ImageDraw.Draw(canvas)
+    try:
+        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
+        body_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
+    except OSError:
+        title_font = ImageFont.load_default()
+        body_font = ImageFont.load_default()
+
+    draw.text(
+        (margin, margin),
+        f"Phase 0 MIM Reconstruction Preview | {title} | epoch {epoch} | step {global_step}",
+        fill=(245, 245, 245),
+        font=title_font,
+    )
+    sections = [
+        ("Originals", grid_original),
+        ("Masked inputs", grid_masked),
+        (title, grid_reconstructed),
+    ]
+    y = margin + label_height
+    for label, image in sections:
+        draw.text((margin, y), label, fill=(220, 220, 220), font=body_font)
+        y += 18
+        canvas.paste(image, (margin, y))
+        y += image.height + gap
+    return canvas
+
+
+def _render_phase0_preview_pair(
+    originals: torch.Tensor,
+    pixel_mask: torch.Tensor,
+    reconstructed: torch.Tensor,
+    patch_size: int,
+    loss_mode: str,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if originals.shape != reconstructed.shape:
+        raise ValueError(f"Preview shape mismatch: {tuple(originals.shape)} vs {tuple(reconstructed.shape)}")
+    if originals.ndim != 4:
+        raise ValueError(f"Expected 4D image tensors, got shape {tuple(originals.shape)}")
+    if originals.shape[2] % patch_size != 0 or originals.shape[3] % patch_size != 0:
+        raise ValueError("Image size must be divisible by patch_size for preview rendering.")
+
+    batch_size, channels, _, _ = originals.shape
+    mask = pixel_mask
+
+    if loss_mode == PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE:
+        orig_patches = patchify_phase0_images(originals, patch_size)
+        pred_patches = patchify_phase0_images(reconstructed, patch_size)
+        mask_patches = patchify_phase0_masks(mask, patch_size)
+
+        patch_mean = orig_patches.mean(dim=-1, keepdim=True)
+        patch_var = orig_patches.var(dim=-1, unbiased=False, keepdim=True)
+        patch_std = torch.sqrt(patch_var + PHASE0_PATCH_NORMALIZATION_EPS)
+
+        full_output_patches = pred_patches * patch_std + patch_mean
+        masked_fill_patches = orig_patches * (1.0 - mask_patches) + full_output_patches * mask_patches
+        masked_fill = unpatchify_phase0_images(masked_fill_patches, patch_size, channels=channels)
+        full_output = unpatchify_phase0_images(full_output_patches, patch_size, channels=channels)
+        return _denormalize_phase0_images(masked_fill), _denormalize_phase0_images(full_output)
+
+    if loss_mode == PHASE0_LOSS_MODE_RAW_MSE:
+        if mask.shape[1] == 1 and reconstructed.shape[1] > 1:
+            mask = mask.expand(-1, reconstructed.shape[1], -1, -1)
+        masked_fill = originals * (1.0 - mask) + reconstructed * mask
+        return _denormalize_phase0_images(masked_fill), _denormalize_phase0_images(reconstructed)
+
+    raise ValueError(
+        f"Unknown Phase 0 loss mode for preview rendering: {loss_mode!r}. "
+        f"Expected {PHASE0_LOSS_MODE_RAW_MSE!r} or {PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE!r}."
+    )
+
+
 def _render_phase0_preview(
     originals: torch.Tensor,
     pixel_mask: torch.Tensor,
@@ -527,36 +751,14 @@ def _render_phase0_preview(
     loss_mode: str,
 ) -> torch.Tensor:
     """Map Phase 0 predictions back to a human-readable RGB preview."""
-    if originals.shape != reconstructed.shape:
-        raise ValueError(f"Preview shape mismatch: {tuple(originals.shape)} vs {tuple(reconstructed.shape)}")
-    if originals.ndim != 4:
-        raise ValueError(f"Expected 4D image tensors, got shape {tuple(originals.shape)}")
-    if originals.shape[2] % patch_size != 0 or originals.shape[3] % patch_size != 0:
-        raise ValueError("Image size must be divisible by patch_size for preview rendering.")
-
-    batch_size, channels, height, width = originals.shape
-    mask = pixel_mask
-
-    if loss_mode == PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE:
-        orig_patches = originals.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size)
-        pred_patches = reconstructed.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size)
-        mask_patches = mask.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size)
-
-        patch_mean = orig_patches.mean(dim=(4, 5), keepdim=True)
-        patch_var = orig_patches.var(dim=(4, 5), unbiased=False, keepdim=True)
-
-        unnormalized_pred_patches = pred_patches * torch.sqrt(patch_var + PHASE0_PATCH_NORMALIZATION_EPS) + patch_mean
-        blended_patches = orig_patches * (1.0 - mask_patches) + unnormalized_pred_patches * mask_patches
-        blended = blended_patches.permute(0, 1, 2, 4, 3, 5).contiguous().view(batch_size, channels, height, width)
-        return _denormalize_phase0_images(blended)
-
-    if loss_mode == PHASE0_LOSS_MODE_RAW_MSE:
-        return _denormalize_phase0_images(reconstructed)
-
-    raise ValueError(
-        f"Unknown Phase 0 loss mode for preview rendering: {loss_mode!r}. "
-        f"Expected {PHASE0_LOSS_MODE_RAW_MSE!r} or {PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE!r}."
+    masked_fill_preview, _ = _render_phase0_preview_pair(
+        originals,
+        pixel_mask,
+        reconstructed,
+        patch_size,
+        loss_mode,
     )
+    return masked_fill_preview
 
 
 def _tensor_batch_to_grid_image(images: torch.Tensor, nrow: int) -> Image.Image:
@@ -576,51 +778,47 @@ def save_phase0_reconstruction_preview(
     epoch: int,
     global_step: int,
     sample_count: int,
-) -> None:
+) -> tuple[Path, Path]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     sample_count = max(1, min(int(sample_count), int(originals.shape[0])))
     originals_vis = _denormalize_phase0_images(originals[:sample_count].detach())
     masked_vis = _denormalize_phase0_images((originals[:sample_count] * (1.0 - pixel_mask[:sample_count])).detach())
-    reconstructed_vis = _render_phase0_preview(
-        originals[:sample_count].detach(),
-        pixel_mask[:sample_count].detach(),
-        reconstructed[:sample_count].detach(),
-        patch_size=int(patch_size),
+    sample_images = originals[:sample_count].detach()
+    sample_mask = pixel_mask[:sample_count].detach()
+    sample_reconstructed = reconstructed[:sample_count].detach()
+
+    masked_fill_vis, full_output_vis = _render_phase0_preview_pair(
+        sample_images,
+        sample_mask,
+        sample_reconstructed,
+        patch_size=patch_size,
         loss_mode=loss_mode,
     )
 
-    grid_original = _tensor_batch_to_grid_image(originals_vis, nrow=sample_count)
-    grid_masked = _tensor_batch_to_grid_image(masked_vis, nrow=sample_count)
-    grid_reconstructed = _tensor_batch_to_grid_image(reconstructed_vis, nrow=sample_count)
+    masked_fill_canvas = _build_phase0_preview_canvas(
+        title="Masked-fill reconstruction",
+        originals=originals_vis,
+        masked=masked_vis,
+        reconstructed=masked_fill_vis,
+        epoch=epoch,
+        global_step=global_step,
+        sample_count=sample_count,
+    )
+    full_output_canvas = _build_phase0_preview_canvas(
+        title="Full-output reconstruction",
+        originals=originals_vis,
+        masked=masked_vis,
+        reconstructed=full_output_vis,
+        epoch=epoch,
+        global_step=global_step,
+        sample_count=sample_count,
+    )
 
-    label_height = 28
-    gap = 18
-    margin = 16
-    canvas_width = max(grid_original.width, grid_masked.width, grid_reconstructed.width) + margin * 2
-    canvas_height = margin * 2 + label_height * 3 + grid_original.height + grid_masked.height + grid_reconstructed.height + gap * 2
-    canvas = Image.new("RGB", (canvas_width, canvas_height), (20, 20, 20))
-    draw = ImageDraw.Draw(canvas)
-    try:
-        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
-        body_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
-    except OSError:
-        title_font = ImageFont.load_default()
-        body_font = ImageFont.load_default()
-
-    draw.text((margin, margin), f"Phase 0 MIM Reconstruction Preview | epoch {epoch} | step {global_step}", fill=(245, 245, 245), font=title_font)
-    sections = [
-        ("Originals", grid_original),
-        ("Masked inputs", grid_masked),
-        ("Reconstructions", grid_reconstructed),
-    ]
-    y = margin + label_height
-    for label, image in sections:
-        draw.text((margin, y), label, fill=(220, 220, 220), font=body_font)
-        y += 18
-        canvas.paste(image, (margin, y))
-        y += image.height + gap
-
-    canvas.save(output_path)
+    masked_fill_path = output_path.with_name(f"{output_path.stem}_masked_fill{output_path.suffix}")
+    full_output_path = output_path.with_name(f"{output_path.stem}_full_output{output_path.suffix}")
+    masked_fill_canvas.save(masked_fill_path)
+    full_output_canvas.save(full_output_path)
+    return full_output_path, masked_fill_path
 
 
 def log_phase0_state(
@@ -640,6 +838,29 @@ def log_phase0_state(
     best_loss: float | None = None,
     loss_plateau_windows_without_improvement: int | None = None,
     optimizer_lr: float | None = None,
+    grad_norm: float | None = None,
+    amp_scale: float | None = None,
+    skipped_optimizer_step: bool | None = None,
+    step_time_sec: float | None = None,
+    gpu_memory_allocated: float | None = None,
+    prediction_mean: float | None = None,
+    prediction_std: float | None = None,
+    target_mean: float | None = None,
+    target_std: float | None = None,
+    masked_ratio_actual: float | None = None,
+    train_loss_mean: float | None = None,
+    val_loss_mean: float | None = None,
+    masked_mse: float | None = None,
+    masked_mae: float | None = None,
+    masked_psnr: float | None = None,
+    full_mse: float | None = None,
+    full_psnr: float | None = None,
+    pred_norm_mean: float | None = None,
+    pred_norm_std: float | None = None,
+    target_norm_mean: float | None = None,
+    target_norm_std: float | None = None,
+    pred_rgb_after_unnorm_std: float | None = None,
+    masked_psnr_after_unnorm: float | None = None,
     args: argparse.Namespace | None = None,
 ) -> None:
     payload: dict[str, Any] = {
@@ -669,6 +890,52 @@ def log_phase0_state(
         payload["loss_plateau_windows_without_improvement"] = int(loss_plateau_windows_without_improvement)
     if optimizer_lr is not None:
         payload["optimizer_lr"] = float(optimizer_lr)
+    if grad_norm is not None:
+        payload["grad_norm"] = float(grad_norm)
+    if amp_scale is not None:
+        payload["amp_scale"] = float(amp_scale)
+    if skipped_optimizer_step is not None:
+        payload["skipped_optimizer_step"] = bool(skipped_optimizer_step)
+    if step_time_sec is not None:
+        payload["step_time_sec"] = float(step_time_sec)
+    if gpu_memory_allocated is not None:
+        payload["gpu_memory_allocated"] = float(gpu_memory_allocated)
+    if prediction_mean is not None:
+        payload["prediction_mean"] = float(prediction_mean)
+    if prediction_std is not None:
+        payload["prediction_std"] = float(prediction_std)
+    if target_mean is not None:
+        payload["target_mean"] = float(target_mean)
+    if target_std is not None:
+        payload["target_std"] = float(target_std)
+    if masked_ratio_actual is not None:
+        payload["masked_ratio_actual"] = float(masked_ratio_actual)
+    if train_loss_mean is not None:
+        payload["train_loss_mean"] = float(train_loss_mean)
+    if val_loss_mean is not None:
+        payload["val_loss_mean"] = float(val_loss_mean)
+    if masked_mse is not None:
+        payload["masked_mse"] = float(masked_mse)
+    if masked_mae is not None:
+        payload["masked_mae"] = float(masked_mae)
+    if masked_psnr is not None:
+        payload["masked_psnr"] = float(masked_psnr)
+    if full_mse is not None:
+        payload["full_mse"] = float(full_mse)
+    if full_psnr is not None:
+        payload["full_psnr"] = float(full_psnr)
+    if pred_norm_mean is not None:
+        payload["pred_norm_mean"] = float(pred_norm_mean)
+    if pred_norm_std is not None:
+        payload["pred_norm_std"] = float(pred_norm_std)
+    if target_norm_mean is not None:
+        payload["target_norm_mean"] = float(target_norm_mean)
+    if target_norm_std is not None:
+        payload["target_norm_std"] = float(target_norm_std)
+    if pred_rgb_after_unnorm_std is not None:
+        payload["pred_rgb_after_unnorm_std"] = float(pred_rgb_after_unnorm_std)
+    if masked_psnr_after_unnorm is not None:
+        payload["masked_psnr_after_unnorm"] = float(masked_psnr_after_unnorm)
     if args is not None:
         payload["backbone"] = str(args.backbone)
         payload["weights"] = str(args.weights)
@@ -1134,12 +1401,31 @@ def main() -> int:
 
         epoch_loss_sum = 0.0
         epoch_sample_count = 0
+        epoch_masked_mse_sum = 0.0
+        epoch_masked_mae_sum = 0.0
+        epoch_masked_psnr_sum = 0.0
+        epoch_full_mse_sum = 0.0
+        epoch_full_psnr_sum = 0.0
+        epoch_pred_std_sum = 0.0
+        epoch_grad_norm_sum = 0.0
+        epoch_grad_norm_count = 0
+        epoch_lr_last = float(optimizer.param_groups[0]["lr"]) if optimizer.param_groups else float(args.learning_rate)
+        epoch_pred_norm_mean_sum = 0.0
+        epoch_pred_norm_std_sum = 0.0
+        epoch_target_norm_mean_sum = 0.0
+        epoch_target_norm_std_sum = 0.0
+        epoch_pred_rgb_after_unnorm_std_sum = 0.0
+        epoch_masked_psnr_after_unnorm_sum = 0.0
         effective_batch_loss_sum = 0.0
         effective_batch_microbatch_count = 0
         last_completed_epoch_batch_index = epoch_batch_offset
         epoch_started_at = time.time()
         latest_grad_norm = float("nan")
         latest_effective_batch_loss = float("nan")
+        latest_amp_scale = float(scaler.get_scale()) if scaler.is_enabled() else 1.0
+        latest_skipped_optimizer_step = False
+        latest_step_time_sec = 0.0
+        latest_gpu_memory_allocated = float(torch.cuda.memory_allocated(device)) if device.type == "cuda" else 0.0
         optimizer.zero_grad(set_to_none=True)
         progress_total = len(loader)
         progress_desc = f"Phase0 epoch {epoch + 1}" if args.epochs <= 0 else f"Phase0 epoch {epoch + 1}/{args.epochs}"
@@ -1162,6 +1448,7 @@ def main() -> int:
         last_preview_batch_index = 0
 
         for step_index, batch in enumerate(progress, start=1):
+            step_started_at = time.time()
             if len(batch) == 3:
                 images, _, _ = batch
             elif len(batch) == 2:
@@ -1234,18 +1521,50 @@ def main() -> int:
             target_mean = float(target_stats.mean().item())
             target_std = float(target_stats.std(unbiased=False).item())
             masked_ratio_actual = float(pixel_mask_stats[:, :1].mean().item())
+            monitoring_metrics = _phase0_monitoring_metrics(
+                images,
+                reconstructed,
+                pixel_mask,
+                patch_size=args.patch_size,
+                loss_mode=args.loss_mode,
+            )
+            if args.loss_mode == PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE:
+                monitoring_metrics.setdefault("pred_norm_mean", float("nan"))
+                monitoring_metrics.setdefault("pred_norm_std", float("nan"))
+                monitoring_metrics.setdefault("target_norm_mean", float("nan"))
+                monitoring_metrics.setdefault("target_norm_std", float("nan"))
+                monitoring_metrics.setdefault("pred_rgb_after_unnorm_std", float("nan"))
+                monitoring_metrics.setdefault("masked_psnr_after_unnorm", float("nan"))
+            amp_scale_before_step = float(scaler.get_scale()) if scaler.is_enabled() else 1.0
             scaler.scale(loss).backward()
             batch_size = int(images.shape[0])
             epoch_batch_index = epoch_batch_offset + step_index
             last_completed_epoch_batch_index = epoch_batch_index
             epoch_loss_sum += step_loss * batch_size
             epoch_sample_count += batch_size
+            epoch_masked_mse_sum += float(monitoring_metrics["masked_mse"]) * batch_size
+            epoch_masked_mae_sum += float(monitoring_metrics["masked_mae"]) * batch_size
+            epoch_masked_psnr_sum += float(monitoring_metrics["masked_psnr"]) * batch_size
+            epoch_full_mse_sum += float(monitoring_metrics["full_mse"]) * batch_size
+            epoch_full_psnr_sum += float(monitoring_metrics["full_psnr"]) * batch_size
+            epoch_pred_std_sum += prediction_std * batch_size
+            if "pred_norm_mean" in monitoring_metrics:
+                epoch_pred_norm_mean_sum += float(monitoring_metrics["pred_norm_mean"]) * batch_size
+                epoch_pred_norm_std_sum += float(monitoring_metrics["pred_norm_std"]) * batch_size
+                epoch_target_norm_mean_sum += float(monitoring_metrics["target_norm_mean"]) * batch_size
+                epoch_target_norm_std_sum += float(monitoring_metrics["target_norm_std"]) * batch_size
+                epoch_pred_rgb_after_unnorm_std_sum += float(monitoring_metrics["pred_rgb_after_unnorm_std"]) * batch_size
+                epoch_masked_psnr_after_unnorm_sum += float(monitoring_metrics["masked_psnr_after_unnorm"]) * batch_size
             effective_batch_loss_sum += step_loss
             effective_batch_microbatch_count += 1
             last_preview_images = images.detach()
             last_preview_pixel_mask = pixel_mask.detach()
             last_preview_reconstructed = reconstructed.detach()
             last_preview_batch_index = epoch_batch_index
+            latest_amp_scale = amp_scale_before_step
+            latest_skipped_optimizer_step = False
+            latest_step_time_sec = max(time.time() - step_started_at, 0.0)
+            latest_gpu_memory_allocated = float(torch.cuda.memory_allocated(device)) if device.type == "cuda" else 0.0
 
             current_lr = float(optimizer.param_groups[0]["lr"]) if optimizer.param_groups else float(args.learning_rate)
             log_phase0_state(
@@ -1263,12 +1582,47 @@ def main() -> int:
                 best_loss=best_loss,
                 loss_plateau_windows_without_improvement=loss_plateau_windows_without_improvement,
                 optimizer_lr=current_lr,
+                amp_scale=latest_amp_scale,
+                skipped_optimizer_step=latest_skipped_optimizer_step,
+                step_time_sec=latest_step_time_sec,
+                gpu_memory_allocated=latest_gpu_memory_allocated,
                 prediction_mean=prediction_mean,
                 prediction_std=prediction_std,
                 target_mean=target_mean,
                 target_std=target_std,
                 masked_ratio_actual=masked_ratio_actual,
+                masked_mse=monitoring_metrics["masked_mse"],
+                masked_mae=monitoring_metrics["masked_mae"],
+                masked_psnr=monitoring_metrics["masked_psnr"],
+                full_mse=monitoring_metrics["full_mse"],
+                full_psnr=monitoring_metrics["full_psnr"],
+                pred_norm_mean=monitoring_metrics.get("pred_norm_mean"),
+                pred_norm_std=monitoring_metrics.get("pred_norm_std"),
+                target_norm_mean=monitoring_metrics.get("target_norm_mean"),
+                target_norm_std=monitoring_metrics.get("target_norm_std"),
+                pred_rgb_after_unnorm_std=monitoring_metrics.get("pred_rgb_after_unnorm_std"),
+                masked_psnr_after_unnorm=monitoring_metrics.get("masked_psnr_after_unnorm"),
                 args=args,
+            )
+
+            progress.set_postfix(
+                build_progress_postfix(
+                    global_step if global_step > 0 else step_index,
+                    None,
+                    epoch=epoch + 1,
+                    loss=step_loss,
+                    lr=current_lr,
+                    grad_norm=latest_grad_norm,
+                    pred_mean=prediction_mean,
+                    pred_std=prediction_std,
+                    target_mean=target_mean,
+                    target_std=target_std,
+                    mask_ratio_actual=masked_ratio_actual,
+                    amp_scale=latest_amp_scale,
+                    skipped_optimizer_step=latest_skipped_optimizer_step,
+                    step_time_sec=latest_step_time_sec,
+                    gpu_memory_allocated=latest_gpu_memory_allocated,
+                )
             )
 
             if step_index % args.grad_accum_steps == 0 or step_index == len(loader):
@@ -1308,6 +1662,8 @@ def main() -> int:
                     break
                 scaler.step(optimizer)
                 scaler.update()
+                latest_amp_scale = float(scaler.get_scale()) if scaler.is_enabled() else 1.0
+                latest_skipped_optimizer_step = latest_amp_scale < amp_scale_before_step
                 optimizer.zero_grad(set_to_none=True)
                 global_step += 1
                 # Advance the schedule once per optimizer step, not per microbatch.
@@ -1321,6 +1677,11 @@ def main() -> int:
                 train_loss_window_best_loss = min(train_loss_window_best_loss, effective_batch_loss)
                 train_loss_window_batch_count += 1
                 current_lr = float(optimizer.param_groups[0]["lr"]) if optimizer.param_groups else float(args.learning_rate)
+                epoch_lr_last = current_lr
+                latest_step_time_sec = max(time.time() - step_started_at, 0.0)
+                latest_gpu_memory_allocated = float(torch.cuda.memory_allocated(device)) if device.type == "cuda" else 0.0
+                epoch_grad_norm_sum += grad_norm
+                epoch_grad_norm_count += 1
 
                 log_phase0_state(
                     log_path,
@@ -1337,11 +1698,26 @@ def main() -> int:
                     loss_plateau_windows_without_improvement=loss_plateau_windows_without_improvement,
                     optimizer_lr=current_lr,
                     grad_norm=grad_norm,
+                    amp_scale=latest_amp_scale,
+                    skipped_optimizer_step=latest_skipped_optimizer_step,
+                    step_time_sec=latest_step_time_sec,
+                    gpu_memory_allocated=latest_gpu_memory_allocated,
                     prediction_mean=prediction_mean,
                     prediction_std=prediction_std,
                     target_mean=target_mean,
                     target_std=target_std,
                     masked_ratio_actual=masked_ratio_actual,
+                    masked_mse=monitoring_metrics["masked_mse"],
+                    masked_mae=monitoring_metrics["masked_mae"],
+                    masked_psnr=monitoring_metrics["masked_psnr"],
+                    full_mse=monitoring_metrics["full_mse"],
+                    full_psnr=monitoring_metrics["full_psnr"],
+                    pred_norm_mean=monitoring_metrics.get("pred_norm_mean"),
+                    pred_norm_std=monitoring_metrics.get("pred_norm_std"),
+                    target_norm_mean=monitoring_metrics.get("target_norm_mean"),
+                    target_norm_std=monitoring_metrics.get("target_norm_std"),
+                    pred_rgb_after_unnorm_std=monitoring_metrics.get("pred_rgb_after_unnorm_std"),
+                    masked_psnr_after_unnorm=monitoring_metrics.get("masked_psnr_after_unnorm"),
                     args=args,
                 )
                 log_json_event(
@@ -1359,8 +1735,31 @@ def main() -> int:
                         "target_std": target_std,
                         "masked_ratio_actual": masked_ratio_actual,
                         "mask_patch_size": int(args.patch_size),
+                        "amp_scale": latest_amp_scale,
+                        "skipped_optimizer_step": latest_skipped_optimizer_step,
+                        "step_time_sec": latest_step_time_sec,
+                        "gpu_memory_allocated": latest_gpu_memory_allocated,
                     },
                 )
+
+                step_postfix = build_progress_postfix(
+                    global_step,
+                    None,
+                    epoch=epoch + 1,
+                    loss=effective_batch_loss,
+                    lr=current_lr,
+                    grad_norm=grad_norm,
+                    pred_mean=prediction_mean,
+                    pred_std=prediction_std,
+                    target_mean=target_mean,
+                    target_std=target_std,
+                    mask_ratio_actual=masked_ratio_actual,
+                    amp_scale=latest_amp_scale,
+                    skipped_optimizer_step=latest_skipped_optimizer_step,
+                    step_time_sec=latest_step_time_sec,
+                    gpu_memory_allocated=latest_gpu_memory_allocated,
+                )
+                progress.set_postfix(step_postfix)
 
                 if train_loss_window_batch_count >= args.train_loss_window:
                     window_best_loss = train_loss_window_best_loss
@@ -1524,13 +1923,36 @@ def main() -> int:
         epoch_loss = epoch_loss_sum / max(1, epoch_sample_count)
         epoch_elapsed = max(time.time() - epoch_started_at, 1e-8)
         epoch_throughput = epoch_sample_count / epoch_elapsed
+        epoch_masked_mse = epoch_masked_mse_sum / max(1, epoch_sample_count)
+        epoch_masked_mae = epoch_masked_mae_sum / max(1, epoch_sample_count)
+        epoch_masked_psnr = epoch_masked_psnr_sum / max(1, epoch_sample_count)
+        epoch_full_mse = epoch_full_mse_sum / max(1, epoch_sample_count)
+        epoch_full_psnr = epoch_full_psnr_sum / max(1, epoch_sample_count)
+        epoch_pred_std_mean = epoch_pred_std_sum / max(1, epoch_sample_count)
+        epoch_grad_norm_mean = epoch_grad_norm_sum / max(1, epoch_grad_norm_count)
+        epoch_pred_norm_mean = epoch_pred_norm_mean_sum / max(1, epoch_sample_count)
+        epoch_pred_norm_std = epoch_pred_norm_std_sum / max(1, epoch_sample_count)
+        epoch_target_norm_mean = epoch_target_norm_mean_sum / max(1, epoch_sample_count)
+        epoch_target_norm_std = epoch_target_norm_std_sum / max(1, epoch_sample_count)
+        epoch_pred_rgb_after_unnorm_std = epoch_pred_rgb_after_unnorm_std_sum / max(1, epoch_sample_count)
+        epoch_masked_psnr_after_unnorm = epoch_masked_psnr_after_unnorm_sum / max(1, epoch_sample_count)
         log_json_event(
             log_path,
             {
                 "event": "phase0_epoch_summary",
                 "epoch": epoch + 1,
                 "global_step": global_step,
-                "epoch_loss": epoch_loss,
+                "train_loss_mean": epoch_loss,
+                "val_loss_mean": None,
+                "masked_mse": epoch_masked_mse,
+                "masked_mae": epoch_masked_mae,
+                "masked_psnr": epoch_masked_psnr,
+                "full_mse": epoch_full_mse,
+                "full_psnr": epoch_full_psnr,
+                "pred_std_mean": epoch_pred_std_mean,
+                "grad_norm_mean": epoch_grad_norm_mean,
+                "lr_last": epoch_lr_last,
+                "epoch_time_sec": epoch_elapsed,
                 "epoch_sample_count": epoch_sample_count,
                 "epoch_elapsed_seconds": epoch_elapsed,
                 "epoch_samples_per_second": epoch_throughput,
@@ -1538,7 +1960,7 @@ def main() -> int:
                 "train_loss_window_best_loss": train_loss_window_best_loss,
                 "train_loss_window_batch_count": train_loss_window_batch_count,
                 "loss_plateau_windows_without_improvement": loss_plateau_windows_without_improvement,
-                "optimizer_lr": current_lr,
+                "optimizer_lr": epoch_lr_last,
                 "last_completed_epoch_batch_index": last_completed_epoch_batch_index,
                 "mask_ratio": float(args.mask_ratio),
                 "batch_size": int(args.batch_size),
@@ -1546,6 +1968,30 @@ def main() -> int:
                 "effective_batch_size": int(args.batch_size * args.grad_accum_steps),
             },
         )
+        epoch_summary_message = (
+            f"[phase0][epoch {epoch + 1}] "
+            f"train_loss_mean={epoch_loss:.4f} "
+            f"val_loss_mean=n/a "
+            f"masked_mse={epoch_masked_mse:.4f} "
+            f"masked_mae={epoch_masked_mae:.4f} "
+            f"masked_psnr={epoch_masked_psnr:.2f} "
+            f"full_mse={epoch_full_mse:.4f} "
+            f"full_psnr={epoch_full_psnr:.2f} "
+            f"pred_std_mean={epoch_pred_std_mean:.4f} "
+            f"grad_norm_mean={epoch_grad_norm_mean:.4f} "
+            f"lr_last={epoch_lr_last:.2e} "
+            f"epoch_time_sec={epoch_elapsed:.1f}"
+        )
+        if args.loss_mode == PHASE0_LOSS_MODE_PATCH_NORMALIZED_MSE:
+            epoch_summary_message += (
+                f" pred_norm_mean={epoch_pred_norm_mean:.4f}"
+                f" pred_norm_std={epoch_pred_norm_std:.4f}"
+                f" target_norm_mean={epoch_target_norm_mean:.4f}"
+                f" target_norm_std={epoch_target_norm_std:.4f}"
+                f" pred_rgb_after_unnorm_std={epoch_pred_rgb_after_unnorm_std:.4f}"
+                f" masked_psnr_after_unnorm={epoch_masked_psnr_after_unnorm:.2f}"
+            )
+        tqdm.write(epoch_summary_message)
         if args.max_steps > 0 and global_step >= args.max_steps:
             save_phase0_checkpoint(
                 last_checkpoint,
@@ -1614,7 +2060,7 @@ def main() -> int:
             and last_preview_reconstructed is not None
         ):
             preview_path = reconstruction_preview_dir / f"epoch_{epoch + 1:04d}_step_{last_preview_batch_index:06d}.png"
-            save_phase0_reconstruction_preview(
+            full_output_preview_path, masked_fill_preview_path = save_phase0_reconstruction_preview(
                 preview_path,
                 originals=last_preview_images,
                 pixel_mask=last_preview_pixel_mask,
@@ -1631,7 +2077,8 @@ def main() -> int:
                     "event": "phase0_reconstruction_preview_saved",
                     "epoch": epoch + 1,
                     "global_step": global_step,
-                    "preview_path": str(preview_path),
+                    "preview_path": str(full_output_preview_path),
+                    "preview_masked_fill_path": str(masked_fill_preview_path),
                     "preview_count": int(args.reconstruction_preview_count),
                 },
             )
