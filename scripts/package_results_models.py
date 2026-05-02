@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import torch
+
 
 MODEL_DIRS = ("pt_models", "onnx_models", "onnx_quantised_models")
 SKIP_DIR_NAMES = {
@@ -139,6 +141,61 @@ def collect_source_checkpoints(source_root: Path) -> dict[str, Path]:
     return candidates
 
 
+def collect_packaged_checkpoints(pt_models_root: Path) -> dict[str, Path]:
+    candidates: dict[str, Path] = {}
+    if not pt_models_root.exists():
+        return candidates
+    for path in sorted(pt_models_root.glob("*/*.pt")):
+        if not path.is_file():
+            continue
+        alias = path.parent.name
+        existing = candidates.get(alias)
+        if existing is None or len(path.parts) < len(existing.parts):
+            candidates[alias] = path
+    return candidates
+
+
+def checkpoint_score(path: Path) -> tuple[int, float, float, str]:
+    checkpoint = torch.load(path, map_location="cpu")
+    if not isinstance(checkpoint, dict):
+        return (0, float("-inf"), float("-inf"), str(path))
+
+    def first_float(*keys: str) -> float | None:
+        for key in keys:
+            value = checkpoint.get(key)
+            if value is None:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    raw_acc = first_float("best_val_raw_acc", "val_raw_acc", "best_val_acc", "val_acc")
+    val_loss = first_float("best_val_loss", "val_loss")
+    if raw_acc is not None:
+        loss_score = -val_loss if val_loss is not None else float("-inf")
+        return (2, raw_acc, loss_score, str(path))
+    if val_loss is not None:
+        return (1, -val_loss, float("-inf"), str(path))
+    return (0, float("-inf"), float("-inf"), str(path))
+
+
+def select_overall_best_checkpoint(sources: dict[str, Path]) -> tuple[str, Path] | None:
+    best_alias: str | None = None
+    best_path: Path | None = None
+    best_score: tuple[int, float, float, str] | None = None
+    for alias, path in sources.items():
+        score = checkpoint_score(path)
+        if best_score is None or score > best_score:
+            best_alias = alias
+            best_path = path
+            best_score = score
+    if best_alias is None or best_path is None:
+        return None
+    return best_alias, best_path
+
+
 def clean_model_dirs(target_root: Path) -> None:
     for name in MODEL_DIRS:
         path = target_root / name
@@ -164,7 +221,8 @@ def copy_sources_to_pt_models(target_root: Path, sources: dict[str, Path]) -> li
         out_dir = pt_models_root / alias
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"{alias}.pt"
-        shutil.copy2(source, out_path)
+        if source.resolve() != out_path.resolve():
+            shutil.copy2(source, out_path)
         manifest.append(
             {
                 "alias": alias,
@@ -237,8 +295,15 @@ def main() -> int:
 
     sources = collect_source_checkpoints(source_root)
     if not sources:
-        print(f"No model checkpoints found under {source_root}")
-        return 1
+        sources = collect_packaged_checkpoints(target_root / "pt_models")
+        if not sources:
+            print(f"No model checkpoints found under {source_root} or {target_root / 'pt_models'}")
+            return 1
+
+    overall_best = select_overall_best_checkpoint(sources)
+    if overall_best is not None:
+        sources = dict(sources)
+        sources["overall_best"] = overall_best[1]
 
     source_is_target = source_root.resolve() == target_root.resolve()
     if args.clean_model_dirs and not source_is_target:
