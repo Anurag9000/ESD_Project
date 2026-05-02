@@ -37,6 +37,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--overwrite", action="store_true", default=True, help="Overwrite existing INT8 exports.")
     parser.add_argument("--no-overwrite", dest="overwrite", action="store_false", help="Skip existing INT8 exports.")
     parser.add_argument("--opset", type=int, default=17, help="Unused compatibility flag; kept for reporting.")
+    parser.add_argument(
+        "--pattern",
+        default="*/*.onnx",
+        help="Glob pattern relative to the selected results root/onnx_models directory for fp32 ONNX checkpoints.",
+    )
     return parser.parse_args()
 
 
@@ -207,7 +212,7 @@ def main() -> int:
     calibration_root = Path(args.calibration_root)
     verification_root = Path(args.verification_root)
 
-    fp32_checkpoints = sorted((results_dir / "onnx_models").glob("*/*.onnx"))
+    fp32_checkpoints = sorted((results_dir / "onnx_models").glob(args.pattern))
     if not fp32_checkpoints:
         print(f"No fp32 ONNX checkpoints found in {results_dir / 'onnx_models'}")
         return 1
