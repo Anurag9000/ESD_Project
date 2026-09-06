@@ -2,7 +2,7 @@
 from __future__ import annotations
 import hashlib,json,os,subprocess,sys,urllib.request
 from pathlib import Path
-R="Anurag9000/ESD_Project";C="8080f8c8e55d802d4220bcc1c9b62a4f2e2ce052";S="a739ff9e31d9be7b5c9b0fe8d9bcfca6d75c846b";U=f"https://raw.githubusercontent.com/Anurag9000/RigorousRAG/{C}/tools/universal_training_controller_entry.py";D=Path(__file__).resolve().parent
+R="Anurag9000/ESD_Project";C="a3d25bd282d8e2e0d9f2cb3730d4d036703a39ad";S="2515a8a2fc2dbed7334a4240438dc095f19636d2";U=f"https://raw.githubusercontent.com/Anurag9000/RigorousRAG/{C}/tools/universal_training_controller_entry.py";D=Path(__file__).resolve().parent
 P={"repository":R,"preferred_training_entrypoints":["train.py","main.py","run_training.py","scripts/train.py","scripts/run_training.py","scripts/run_pipeline.py"],"preferred_dataset_entrypoints":["prepare_data.py","scripts/prepare_data.py","scripts/download_data.py","scripts/dataset_setup.py"],"dynamic_registry_covers":[],"extra_jobs":[],"ignore_entrypoints":["run_all_training.py"],"strict_coverage":True,"require_native_resume":True,"require_exact_resume":True,"require_training_exact_resume":True,"require_training_early_stopping":True,"require_dag_enforcement":True,"require_model_surface_accounting":True,"require_literal_opf_mechanism_parity":True,"require_well_formed_training_exemptions":True}
 def h(x):return hashlib.sha1(f"blob {len(x)}\0".encode()+x).hexdigest()
 def main():
