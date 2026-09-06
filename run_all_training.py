@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import hashlib,json,os,subprocess,sys,urllib.request
+import hashlib,os,subprocess,sys,urllib.request
 from pathlib import Path
-R="Anurag9000/ESD_Project";C="7b9ceb12d6c5fdef33eefd73eaea4c027b941737";S="4ecb86674c3baa91c88ff57a8699decce26c528d";U=f"https://raw.githubusercontent.com/Anurag9000/RigorousRAG/{C}/tools/universal_training_controller_entry.py";D=Path(__file__).resolve().parent
-P={"repository":R,"preferred_training_entrypoints":["train.py","main.py","run_training.py","scripts/train.py","scripts/run_training.py","scripts/run_pipeline.py"],"preferred_dataset_entrypoints":["prepare_data.py","scripts/prepare_data.py","scripts/download_data.py","scripts/dataset_setup.py"],"dynamic_registry_covers":[],"extra_jobs":[],"ignore_entrypoints":["run_all_training.py"],"strict_coverage":True,"require_native_resume":True,"require_exact_resume":True,"require_training_exact_resume":True,"require_training_early_stopping":True,"require_dag_enforcement":True,"require_model_surface_accounting":True,"require_literal_opf_mechanism_parity":True,"require_well_formed_training_exemptions":True}
+R="Anurag9000/ESD_Project";B="89d356815c094c9a488041da0cea2dce84e83a35";S="a7b597380f9c0f73d7cebf43f6ce4667fe1f8db0";AC="dd3043cd8a36d50c03e5cfc27a17d58a74aa7bec";AS="c16610e877541342f71c9925aa9d83f636df52f7";D=Path(__file__).resolve().parent;U=f"https://raw.githubusercontent.com/Anurag9000/RigorousRAG/{AC}/tools/repo_training_launcher_adapter.py"
 def h(x):return hashlib.sha1(f"blob {len(x)}\0".encode()+x).hexdigest()
 def main():
- q=D/".training_control"/"universal_training_controller_entry.py"
- if not q.is_file() or h(q.read_bytes())!=S:
-  q.parent.mkdir(parents=True,exist_ok=True);x=urllib.request.urlopen(U,timeout=60).read()
-  if h(x)!=S:raise RuntimeError("Pinned controller checksum mismatch")
-  t=q.with_suffix(".tmp");t.write_bytes(x);os.replace(t,q)
- e=os.environ.copy();e["TRAINING_CONTROL_PROFILE"]=json.dumps(P,separators=(",",":"));e["TRAINING_CONTROL_REPO_ROOT"]=str(D);e.setdefault("TRAINING_CONTROL_TERMINATION_GRACE_SEC","30");return subprocess.call([sys.executable,str(q),*sys.argv[1:]],cwd=D,env=e)
+ p=D/".training_control"/"repo_training_launcher_adapter.py"
+ if not p.is_file() or h(p.read_bytes())!=AS:
+  p.parent.mkdir(parents=True,exist_ok=True);x=urllib.request.urlopen(U,timeout=60).read()
+  if h(x)!=AS:raise RuntimeError("Pinned launcher adapter checksum mismatch")
+  t=p.with_suffix(".tmp");t.write_bytes(x);os.replace(t,p)
+ e=os.environ.copy();e["TRAINING_LAUNCHER_BASE_REPOSITORY"]=R;e["TRAINING_LAUNCHER_BASE_COMMIT"]=B;e["TRAINING_LAUNCHER_BASE_BLOB"]=S;e["TRAINING_CONTROL_REPO_ROOT"]=str(D);return subprocess.call([sys.executable,str(p),*sys.argv[1:]],cwd=D,env=e)
 if __name__=="__main__":raise SystemExit(main())
