@@ -1,20 +1,11 @@
 #!/usr/bin/env python3
 """One-command exhaustive ESD training/scientific lifecycle controller.
 
-The repository-owned v1 authority expands the actual finite source selector space:
-all registered backbones, pretrained/scratch initialization, AdamW/SAM, precision
-modes, progressive/full-model classifier tuning, stopping metrics, sampling modes,
-SupCon+CE/CE-only, Phase-0 MIM objectives/schedulers and Phase-0-seeded supervised
-training. Distinct confidence-gap/class-weight/targeted-confusion losses, train-only
-refinement, checkpoint evaluation, TorchScript, verified ONNX and INT8 quantization
-are also independent DAG transactions.
-
-Native trainer checkpoints already preserve model/optimizer/scheduler/scaler and
-in-epoch progress. ``esd_pressure_runner_v1.py`` adds the OPF checkpoint request /
-acknowledgement bridge without changing scheduling. Resource admission, maximal
-safe concurrency, CPU/GPU placement, RAM/VRAM pressure, retry/pause/relaunch and
-process control remain exclusively in the literal byte-pinned OPF_ADP runtime
-loaded by canonical controller v37.
+The repository-owned v1 scientific authority still defines the complete finite
+selector space.  The v2 executable catalog preserves those exact jobs while routing
+all supervised metric-learning transactions through the restart-addressable data
+entrypoint used by dataset-cohort migration.  OPF_ADP remains the sole outer
+resource/pressure scheduler; no scheduling policy is reimplemented here.
 """
 from __future__ import annotations
 
@@ -80,13 +71,13 @@ PROFILE = {
         }
     ],
     "job_catalog": {
-        "path": "training_control/esd_scientific_authority_v1.py",
+        "path": "training_control/esd_scientific_job_catalog_v2.py",
         "function": "iter_jobs",
         "args": [],
         "kwargs": {},
     },
     "preferred_training_entrypoints": [
-        "scripts/metric_learning_pipeline.py",
+        "training_control/run_metric_learning_exact_v1.py",
         "scripts/train_phase0_mim.py",
     ],
     "preferred_dataset_entrypoints": [
@@ -105,6 +96,9 @@ PROFILE = {
         "scripts/finalize_refinement_acceptance.py",
         "scripts/derive_recursive_bootstrap.py",
         "training_control/esd_scientific_authority_v1.py",
+        "training_control/esd_scientific_job_catalog_v2.py",
+        "training_control/esd_deterministic_data_v1.py",
+        "training_control/run_metric_learning_exact_v1.py",
         "training_control/esd_pressure_runner_v1.py",
         "training_control/esd_postprocess_v1.py",
     ],
@@ -114,6 +108,9 @@ PROFILE = {
         "run_full_training_pipeline.sh",
         "scripts/audit_esd_scientific_authority_v1.py",
         "training_control/esd_scientific_authority_v1.py",
+        "training_control/esd_scientific_job_catalog_v2.py",
+        "training_control/esd_deterministic_data_v1.py",
+        "training_control/run_metric_learning_exact_v1.py",
         "training_control/esd_pressure_runner_v1.py",
         "training_control/esd_postprocess_v1.py",
     ],
@@ -156,7 +153,7 @@ def main() -> int:
             )
         _atomic(cache, payload)
 
-    profile_path = ROOT / ".training_control" / "esd_scientific_v1_v37.json"
+    profile_path = ROOT / ".training_control" / "esd_scientific_v2_v37.json"
     _atomic(
         profile_path,
         (json.dumps(PROFILE, indent=2, sort_keys=True) + "\n").encode("utf-8"),
