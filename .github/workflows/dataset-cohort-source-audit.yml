@@ -11,6 +11,7 @@ name: Dataset Cohort Source Audit
       - "training_control/esd_dataset_cohort_catalog_v1.py"
       - "training_control/esd_dataset_cohort_catalog_v2.py"
       - "training_control/esd_shared_batch_broker_v1.py"
+      - "training_control/esd_shared_batch_broker_v2.py"
       - "tests/test_esd_deterministic_data_v1.py"
       - "run_all_training.py"
       - ".github/workflows/dataset-cohort-source-audit.yml"
@@ -38,6 +39,7 @@ jobs:
             training_control/esd_dataset_cohort_catalog_v1.py \
             training_control/esd_dataset_cohort_catalog_v2.py \
             training_control/esd_shared_batch_broker_v1.py \
+            training_control/esd_shared_batch_broker_v2.py \
             tests/test_esd_deterministic_data_v1.py \
             run_all_training.py
       - name: Exercise pure deterministic seed tests
@@ -156,15 +158,29 @@ jobs:
               if marker not in physical_v2:
                   raise SystemExit(f"missing ESD v2 grouping invariant: {marker}")
 
-          broker = Path("training_control/esd_shared_batch_broker_v1.py").read_text(encoding="utf-8")
+          broker_v1 = Path("training_control/esd_shared_batch_broker_v1.py").read_text(encoding="utf-8")
           for marker in (
               "sampler divergence",
               "move_to_device",
               "consumers_expected",
               "torch.cuda.empty_cache",
           ):
-              if marker not in broker:
-                  raise SystemExit(f"missing ESD shared batch broker invariant: {marker}")
+              if marker not in broker_v1:
+                  raise SystemExit(f"missing ESD shared batch broker v1 invariant: {marker}")
+
+          broker_v2 = Path("training_control/esd_shared_batch_broker_v2.py").read_text(encoding="utf-8")
+          for marker in (
+              'SCHEMA = "esd-shared-batch-broker/v2"',
+              "register_consumer",
+              "deactivate",
+              "transition",
+              "expected: set[str]",
+              "stage transitions must occur between committed batches",
+              "assert_batch_boundary_clean",
+              "sampler divergence",
+          ):
+              if marker not in broker_v2:
+                  raise SystemExit(f"missing ESD shared batch broker v2 invariant: {marker}")
 
           root = Path("run_all_training.py").read_text(encoding="utf-8")
           if '"path": "training_control/esd_scientific_job_catalog_v2.py"' not in root:
