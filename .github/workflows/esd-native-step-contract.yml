@@ -36,7 +36,7 @@ jobs:
       - name: Prove native cohort adapter seam
         run: python training_control/esd_native_step_contract_v1.py
       - name: Test native shared-batch iterator
-        run: python -m pytest -q tests/test_esd_native_batch_iterator_v1.py
+        run: python -m unittest -v tests.test_esd_native_batch_iterator_v1
       - name: Refuse premature root activation
         run: |
           python - <<'PY'
