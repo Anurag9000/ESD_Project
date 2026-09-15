@@ -13,6 +13,7 @@ name: Dataset Cohort Source Audit
       - "training_control/esd_shared_batch_broker_v1.py"
       - "training_control/esd_shared_batch_broker_v2.py"
       - "tests/test_esd_deterministic_data_v1.py"
+      - "tests/test_esd_shared_batch_broker_v2.py"
       - "run_all_training.py"
       - ".github/workflows/dataset-cohort-source-audit.yml"
   workflow_dispatch:
@@ -41,6 +42,7 @@ jobs:
             training_control/esd_shared_batch_broker_v1.py \
             training_control/esd_shared_batch_broker_v2.py \
             tests/test_esd_deterministic_data_v1.py \
+            tests/test_esd_shared_batch_broker_v2.py \
             run_all_training.py
       - name: Exercise pure deterministic seed tests
         run: |
@@ -64,6 +66,9 @@ jobs:
               getattr(module, name)()
           print(f"ESD deterministic seed tests: PASS ({len(test_names)})")
           PY
+      - name: Exercise completion-aware shared batch broker
+        run: |
+          PYTHONPATH=training_control python tests/test_esd_shared_batch_broker_v2.py
       - name: Exercise lossless physical grouping compiler
         run: |
           PYTHONPATH=training_control python - <<'PY'
