@@ -1,0 +1,83 @@
+name: Dataset Cohort Source Audit
+
+"on":
+  push:
+    branches: [main]
+    paths:
+      - "training_control/dataset_cohort_runtime_entry.py"
+      - "training_control/esd_deterministic_data_v1.py"
+      - "training_control/run_metric_learning_exact_v1.py"
+      - "training_control/esd_scientific_job_catalog_v2.py"
+      - "tests/test_esd_deterministic_data_v1.py"
+      - "run_all_training.py"
+      - ".github/workflows/dataset-cohort-source-audit.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-data-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile migration surfaces
+        run: |
+          python -m py_compile \
+            training_control/dataset_cohort_runtime_entry.py \
+            training_control/esd_deterministic_data_v1.py \
+            training_control/run_metric_learning_exact_v1.py \
+            training_control/esd_scientific_job_catalog_v2.py \
+            tests/test_esd_deterministic_data_v1.py \
+            run_all_training.py
+      - name: Exercise pure deterministic seed tests
+        run: |
+          python -m pytest -q tests/test_esd_deterministic_data_v1.py
+      - name: Audit source invariants
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          shim_path = Path("training_control/esd_deterministic_data_v1.py")
+          shim = shim_path.read_text(encoding="utf-8")
+          ast.parse(shim, filename=str(shim_path))
+          forbidden = ("os.urandom", "getpid", "get_worker_info", "_draw_counter")
+          found = [marker for marker in forbidden if marker in shim]
+          if found:
+              raise SystemExit("restart-addressable shim retains process entropy: " + ", ".join(found))
+          for marker in (
+              "derive_augmentation_seed",
+              '"persistent_workers": False',
+              "source_index",
+              "variant_index",
+              "epoch",
+              "view_offset",
+              "attempt",
+          ):
+              if marker not in shim:
+                  raise SystemExit(f"missing ESD exact-data invariant: {marker}")
+
+          wrapper = Path("training_control/run_metric_learning_exact_v1.py").read_text(encoding="utf-8")
+          if "install(module)" not in wrapper or "pipeline.run_experiment(args)" not in wrapper:
+              raise SystemExit("ESD exact trainer no longer installs shim before native run_experiment")
+
+          catalog = Path("training_control/esd_scientific_job_catalog_v2.py").read_text(encoding="utf-8")
+          for marker in (
+              'LEGACY_ENTRY = "scripts/metric_learning_pipeline.py"',
+              'EXACT_ENTRY = "training_control/run_metric_learning_exact_v1.py"',
+              'row["cpu_capable"] = True',
+              'row["gpu_capable"] = True',
+          ):
+              if marker not in catalog:
+                  raise SystemExit(f"missing ESD catalog invariant: {marker}")
+
+          root = Path("run_all_training.py").read_text(encoding="utf-8")
+          if '"path": "training_control/esd_scientific_job_catalog_v2.py"' not in root:
+              raise SystemExit("root controller is not using ESD v2 executable catalog")
+          print("ESD exact-data migration source contract: PASS")
+          PY
