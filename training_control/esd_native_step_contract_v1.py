@@ -2,11 +2,11 @@
 """Source contract for the ESD physical cohort model-step adapter.
 
 The physical cohort layer is allowed to share sample coordinates/views, but it is
-not allowed to reimplement ESD model science.  This contract proves that the live
+not allowed to reimplement ESD model science. This contract proves that the live
 repository still exposes the native batch-step, deterministic sampler, SAM/AdamW,
 checkpoint and stage-resume seams required by an adapter.
 
-It deliberately emits no execution claim.  A root profile must not advertise
+It deliberately emits no execution claim. A root profile must not advertise
 physical cohort execution merely because this source contract passes.
 """
 from __future__ import annotations
@@ -35,7 +35,7 @@ _REQUIRED_PIPELINE_FUNCTIONS = {
     "train_classifier_steps",
     "save_step_checkpoint",
     "save_training_checkpoint",
-    "load_training_checkpoint",
+    "load_resume_checkpoint",
     "build_classifier_phase_plan",
     "resolve_phase_start_index",
 }
@@ -142,9 +142,6 @@ def audit() -> dict[str, Any]:
     _require_tokens(broker, _REQUIRED_BROKER_TOKENS, "stage-aware shared-batch broker")
     _require_tokens(grouping, _REQUIRED_GROUPING_TOKENS, "dataset/view grouping compiler")
 
-    # Fail closed on the exact structural assumptions the future adapter relies on.
-    # The native step functions must accept a batch iterator and explicit step limit
-    # so the cohort controls *when* a step is offered without owning the loss math.
     tree = ast.parse(pipeline, filename=str(PIPELINE))
     signatures: dict[str, list[str]] = {}
     for node in tree.body:
@@ -172,6 +169,7 @@ def audit() -> dict[str, Any]:
         "native_sampler_classes": sorted(
             name for name in _REQUIRED_PIPELINE_CLASSES if "Sampler" in name
         ),
+        "native_resume_loader": "load_resume_checkpoint",
         "sampler_cursor_source_proven": True,
         "native_sam_and_adamw_preserved": True,
         "native_amp_scaler_state_preserved": True,
