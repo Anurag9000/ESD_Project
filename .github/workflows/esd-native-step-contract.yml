@@ -1,0 +1,45 @@
+name: ESD Native Cohort Adapter Contract
+
+"on":
+  push:
+    branches: [main]
+    paths:
+      - "scripts/metric_learning_pipeline.py"
+      - "scripts/train_phase0_mim.py"
+      - "training_control/esd_deterministic_data_v1.py"
+      - "training_control/esd_dataset_cohort_catalog_v2.py"
+      - "training_control/esd_shared_batch_broker_v2.py"
+      - "training_control/esd_native_step_contract_v1.py"
+      - ".github/workflows/esd-native-step-contract.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-step-seam:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile source contract
+        run: python -m py_compile training_control/esd_native_step_contract_v1.py
+      - name: Prove native cohort adapter seam
+        run: python training_control/esd_native_step_contract_v1.py
+      - name: Refuse premature root activation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          root = Path("run_all_training.py").read_text(encoding="utf-8")
+          contract = Path("training_control/esd_native_step_contract_v1.py").read_text(encoding="utf-8")
+          if '"physical_cohort_execution_activated": False' not in contract:
+              raise SystemExit("native step contract must remain explicit about non-activation")
+          if '"require_dataset_cohort_execution": True' in root:
+              raise SystemExit(
+                  "ESD root advertises physical cohort execution before a native model adapter/worker is certified"
+              )
+          print("ESD native model-step adapter seam: PASS; root activation remains fail-closed")
+          PY
