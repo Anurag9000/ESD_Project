@@ -84,10 +84,11 @@ _REQUIRED_BROKER_TOKENS = (
     "move_to_device",
 )
 _REQUIRED_GROUPING_TOKENS = (
-    "physical_batch_size",
+    "physical_batch_contract",
     "supcon_then_ce",
-    "ce_single_view",
-    "mim_two_view",
+    "ce_only",
+    "phase0_mim",
+    "final_refine",
     "overlap_group_last",
 )
 
@@ -170,6 +171,11 @@ def audit() -> dict[str, Any]:
             name for name in _REQUIRED_PIPELINE_CLASSES if "Sampler" in name
         ),
         "native_resume_loader": "load_resume_checkpoint",
+        "grouping_coordinates": [
+            "canonical_data_contract",
+            "workflow_cadence",
+            "physical_batch_contract",
+        ],
         "sampler_cursor_source_proven": True,
         "native_sam_and_adamw_preserved": True,
         "native_amp_scaler_state_preserved": True,
