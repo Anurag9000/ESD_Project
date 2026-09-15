@@ -109,7 +109,13 @@ class SharedBatchBroker:
             self._active.add(consumer_id)
 
     def deactivate(self, consumer_id: str) -> None:
-        """Retire a completed/stage-transitioned consumer from pending views."""
+        """Retire a completed consumer from pending views.
+
+        Completion is allowed while a batch is open: the model is removed only
+        from obligations it has not yet consumed. Stage transitions are stricter
+        and are handled by :meth:`transition`, which requires a clean committed
+        batch boundary before changing stream/view identity.
+        """
         with self._lock:
             self._ensure_open()
             self._active.discard(consumer_id)
@@ -128,9 +134,30 @@ class SharedBatchBroker:
         view_key: str,
         batch_size: int,
     ) -> ConsumerRegistration:
-        """Atomically leave the old stage/view and enter a new compatible one."""
+        """Atomically change a consumer's stage/view at a committed boundary.
+
+        A stage transition can alter augmentation/view semantics and therefore
+        may never take effect while any physical batch is still open for the old
+        stream. Requiring a clean boundary prevents a model from joining the same
+        batch twice through two different views while siblings are still using it.
+        """
         with self._lock:
-            self.deactivate(consumer_id)
+            self._ensure_open()
+            current = self._registrations.get(consumer_id)
+            if current is None:
+                raise KeyError(f"unknown ESD cohort consumer {consumer_id!r}")
+            if any(
+                cache_stream == current.stream_key
+                for cache_stream, _view, _epoch, _batch in self._cache
+            ) or any(
+                coordinate_stream == current.stream_key
+                for coordinate_stream, _epoch, _batch in self._batch_coordinates
+            ):
+                raise RuntimeError(
+                    f"{consumer_id}: stage transitions must occur between committed batches; "
+                    f"stream {current.stream_key!r} still has an open physical batch"
+                )
+            self._active.discard(consumer_id)
             self._registrations.pop(consumer_id, None)
             return self.register_consumer(
                 consumer_id=consumer_id,
