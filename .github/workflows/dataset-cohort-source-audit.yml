@@ -9,6 +9,7 @@ name: Dataset Cohort Source Audit
       - "training_control/run_metric_learning_exact_v1.py"
       - "training_control/esd_scientific_job_catalog_v2.py"
       - "training_control/esd_dataset_cohort_catalog_v1.py"
+      - "training_control/esd_dataset_cohort_catalog_v2.py"
       - "training_control/esd_shared_batch_broker_v1.py"
       - "tests/test_esd_deterministic_data_v1.py"
       - "run_all_training.py"
@@ -35,6 +36,7 @@ jobs:
             training_control/run_metric_learning_exact_v1.py \
             training_control/esd_scientific_job_catalog_v2.py \
             training_control/esd_dataset_cohort_catalog_v1.py \
+            training_control/esd_dataset_cohort_catalog_v2.py \
             training_control/esd_shared_batch_broker_v1.py \
             tests/test_esd_deterministic_data_v1.py \
             run_all_training.py
@@ -64,24 +66,30 @@ jobs:
         run: |
           PYTHONPATH=training_control python - <<'PY'
           import json
-          import esd_dataset_cohort_catalog_v1 as cohorts
-          result = cohorts.compile_catalog()
-          if result["schema"] != "esd-dataset-cohort-catalog/v1":
+          import esd_dataset_cohort_catalog_v1 as v1
+          import esd_dataset_cohort_catalog_v2 as v2
+          base = v1.compile_catalog()
+          result = v2.compile_catalog()
+          if result["schema"] != "esd-dataset-cohort-catalog/v2":
               raise SystemExit("unexpected ESD cohort catalog schema")
+          if result["base_schema"] != base["schema"]:
+              raise SystemExit("ESD v2 cohort catalog does not refine v1")
           if not result["overlap_group_last"]:
               raise SystemExit("ESD overlap group is not last")
-          if result["logical_training_jobs"] <= 0:
-              raise SystemExit("ESD cohort compiler found no training jobs")
+          if result["logical_training_jobs"] != base["logical_training_jobs"]:
+              raise SystemExit("ESD v2 changed the scientific training inventory")
           groups = result["dataset_groups"]
           if not groups:
               raise SystemExit("ESD cohort compiler found no dataset group")
           seen = []
           for group in groups:
               for lane in group["lanes"]:
+                  if not lane["workflow_cadence"] or not lane["physical_batch_contract"]:
+                      raise SystemExit("ESD v2 lane lacks workflow/batch compatibility coordinates")
                   seen.extend(lane["logical_job_ids"])
           if len(seen) != len(set(seen)) or len(seen) != result["logical_training_jobs"]:
               raise SystemExit("ESD cohort compiler is not a one-to-one logical-job mapping")
-          print(json.dumps(cohorts.metadata(), indent=2, sort_keys=True))
+          print(json.dumps(v2.metadata(), indent=2, sort_keys=True))
           PY
       - name: Audit source invariants
         run: |
@@ -91,11 +99,16 @@ jobs:
 
           shim_path = Path("training_control/esd_deterministic_data_v1.py")
           shim = shim_path.read_text(encoding="utf-8")
-          ast.parse(shim, filename=str(shim_path))
-          forbidden = ("os.urandom", "getpid", "get_worker_info", "_draw_counter")
-          found = [marker for marker in forbidden if marker in shim]
-          if found:
-              raise SystemExit("restart-addressable shim retains process entropy: " + ", ".join(found))
+          tree = ast.parse(shim, filename=str(shim_path))
+          forbidden = []
+          for node in ast.walk(tree):
+              if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+                  if (node.value.id, node.attr) in {("os", "urandom"), ("os", "getpid")}:
+                      forbidden.append(f"{node.value.id}.{node.attr}")
+              if isinstance(node, ast.Name) and node.id in {"get_worker_info", "_draw_counter"}:
+                  forbidden.append(node.id)
+          if forbidden:
+              raise SystemExit("restart-addressable shim retains executable process entropy: " + ", ".join(sorted(set(forbidden))))
           for marker in (
               "derive_augmentation_seed",
               '"persistent_workers": False',
@@ -122,15 +135,26 @@ jobs:
               if marker not in catalog:
                   raise SystemExit(f"missing ESD catalog invariant: {marker}")
 
-          physical = Path("training_control/esd_dataset_cohort_catalog_v1.py").read_text(encoding="utf-8")
+          physical_v1 = Path("training_control/esd_dataset_cohort_catalog_v1.py").read_text(encoding="utf-8")
           for marker in (
               'OVERLAP_KEY = "__overlap__"',
               '"gpu_first_variant_required": True',
               '"cpu_variant_required": True',
               '"lane_rule": "share_batch_only_when_canonical_data_contract_matches"',
           ):
-              if marker not in physical:
-                  raise SystemExit(f"missing ESD physical grouping invariant: {marker}")
+              if marker not in physical_v1:
+                  raise SystemExit(f"missing ESD v1 grouping invariant: {marker}")
+
+          physical_v2 = Path("training_control/esd_dataset_cohort_catalog_v2.py").read_text(encoding="utf-8")
+          for marker in (
+              'SCHEMA = "esd-dataset-cohort-catalog/v2"',
+              '"uniform_batch_required_inside_lane": True',
+              '"effective_batch_preserved_or_lane_split": True',
+              '"workflow_cadence"',
+              '"physical_batch_contract"',
+          ):
+              if marker not in physical_v2:
+                  raise SystemExit(f"missing ESD v2 grouping invariant: {marker}")
 
           broker = Path("training_control/esd_shared_batch_broker_v1.py").read_text(encoding="utf-8")
           for marker in (
