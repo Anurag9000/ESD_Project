@@ -13,14 +13,14 @@ The user-level grouping rule is represented literally:
 * multi-dataset/overlap parents are sorted last;
 * parents are ordered by descending distinct model-family count;
 * within a dataset parent, lanes separate incompatible sample streams (sampling
-  strategy, supervised vs MIM vs final-refinement, initialization dependency,
-  and any command-line data-shaping options);
+  strategy, supervised vs MIM vs final-refinement, and data-shaping options);
+* initialization/model/loss/optimizer choices do not split a data lane;
 * logical jobs are mapped exactly once and are never silently dropped.
 
 A lane is the smallest unit allowed to share one synchronized raw-batch cursor.
-Different model/loss/optimizer/precision choices can share a lane because those
-choices do not select different examples.  Sampling strategy or data-shaping
-choices *do* split a lane because they change which example is next.
+Different model/loss/optimizer/precision/initialization choices can share a lane
+because those choices do not select different examples. Sampling strategy or
+data-shaping choices *do* split a lane because they change which example is next.
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ import os
 from pathlib import Path
 import shlex
 import sys
-from typing import Any, Iterable, Iterator, Mapping, Sequence
+from typing import Any, Iterator, Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTROL = ROOT / "training_control"
@@ -45,7 +45,10 @@ OVERLAP_KEY = "__overlap__"
 DEFAULT_DATASET_ROOT = os.environ.get("ESD_DATASET_ROOT", "Dataset_Final")
 
 # Options that alter source identity, sample ordering, image construction, or the
-# exact train stream.  Model/optimizer/loss switches deliberately do not appear.
+# exact train stream. Model/optimizer/loss/initialization switches deliberately
+# do not appear. In particular --phase0-encoder-checkpoint is model state, not a
+# data-stream coordinate, so MIM-seeded models can share the same supervised raw
+# batches with otherwise compatible models.
 _DATA_OPTIONS = frozenset(
     {
         "--dataset-root",
@@ -62,7 +65,6 @@ _DATA_OPTIONS = frozenset(
         "--max-train-samples",
         "--exclude-sources",
         "--include-sources",
-        "--phase0-encoder-checkpoint",
     }
 )
 _FLAG_OPTIONS = frozenset({"--train-only"})
@@ -72,8 +74,6 @@ def _normalized_command(job: Mapping[str, Any]) -> list[str]:
     command = [str(value) for value in (job.get("command") or [])]
     if not command:
         raise ValueError(f"{job.get('id')}: empty command")
-    # Scientific jobs are wrapped by esd_pressure_runner_v1.py.  The child begins
-    # after the explicit '--' separator.  Non-wrapped commands remain untouched.
     try:
         cut = command.index("--")
     except ValueError:
@@ -130,9 +130,6 @@ def _dataset_roots(job: Mapping[str, Any], child: Sequence[str]) -> tuple[str, .
     root = _first(options, "--dataset-root", DEFAULT_DATASET_ROOT).strip()
     if root:
         roots.append(root.replace("\\", "/"))
-    # Keep this generic for future catalog growth.  A training command that later
-    # grows multiple explicit roots will automatically enter the final overlap
-    # parent rather than being falsely merged into a single-dataset stream.
     for option in ("--secondary-dataset-root", "--aux-dataset-root", "--replay-dataset-root"):
         value = _first(options, option, "").strip()
         if value:
@@ -155,9 +152,6 @@ def _canonical_data_contract(job: Mapping[str, Any], child: Sequence[str]) -> di
         values = options.get(name)
         if values:
             selected[name] = [str(value) for value in values]
-    # Defaults that are scientifically relevant but may be omitted by the catalog
-    # are represented explicitly.  This prevents an omitted default and an
-    # explicit equivalent value from being classified as unrelated streams.
     selected.setdefault("--dataset-root", [DEFAULT_DATASET_ROOT])
     selected.setdefault("--seed", [os.environ.get("ESD_CENTRAL_SEED", "42")])
     if surface in {"supervised_metric", "final_refine"}:
@@ -300,9 +294,7 @@ def compile_catalog() -> dict[str, Any]:
         "logical_training_jobs": len(logical),
         "dataset_groups": parent_rows,
         "logical_jobs": logical,
-        "overlap_group_last": all(
-            not row["overlap"] for row in parent_rows[:-1]
-        ) if parent_rows else True,
+        "overlap_group_last": all(not row["overlap"] for row in parent_rows[:-1]) if parent_rows else True,
         "group_order": "descending_distinct_model_families_then_models_overlap_last",
         "lane_rule": "share_batch_only_when_canonical_data_contract_matches",
         "cpu_variant_required": True,
@@ -325,10 +317,7 @@ def metadata() -> dict[str, Any]:
         "dataset_group_count": len(groups),
         "compatibility_lane_count": sum(int(group["lane_count"]) for group in groups),
         "largest_dataset_group_models": max((int(group["model_count"]) for group in groups), default=0),
-        "largest_lane_models": max(
-            (int(lane["model_count"]) for group in groups for lane in group["lanes"]),
-            default=0,
-        ),
+        "largest_lane_models": max((int(lane["model_count"]) for group in groups for lane in group["lanes"]), default=0),
         "overlap_groups": sum(bool(group["overlap"]) for group in groups),
         "lossless": True,
         "execution_claim_emitted": False,
