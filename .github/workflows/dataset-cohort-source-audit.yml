@@ -49,16 +49,16 @@ jobs:
               raise SystemExit("cannot load deterministic seed tests")
           module = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(module)
-          tests = sorted(
-              getattr(module, name)
+          test_names = sorted(
+              name
               for name in dir(module)
               if name.startswith("test_") and callable(getattr(module, name))
           )
-          if not tests:
+          if not test_names:
               raise SystemExit("no deterministic seed tests discovered")
-          for test in tests:
-              test()
-          print(f"ESD deterministic seed tests: PASS ({len(tests)})")
+          for name in test_names:
+              getattr(module, name)()
+          print(f"ESD deterministic seed tests: PASS ({len(test_names)})")
           PY
       - name: Exercise lossless physical grouping compiler
         run: |
