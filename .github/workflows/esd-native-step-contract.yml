@@ -11,8 +11,10 @@ name: ESD Native Cohort Adapter Contract
       - "training_control/esd_shared_batch_broker_v2.py"
       - "training_control/esd_native_step_contract_v1.py"
       - "training_control/esd_native_batch_iterator_v1.py"
+      - "training_control/esd_lockstep_orchestrator_v1.py"
       - "tests/test_esd_native_batch_iterator_v1.py"
       - "tests/test_esd_dataset_cohort_catalog_v2.py"
+      - "tests/test_esd_lockstep_orchestrator_v1.py"
       - ".github/workflows/esd-native-step-contract.yml"
   workflow_dispatch:
 
@@ -34,14 +36,18 @@ jobs:
             training_control/esd_native_step_contract_v1.py \
             training_control/esd_native_batch_iterator_v1.py \
             training_control/esd_dataset_cohort_catalog_v2.py \
+            training_control/esd_lockstep_orchestrator_v1.py \
             tests/test_esd_native_batch_iterator_v1.py \
-            tests/test_esd_dataset_cohort_catalog_v2.py
+            tests/test_esd_dataset_cohort_catalog_v2.py \
+            tests/test_esd_lockstep_orchestrator_v1.py
       - name: Prove native cohort adapter seam
         run: python training_control/esd_native_step_contract_v1.py
       - name: Test native shared-batch iterator
         run: python -m unittest -v tests.test_esd_native_batch_iterator_v1
       - name: Test execution-safe dataset lanes
         run: python -m unittest -v tests.test_esd_dataset_cohort_catalog_v2
+      - name: Test dynamic lockstep orchestration
+        run: python -m unittest -v tests.test_esd_lockstep_orchestrator_v1
       - name: Refuse premature root activation
         run: |
           python - <<'PY'
@@ -50,6 +56,7 @@ jobs:
           contract = Path("training_control/esd_native_step_contract_v1.py").read_text(encoding="utf-8")
           iterator = Path("training_control/esd_native_batch_iterator_v1.py").read_text(encoding="utf-8")
           grouping = Path("training_control/esd_dataset_cohort_catalog_v2.py").read_text(encoding="utf-8")
+          orchestrator = Path("training_control/esd_lockstep_orchestrator_v1.py").read_text(encoding="utf-8")
           if '"physical_cohort_execution_activated": False' not in contract:
               raise SystemExit("native step contract must remain explicit about non-activation")
           for marker in (
@@ -68,9 +75,18 @@ jobs:
           ):
               if marker not in grouping:
                   raise SystemExit(f"ESD cohort grouping lost execution coordinate: {marker}")
+          for marker in (
+              "stream_signature",
+              "before_round",
+              "after_round",
+              "InspectableLimitedBatches",
+              "make_native_step_proxy",
+          ):
+              if marker not in orchestrator:
+                  raise SystemExit(f"ESD lockstep orchestrator lost transaction invariant: {marker}")
           if '"require_dataset_cohort_execution": True' in root:
               raise SystemExit(
                   "ESD root advertises physical cohort execution before a native model adapter/worker is certified"
               )
-          print("ESD native model-step + shared-batch iterator seam: PASS; root activation remains fail-closed")
+          print("ESD native step/batch/orchestrator seam: PASS; root activation remains fail-closed")
           PY
