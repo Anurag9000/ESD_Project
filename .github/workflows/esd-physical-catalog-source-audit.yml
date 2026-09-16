@@ -1,0 +1,66 @@
+name: ESD physical cohort catalog source audit
+
+"on":
+  push:
+    branches: [main]
+    paths:
+      - "training_control/esd_scientific_job_catalog_v3.py"
+      - "training_control/esd_dataset_cohort_catalog_v2.py"
+      - "training_control/esd_supervised_cohort_pressure_v1.py"
+      - "training_control/run_esd_supervised_cohort_v1.py"
+      - ".github/workflows/esd-physical-catalog-source-audit.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  physical-catalog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile catalog and workers
+        run: |
+          python -m py_compile \
+            training_control/esd_scientific_job_catalog_v3.py \
+            training_control/esd_dataset_cohort_catalog_v2.py \
+            training_control/esd_supervised_cohort_pressure_v1.py \
+            training_control/run_esd_supervised_cohort_v1.py
+      - name: Prove one-to-one physical substitution
+        env:
+          PYTHONPATH: training_control
+        run: |
+          python - <<'PY'
+          import json
+          import esd_scientific_job_catalog_v2 as logical
+          import esd_scientific_job_catalog_v3 as physical
+
+          meta = physical.catalog_metadata()
+          rows = list(physical.iter_jobs())
+          ids = [str(row["id"]) for row in rows]
+          if len(ids) != len(set(ids)):
+              raise SystemExit("ESD v3 emitted duplicate physical job IDs")
+          if not meta["all_supported_logical_jobs_mapped_once"]:
+              raise SystemExit("ESD v3 supported logical mapping is incomplete")
+          if meta["cohorted_logical_jobs"] <= 0 or meta["physical_supervised_cohorts"] <= 0:
+              raise SystemExit("ESD v3 emitted no physical supervised cohorts")
+          parents = [row for row in rows if row.get("dataset_cohort")]
+          if len(parents) != meta["physical_supervised_cohorts"]:
+              raise SystemExit("ESD v3 physical parent count drift")
+          if any(not row.get("cpu_capable") or not row.get("gpu_capable") for row in parents):
+              raise SystemExit("ESD physical parent lost CPU/GPU capability")
+          if any(not row.get("shared_raw_batch") or not row.get("uniform_batch_size") for row in parents):
+              raise SystemExit("ESD physical parent lost shared-batch contract")
+          largest = sorted(
+              (
+                  (int(row["dataset_group_member_count"]), row["id"], row["workflow_cadence"])
+                  for row in parents
+              ),
+              reverse=True,
+          )[:10]
+          print(json.dumps({**meta, "largest_physical_parents": largest}, indent=2, sort_keys=True))
+          PY
