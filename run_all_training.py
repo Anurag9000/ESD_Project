@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """One-command exhaustive ESD training/scientific lifecycle controller.
 
-The repository-owned v1 scientific authority still defines the complete finite
-selector space.  The v2 executable catalog preserves those exact jobs while routing
-all supervised metric-learning transactions through the restart-addressable data
-entrypoint used by dataset-cohort migration.  OPF_ADP remains the sole outer
-resource/pressure scheduler; no scheduling policy is reimplemented here.
+The repository-owned v1 scientific authority remains the complete finite selector
+space. The v3 physical catalog preserves that inventory while replacing every
+source-proven supervised/final-refinement metric-learning optimizer transaction
+with a dataset-cohort parent. Compatible models consume one restart-addressable
+raw batch and cached device view before the shared cursor advances. Phase-0 MIM
+remains on its native exact-resume path until it exposes an honest one-batch seam.
+
+OPF_ADP remains the sole outer resource/pressure scheduler; the cohort workers own
+only in-process shared-batch/model stepping and transaction rollback.
 """
 from __future__ import annotations
 
@@ -47,6 +51,8 @@ def _atomic(path: Path, data: bytes) -> None:
 PROFILE = {
     "repository": REPOSITORY,
     "scientific_authority": "training_control/esd_scientific_authority_v1.py",
+    "physical_training_authority": "training_control/esd_scientific_job_catalog_v3.py",
+    "dataset_cohort_authority": "training_control/esd_dataset_cohort_catalog_v2.py",
     "jobs": [
         {
             "id": "audit-esd-scientific-authority",
@@ -71,12 +77,14 @@ PROFILE = {
         }
     ],
     "job_catalog": {
-        "path": "training_control/esd_scientific_job_catalog_v2.py",
+        "path": "training_control/esd_scientific_job_catalog_v3.py",
         "function": "iter_jobs",
         "args": [],
         "kwargs": {},
     },
     "preferred_training_entrypoints": [
+        "training_control/esd_supervised_cohort_pressure_v1.py",
+        "training_control/run_esd_supervised_cohort_v1.py",
         "training_control/run_metric_learning_exact_v1.py",
         "scripts/train_phase0_mim.py",
     ],
@@ -97,7 +105,17 @@ PROFILE = {
         "scripts/derive_recursive_bootstrap.py",
         "training_control/esd_scientific_authority_v1.py",
         "training_control/esd_scientific_job_catalog_v2.py",
+        "training_control/esd_scientific_job_catalog_v3.py",
+        "training_control/esd_dataset_cohort_catalog_v1.py",
+        "training_control/esd_dataset_cohort_catalog_v2.py",
         "training_control/esd_deterministic_data_v1.py",
+        "training_control/esd_native_batch_iterator_v1.py",
+        "training_control/esd_native_step_contract_v1.py",
+        "training_control/esd_shared_batch_broker_v1.py",
+        "training_control/esd_shared_batch_broker_v2.py",
+        "training_control/esd_lockstep_orchestrator_v1.py",
+        "training_control/run_esd_supervised_cohort_v1.py",
+        "training_control/esd_supervised_cohort_pressure_v1.py",
         "training_control/run_metric_learning_exact_v1.py",
         "training_control/esd_pressure_runner_v1.py",
         "training_control/esd_postprocess_v1.py",
@@ -109,7 +127,17 @@ PROFILE = {
         "scripts/audit_esd_scientific_authority_v1.py",
         "training_control/esd_scientific_authority_v1.py",
         "training_control/esd_scientific_job_catalog_v2.py",
+        "training_control/esd_scientific_job_catalog_v3.py",
+        "training_control/esd_dataset_cohort_catalog_v1.py",
+        "training_control/esd_dataset_cohort_catalog_v2.py",
         "training_control/esd_deterministic_data_v1.py",
+        "training_control/esd_native_batch_iterator_v1.py",
+        "training_control/esd_native_step_contract_v1.py",
+        "training_control/esd_shared_batch_broker_v1.py",
+        "training_control/esd_shared_batch_broker_v2.py",
+        "training_control/esd_lockstep_orchestrator_v1.py",
+        "training_control/run_esd_supervised_cohort_v1.py",
+        "training_control/esd_supervised_cohort_pressure_v1.py",
         "training_control/run_metric_learning_exact_v1.py",
         "training_control/esd_pressure_runner_v1.py",
         "training_control/esd_postprocess_v1.py",
@@ -137,6 +165,12 @@ PROFILE = {
     "require_source_proven_training_exact_resume": True,
     "require_source_proven_training_early_stopping": True,
     "require_all_retained_trainable_source_reachability": True,
+    "require_dataset_cohort_execution": True,
+    "require_cpu_gpu_backend_variants": True,
+    "require_shared_batch_views": True,
+    "require_uniform_cohort_batch_size": True,
+    "require_cohort_exact_resume": True,
+    "require_lossless_dataset_stream_compatibility": True,
     "auto_console_training_jobs": False,
     "auto_console_subcommand_jobs": False,
 }
@@ -153,7 +187,7 @@ def main() -> int:
             )
         _atomic(cache, payload)
 
-    profile_path = ROOT / ".training_control" / "esd_scientific_v2_v37.json"
+    profile_path = ROOT / ".training_control" / "esd_scientific_v3_v37.json"
     _atomic(
         profile_path,
         (json.dumps(PROFILE, indent=2, sort_keys=True) + "\n").encode("utf-8"),
