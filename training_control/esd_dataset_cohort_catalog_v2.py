@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 """Execution-safe refinement of the ESD dataset cohort catalog.
 
-v1 proves lossless dataset-parent grouping.  v2 keeps that one-to-one scientific
-inventory unchanged but refines the *physical lockstep lane* with two additional
-coordinates that materially affect whether models can consume the same next
-batch at the same time:
+v1 proves lossless dataset-parent grouping. v2 keeps that one-to-one scientific
+inventory unchanged but refines the *physical lockstep lane* with coordinates
+that materially affect whether models can consume the same next batch at the
+same time:
 
-* workflow cadence (SupCon+CE, CE-only, Phase-0 MIM, final refinement); and
+* workflow cadence (SupCon+CE, CE-only, Phase-0 MIM, final refinement);
+* native classifier phase plan (progressive unfreezing vs full-model tuning); and
 * native/requested physical batch cardinality.
 
 This prevents a scientifically invalid optimization where two jobs read the same
-folder tree but are in different training phases, use a different number of
-views, or request different physical batch sizes.  Model architecture,
-initialization, optimizer, precision and objective weights remain outside stream
-identity when they do not change example selection.
+folder tree but are in different training phases, reset their classifier phase at
+different times, use a different number of views, or request different physical
+batch sizes. Model architecture, initialization, optimizer, precision and
+objective weights remain outside stream identity when they do not change example
+selection or phase-reset cadence.
 """
 from __future__ import annotations
 
@@ -65,6 +67,31 @@ def _workflow(row: Mapping[str, Any]) -> str:
     raise ValueError(f"{row.get('job_id')}: unsupported ESD workflow surface {surface!r}")
 
 
+def _classifier_phase_plan(row: Mapping[str, Any]) -> str:
+    """Return the native classifier phase cadence that can reset sample cursors.
+
+    Progressive unfreezing and full-model tuning are scientifically different
+    phase plans. They may share one dataset parent but must not be forced into the
+    same physical lockstep lane because the native trainer can enter/reset
+    classifier phases at different boundaries. The value is read from the actual
+    retained command rather than guessed from the selector family.
+    """
+    workflow = _workflow(row)
+    if workflow == "phase0_mim":
+        return "not_applicable"
+    child = _child_command(row.get("command") or [])
+    explicit = _option(child, "--classifier-train-mode")
+    if explicit:
+        if explicit not in {"progressive", "full_model"}:
+            raise ValueError(
+                f"{row.get('job_id')}: unsupported --classifier-train-mode {explicit!r}"
+            )
+        return explicit
+    # The parser remains authoritative for the numeric/scientific default. Keep
+    # an omitted default symbolic rather than silently assuming one here.
+    return "native-default"
+
+
 def _native_batch_contract(row: Mapping[str, Any]) -> str:
     child = _child_command(row.get("command") or [])
     explicit = _option(child, "--batch-size")
@@ -76,10 +103,10 @@ def _native_batch_contract(row: Mapping[str, Any]) -> str:
         if value <= 0:
             raise ValueError(f"{row.get('job_id')}: --batch-size must be positive")
         return f"explicit:{value}"
-    # Omitted defaults are kept symbolic rather than guessed here.  All members
+    # Omitted defaults are kept symbolic rather than guessed here. All members
     # of one workflow call the same native parser, so this is an exact equality
     # contract while leaving the parser itself authoritative for the numeric
-    # default.  The runtime adapter resolves and records that numeric value before
+    # default. The runtime adapter resolves and records that numeric value before
     # any model is admitted to a physical lane.
     return f"native-default:{_workflow(row)}"
 
@@ -106,10 +133,12 @@ def compile_catalog() -> dict[str, Any]:
         base_lane_key = str(row["lane_key"])
         data_contract = base_lane_contract[(parent_key, base_lane_key)]
         workflow = _workflow(row)
+        classifier_phase_plan = _classifier_phase_plan(row)
         batch_contract = _native_batch_contract(row)
         lane_contract = {
             "data_contract": data_contract,
             "workflow_cadence": workflow,
+            "classifier_phase_plan": classifier_phase_plan,
             "physical_batch_contract": batch_contract,
         }
         lane_key = _digest(lane_contract)
@@ -133,6 +162,7 @@ def compile_catalog() -> dict[str, Any]:
                 "base_lane_key": base_lane_key,
                 "lane_contract": lane_contract,
                 "workflow_cadence": workflow,
+                "classifier_phase_plan": classifier_phase_plan,
                 "physical_batch_contract": batch_contract,
                 "logical_job_ids": [],
                 "families": set(),
@@ -146,6 +176,7 @@ def compile_catalog() -> dict[str, Any]:
         row["lane_key_v1"] = base_lane_key
         row["lane_key"] = lane_key
         row["workflow_cadence"] = workflow
+        row["classifier_phase_plan"] = classifier_phase_plan
         row["physical_batch_contract"] = batch_contract
         logical[str(job_id)] = row
 
@@ -163,6 +194,7 @@ def compile_catalog() -> dict[str, Any]:
                 -int(lane["model_family_count"]),
                 -int(lane["model_count"]),
                 str(lane["workflow_cadence"]),
+                str(lane["classifier_phase_plan"]),
                 str(lane["physical_batch_contract"]),
                 str(lane["lane_key"]),
             )
@@ -210,7 +242,7 @@ def compile_catalog() -> dict[str, Any]:
         "logical_jobs": logical,
         "overlap_group_last": all(not group["overlap"] for group in parent_rows[:-1]) if parent_rows else True,
         "group_order": "descending_distinct_model_families_then_models_overlap_last",
-        "lane_rule": "canonical_data_contract_plus_workflow_cadence_plus_physical_batch_contract",
+        "lane_rule": "canonical_data_contract_plus_workflow_cadence_plus_classifier_phase_plan_plus_physical_batch_contract",
         "uniform_batch_required_inside_lane": True,
         "effective_batch_preserved_or_lane_split": True,
         "cpu_variant_required": True,
@@ -224,9 +256,11 @@ def metadata() -> dict[str, Any]:
     compiled = compile_catalog()
     groups = compiled["dataset_groups"]
     workflows: dict[str, int] = defaultdict(int)
+    phase_plans: dict[str, int] = defaultdict(int)
     for group in groups:
         for lane in group["lanes"]:
             workflows[str(lane["workflow_cadence"])] += int(lane["model_count"])
+            phase_plans[str(lane["classifier_phase_plan"])] += int(lane["model_count"])
     return {
         "schema": SCHEMA,
         "base_schema": compiled["base_schema"],
@@ -234,6 +268,7 @@ def metadata() -> dict[str, Any]:
         "dataset_group_count": len(groups),
         "compatibility_lane_count": sum(int(group["lane_count"]) for group in groups),
         "workflow_model_counts": dict(sorted(workflows.items())),
+        "classifier_phase_plan_model_counts": dict(sorted(phase_plans.items())),
         "largest_dataset_group_models": max((int(group["model_count"]) for group in groups), default=0),
         "largest_lane_models": max(
             (int(lane["model_count"]) for group in groups for lane in group["lanes"]),
