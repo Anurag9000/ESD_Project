@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """ESD v3 physical dataset-cohort training authority.
 
-v2 remains the complete logical scientific inventory.  This layer replaces only
+v2 remains the complete logical scientific inventory. This layer replaces only
 source-proven supervised/final-refinement metric-learning optimizer jobs with one
-physical lockstep parent per execution-safe dataset lane.  Phase-0 MIM jobs stay
+physical lockstep parent per execution-safe dataset lane. Phase-0 MIM jobs stay
 native because they have exact resume but no public one-batch adapter seam yet.
 
-Every replaced logical job maps to exactly one parent.  Dependencies are rewritten
+Every replaced logical job maps to exactly one parent. Dependencies are rewritten
 through that map, parent prerequisites are the union of child prerequisites, and
-self-dependencies created by coalescing are removed.  Dataset parents/lanes retain
+self-dependencies created by coalescing are removed. Dataset parents/lanes retain
 the ordering produced by ``esd_dataset_cohort_catalog_v2``: descending family/model
 count with overlap last and explicit stream/workflow/batch compatibility lanes.
 """
@@ -122,8 +122,6 @@ def iter_jobs() -> Iterator[dict[str, Any]]:
     row_by_id = {str(row["id"]): row for row in rows}
     compiled, mapping, eligible, parents = _compile()
 
-    # Retain audits, Phase-0 MIM, and any other non-adapted surfaces verbatim apart
-    # from dependency rewrites to their physical supervised producer.
     for raw in rows:
         job_id = str(raw["id"])
         if job_id in eligible:
@@ -250,7 +248,9 @@ def catalog_metadata() -> dict[str, Any]:
         "uniform_batch_size": True,
         "exact_resume": True,
         "residency_window_safe": False,
-        "root_activated": False,
+        "root_activated": True,
+        "physical_supervised_refinement_execution_activated": True,
+        "physical_phase0_mim_execution_activated": False,
         "execution_claim_emitted": False,
     }
 
