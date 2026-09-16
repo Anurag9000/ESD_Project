@@ -83,6 +83,7 @@ jobs:
           import esd_dataset_cohort_catalog_v2 as cohorts
           import esd_scientific_job_catalog_v2 as logical
           import esd_scientific_job_catalog_v3 as physical
+          import run_all_training as root
 
           grouped = cohorts.compile_catalog()
           meta = physical.catalog_metadata()
@@ -102,10 +103,12 @@ jobs:
           physical_ids = [str(row["id"]) for row in rows]
           if len(physical_ids) != len(set(physical_ids)):
               raise SystemExit("ESD v3 emitted duplicate physical IDs")
+          static_ids = {str(row["id"]) for row in root.PROFILE.get("jobs", [])}
+          reachable_ids = set(physical_ids) | static_ids
           for row in rows:
               for dep in row.get("depends_on") or []:
-                  if dep not in set(physical_ids):
-                      raise SystemExit(f"ESD v3 dependency {dep!r} is not physically reachable")
+                  if dep not in reachable_ids:
+                      raise SystemExit(f"ESD v3 dependency {dep!r} is not reachable in the merged root DAG")
           members = [
               child
               for row in rows
