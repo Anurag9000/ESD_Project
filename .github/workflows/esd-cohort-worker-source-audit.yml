@@ -1,0 +1,102 @@
+name: ESD cohort worker source audit
+
+"on":
+  push:
+    branches: [main]
+    paths:
+      - "training_control/esd_pressure_runner_v1.py"
+      - "training_control/run_esd_supervised_cohort_v1.py"
+      - "training_control/esd_lockstep_orchestrator_v1.py"
+      - "training_control/esd_native_batch_iterator_v1.py"
+      - "training_control/esd_shared_batch_broker_v2.py"
+      - "training_control/esd_dataset_cohort_catalog_v2.py"
+      - ".github/workflows/esd-cohort-worker-source-audit.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile physical worker surfaces
+        run: |
+          python -m py_compile \
+            training_control/esd_pressure_runner_v1.py \
+            training_control/run_esd_supervised_cohort_v1.py \
+            training_control/esd_lockstep_orchestrator_v1.py \
+            training_control/esd_native_batch_iterator_v1.py \
+            training_control/esd_shared_batch_broker_v2.py \
+            training_control/esd_dataset_cohort_catalog_v2.py
+      - name: Prove CPU-only child environment
+        run: |
+          python training_control/esd_pressure_runner_v1.py \
+            --checkpoint-root .training_control/test-backend \
+            --backend cpu -- \
+            python -c 'import os; assert os.environ["ESD_TRAINING_BACKEND_RESOLVED"] == "cpu"; assert os.environ["CUDA_VISIBLE_DEVICES"] == ""; assert os.environ["JAX_PLATFORMS"] == "cpu"'
+      - name: Exercise one real catalog lane in audit-only mode
+        env:
+          PYTHONPATH: training_control
+        run: |
+          python - <<'PY'
+          import subprocess
+          import sys
+          import esd_dataset_cohort_catalog_v2 as catalog
+
+          compiled = catalog.compile_catalog()
+          supported = {"supcon_then_ce", "ce_only", "final_refine"}
+          lane = next(
+              lane
+              for group in compiled["dataset_groups"]
+              for lane in group["lanes"]
+              if lane["workflow_cadence"] in supported
+          )
+          subprocess.run(
+              [
+                  sys.executable,
+                  "training_control/run_esd_supervised_cohort_v1.py",
+                  "--lane-key", lane["lane_key"],
+                  "--backend", "cpu",
+                  "--audit-only",
+              ],
+              check=True,
+          )
+          PY
+      - name: Audit fail-closed worker invariants
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          pressure = Path("training_control/esd_pressure_runner_v1.py").read_text(encoding="utf-8")
+          for marker in (
+              'choices=("auto", "cpu", "gpu")',
+              'CUDA_VISIBLE_DEVICES',
+              'JAX_PLATFORMS',
+              'GPU backend was required',
+              'resolved_backend',
+          ):
+              if marker not in pressure:
+                  raise SystemExit(f"missing ESD backend invariant: {marker}")
+
+          worker = Path("training_control/run_esd_supervised_cohort_v1.py").read_text(encoding="utf-8")
+          for marker in (
+              'SUPPORTED_WORKFLOWS',
+              'phase0_supported',
+              'transactional_round_rollback',
+              'residency_window_safe',
+              'CohortCheckpointJournal',
+              'inspectable_limited_batches',
+              'make_native_step_proxy',
+              'SharedBatchBroker',
+              'LockstepCoordinator',
+              'refuses to split the batch',
+          ):
+              if marker not in worker:
+                  raise SystemExit(f"missing ESD physical-worker invariant: {marker}")
+          print("ESD cohort worker source contract: PASS")
+          PY
