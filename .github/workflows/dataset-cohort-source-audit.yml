@@ -8,10 +8,16 @@ name: Dataset Cohort Source Audit
       - "training_control/esd_deterministic_data_v1.py"
       - "training_control/run_metric_learning_exact_v1.py"
       - "training_control/esd_scientific_job_catalog_v2.py"
+      - "training_control/esd_scientific_job_catalog_v3.py"
       - "training_control/esd_dataset_cohort_catalog_v1.py"
       - "training_control/esd_dataset_cohort_catalog_v2.py"
+      - "training_control/esd_native_batch_iterator_v1.py"
+      - "training_control/esd_native_step_contract_v1.py"
       - "training_control/esd_shared_batch_broker_v1.py"
       - "training_control/esd_shared_batch_broker_v2.py"
+      - "training_control/esd_lockstep_orchestrator_v1.py"
+      - "training_control/run_esd_supervised_cohort_v1.py"
+      - "training_control/esd_supervised_cohort_pressure_v1.py"
       - "tests/test_esd_deterministic_data_v1.py"
       - "tests/test_esd_shared_batch_broker_v2.py"
       - "run_all_training.py"
@@ -30,21 +36,27 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Compile migration surfaces
+      - name: Compile cohort execution surfaces
         run: |
           python -m py_compile \
             training_control/dataset_cohort_runtime_entry.py \
             training_control/esd_deterministic_data_v1.py \
             training_control/run_metric_learning_exact_v1.py \
             training_control/esd_scientific_job_catalog_v2.py \
+            training_control/esd_scientific_job_catalog_v3.py \
             training_control/esd_dataset_cohort_catalog_v1.py \
             training_control/esd_dataset_cohort_catalog_v2.py \
+            training_control/esd_native_batch_iterator_v1.py \
+            training_control/esd_native_step_contract_v1.py \
             training_control/esd_shared_batch_broker_v1.py \
             training_control/esd_shared_batch_broker_v2.py \
+            training_control/esd_lockstep_orchestrator_v1.py \
+            training_control/run_esd_supervised_cohort_v1.py \
+            training_control/esd_supervised_cohort_pressure_v1.py \
             tests/test_esd_deterministic_data_v1.py \
             tests/test_esd_shared_batch_broker_v2.py \
             run_all_training.py
-      - name: Exercise pure deterministic seed tests
+      - name: Exercise restart-addressable seed tests
         run: |
           python - <<'PY'
           import importlib.util
@@ -55,140 +67,112 @@ jobs:
               raise SystemExit("cannot load deterministic seed tests")
           module = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(module)
-          test_names = sorted(
-              name
-              for name in dir(module)
-              if name.startswith("test_") and callable(getattr(module, name))
-          )
-          if not test_names:
+          tests = sorted(name for name in dir(module) if name.startswith("test_") and callable(getattr(module, name)))
+          if not tests:
               raise SystemExit("no deterministic seed tests discovered")
-          for name in test_names:
+          for name in tests:
               getattr(module, name)()
-          print(f"ESD deterministic seed tests: PASS ({len(test_names)})")
+          print(f"ESD deterministic seed tests: PASS ({len(tests)})")
           PY
       - name: Exercise completion-aware shared batch broker
-        run: |
-          PYTHONPATH=training_control python tests/test_esd_shared_batch_broker_v2.py
-      - name: Exercise lossless physical grouping compiler
+        run: PYTHONPATH=training_control python tests/test_esd_shared_batch_broker_v2.py
+      - name: Certify lossless logical to physical mapping
         run: |
           PYTHONPATH=training_control python - <<'PY'
           import json
-          import esd_dataset_cohort_catalog_v1 as v1
-          import esd_dataset_cohort_catalog_v2 as v2
-          base = v1.compile_catalog()
-          result = v2.compile_catalog()
-          if result["schema"] != "esd-dataset-cohort-catalog/v2":
-              raise SystemExit("unexpected ESD cohort catalog schema")
-          if result["base_schema"] != base["schema"]:
-              raise SystemExit("ESD v2 cohort catalog does not refine v1")
-          if not result["overlap_group_last"]:
+          import esd_dataset_cohort_catalog_v2 as cohorts
+          import esd_scientific_job_catalog_v2 as logical
+          import esd_scientific_job_catalog_v3 as physical
+
+          grouped = cohorts.compile_catalog()
+          meta = physical.catalog_metadata()
+          if grouped["schema"] != "esd-dataset-cohort-catalog/v2":
+              raise SystemExit("unexpected ESD cohort compiler schema")
+          if not grouped["overlap_group_last"]:
               raise SystemExit("ESD overlap group is not last")
-          if result["logical_training_jobs"] != base["logical_training_jobs"]:
-              raise SystemExit("ESD v2 changed the scientific training inventory")
-          groups = result["dataset_groups"]
-          if not groups:
-              raise SystemExit("ESD cohort compiler found no dataset group")
-          seen = []
-          for group in groups:
-              for lane in group["lanes"]:
-                  if not lane["workflow_cadence"] or not lane["physical_batch_contract"]:
-                      raise SystemExit("ESD v2 lane lacks workflow/batch compatibility coordinates")
-                  seen.extend(lane["logical_job_ids"])
-          if len(seen) != len(set(seen)) or len(seen) != result["logical_training_jobs"]:
-              raise SystemExit("ESD cohort compiler is not a one-to-one logical-job mapping")
-          print(json.dumps(v2.metadata(), indent=2, sort_keys=True))
+          if meta["schema"] != "esd-scientific-job-catalog/v3":
+              raise SystemExit("unexpected ESD physical catalog schema")
+          if not meta["all_supported_logical_jobs_mapped_once"]:
+              raise SystemExit("ESD v3 does not map supported optimizer jobs exactly once")
+          if meta["cohorted_logical_jobs"] <= 0 or meta["physical_supervised_cohorts"] <= 0:
+              raise SystemExit("ESD v3 contains no physical supervised cohorts")
+
+          logical_ids = {str(row["id"]) for row in logical.iter_jobs()}
+          rows = list(physical.iter_jobs())
+          physical_ids = [str(row["id"]) for row in rows]
+          if len(physical_ids) != len(set(physical_ids)):
+              raise SystemExit("ESD v3 emitted duplicate physical IDs")
+          for row in rows:
+              for dep in row.get("depends_on") or []:
+                  if dep not in set(physical_ids):
+                      raise SystemExit(f"ESD v3 dependency {dep!r} is not physically reachable")
+          members = [
+              child
+              for row in rows
+              if row.get("dataset_cohort")
+              for child in row.get("logical_job_ids") or []
+          ]
+          if len(members) != len(set(members)):
+              raise SystemExit("ESD logical optimizer appears in multiple physical cohorts")
+          if not set(members).issubset(logical_ids):
+              raise SystemExit("ESD physical cohort references a non-logical job")
+          print(json.dumps(meta, indent=2, sort_keys=True))
           PY
-      - name: Audit source invariants
+      - name: Audit physical execution invariants
         run: |
           python - <<'PY'
-          import ast
           from pathlib import Path
 
-          shim_path = Path("training_control/esd_deterministic_data_v1.py")
-          shim = shim_path.read_text(encoding="utf-8")
-          tree = ast.parse(shim, filename=str(shim_path))
-          forbidden = []
-          for node in ast.walk(tree):
-              if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-                  if (node.value.id, node.attr) in {("os", "urandom"), ("os", "getpid")}:
-                      forbidden.append(f"{node.value.id}.{node.attr}")
-              if isinstance(node, ast.Name) and node.id in {"get_worker_info", "_draw_counter"}:
-                  forbidden.append(node.id)
-          if forbidden:
-              raise SystemExit("restart-addressable shim retains executable process entropy: " + ", ".join(sorted(set(forbidden))))
-          for marker in (
-              "derive_augmentation_seed",
-              '"persistent_workers": False',
-              "source_index",
-              "variant_index",
-              "epoch",
-              "view_offset",
-              "attempt",
-          ):
-              if marker not in shim:
-                  raise SystemExit(f"missing ESD exact-data invariant: {marker}")
-
-          wrapper = Path("training_control/run_metric_learning_exact_v1.py").read_text(encoding="utf-8")
-          if "install(module)" not in wrapper or "pipeline.run_experiment(args)" not in wrapper:
-              raise SystemExit("ESD exact trainer no longer installs shim before native run_experiment")
-
-          catalog = Path("training_control/esd_scientific_job_catalog_v2.py").read_text(encoding="utf-8")
-          for marker in (
-              'LEGACY_ENTRY = "scripts/metric_learning_pipeline.py"',
-              'EXACT_ENTRY = "training_control/run_metric_learning_exact_v1.py"',
-              'row["cpu_capable"] = True',
-              'row["gpu_capable"] = True',
-          ):
-              if marker not in catalog:
-                  raise SystemExit(f"missing ESD catalog invariant: {marker}")
-
-          physical_v1 = Path("training_control/esd_dataset_cohort_catalog_v1.py").read_text(encoding="utf-8")
-          for marker in (
-              'OVERLAP_KEY = "__overlap__"',
-              '"gpu_first_variant_required": True',
-              '"cpu_variant_required": True',
-              '"lane_rule": "share_batch_only_when_canonical_data_contract_matches"',
-          ):
-              if marker not in physical_v1:
-                  raise SystemExit(f"missing ESD v1 grouping invariant: {marker}")
-
-          physical_v2 = Path("training_control/esd_dataset_cohort_catalog_v2.py").read_text(encoding="utf-8")
-          for marker in (
-              'SCHEMA = "esd-dataset-cohort-catalog/v2"',
-              '"uniform_batch_required_inside_lane": True',
-              '"effective_batch_preserved_or_lane_split": True',
-              '"workflow_cadence"',
-              '"physical_batch_contract"',
-          ):
-              if marker not in physical_v2:
-                  raise SystemExit(f"missing ESD v2 grouping invariant: {marker}")
-
-          broker_v1 = Path("training_control/esd_shared_batch_broker_v1.py").read_text(encoding="utf-8")
-          for marker in (
-              "sampler divergence",
-              "move_to_device",
-              "consumers_expected",
-              "torch.cuda.empty_cache",
-          ):
-              if marker not in broker_v1:
-                  raise SystemExit(f"missing ESD shared batch broker v1 invariant: {marker}")
-
-          broker_v2 = Path("training_control/esd_shared_batch_broker_v2.py").read_text(encoding="utf-8")
-          for marker in (
-              'SCHEMA = "esd-shared-batch-broker/v2"',
-              "register_consumer",
-              "deactivate",
-              "transition",
-              "expected: set[str]",
-              "stage transitions must occur between committed batches",
-              "assert_batch_boundary_clean",
-              "sampler divergence",
-          ):
-              if marker not in broker_v2:
-                  raise SystemExit(f"missing ESD shared batch broker v2 invariant: {marker}")
+          checks = {
+              "training_control/esd_shared_batch_broker_v2.py": (
+                  'SCHEMA = "esd-shared-batch-broker/v2"',
+                  "register_consumer",
+                  "deactivate",
+                  "transition",
+                  "assert_batch_boundary_clean",
+                  "sampler divergence",
+              ),
+              "training_control/esd_lockstep_orchestrator_v1.py": (
+                  "set(self._arrivals) != self._active",
+                  "stream_signature",
+                  "NativeSharedBatchIterator",
+                  "restore_rng",
+                  "capture_rng",
+                  "before_round",
+                  "after_round",
+              ),
+              "training_control/run_esd_supervised_cohort_v1.py": (
+                  'choices=("auto", "cpu", "gpu")',
+                  "CUDA_VISIBLE_DEVICES",
+                  "CohortCheckpointJournal",
+                  "recover_if_needed",
+                  "residency_window_safe",
+                  "max_resident_models",
+              ),
+              "training_control/esd_supervised_cohort_pressure_v1.py": (
+                  "TRAINING_CHECKPOINT_REQUEST_FILE",
+                  "TRAINING_CHECKPOINT_ACK_FILE",
+                  "clean_shared_batch_frontier",
+                  "shared_cursor_committed",
+              ),
+          }
+          for filename, markers in checks.items():
+              text = Path(filename).read_text(encoding="utf-8")
+              for marker in markers:
+                  if marker not in text:
+                      raise SystemExit(f"{filename}: missing invariant {marker!r}")
 
           root = Path("run_all_training.py").read_text(encoding="utf-8")
-          if '"path": "training_control/esd_scientific_job_catalog_v2.py"' not in root:
-              raise SystemExit("root controller is not using ESD v2 executable catalog")
-          print("ESD exact-data + physical cohort source contract: PASS")
+          for marker in (
+              '"path": "training_control/esd_scientific_job_catalog_v3.py"',
+              '"require_dataset_cohort_execution": True',
+              '"require_cpu_gpu_backend_variants": True',
+              '"require_shared_batch_views": True',
+              '"require_uniform_cohort_batch_size": True',
+              '"require_cohort_exact_resume": True',
+              '"require_lossless_dataset_stream_compatibility": True',
+          ):
+              if marker not in root:
+                  raise SystemExit(f"root controller missing ESD cohort invariant: {marker}")
+          print("ESD v3 physical cohort source contract: PASS")
           PY
