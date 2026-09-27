@@ -23,8 +23,8 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parent
 REPOSITORY = "Anurag9000/ESD_Project"
-CONTROLLER_COMMIT = "29b4167737ee5f0958927ce0ad50040d17b708d1"
-CONTROLLER_BLOB = "68a6f30f6ef77c2f512a0fecd6731bc35b444fa4"
+CONTROLLER_COMMIT = "e2acf14bb06c4d72a343024d6e3146a82756c1df"
+CONTROLLER_BLOB = "2f34cf0a1319c00d04bcfa99972f6e209534a096"
 CONTROLLER_URL = (
     f"https://raw.githubusercontent.com/Anurag9000/RigorousRAG/{CONTROLLER_COMMIT}/"
     "tools/universal_training_controller_entry.py"
