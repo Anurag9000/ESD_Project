@@ -17,7 +17,7 @@ jobs:
           python - <<'PY'
           import hashlib,urllib.request
           from pathlib import Path
-          c='c54cce1f24a5a82aa0730203c378ba7a9d238731'; e='a998473b2683dfec0f3b7cb6d097d53a539b7a0a'; d=urllib.request.urlopen(f'https://raw.githubusercontent.com/Anurag9000/RigorousRAG/{c}/tools/repository_local_estate_certificate_v5.py',timeout=60).read(); a=hashlib.sha1(f'blob {len(d)}\0'.encode()+d).hexdigest()
+          c='427a99cf86dcc890c59372305b57806196253299'; e='1e367e9fc7878ee355adb856499a0e5bed16d1e4'; d=urllib.request.urlopen(f'https://raw.githubusercontent.com/Anurag9000/RigorousRAG/{c}/tools/repository_local_estate_certificate_v6.py',timeout=60).read(); a=hashlib.sha1(f'blob {len(d)}\0'.encode()+d).hexdigest()
           if a!=e: raise SystemExit(f'validator blob mismatch: {a} != {e}')
           p=Path('.training_control/canonical_repository_local_estate_certificate.py');p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(d)
           PY
